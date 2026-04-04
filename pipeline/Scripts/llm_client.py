@@ -181,7 +181,9 @@ def call_llm(
       - "code"        — multi-language code (conversion, code_splitter)
       - "enrichment"  — hints, real-life, follow-ups
     """
-    api_key = "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"
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY environment variable not set")
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",

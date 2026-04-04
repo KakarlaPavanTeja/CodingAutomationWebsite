@@ -1,29 +1,25 @@
-from collections import defaultdict
+def two_sum(nums, target):
+    seen = {}
+    for i, num in enumerate(nums):
+        complement = target - num
+        if complement in seen:
+            return [seen[complement], i]
+        seen[num] = i
+    return []
 
-m, n = map(int, input().split())
-matrix = []
-for _ in range(m):
-    matrix.append(list(map(int, input().split())))
 
-diagonals = defaultdict(list)
+def main():
+    n = int(input())
+    nums = list(map(int, input().split()))
+    target = int(input())
 
-for r in range(m):
-    if r % 2 == 0:
-        for c in range(n):
-            diagonals[r + c].append(matrix[r][c])
+    result = two_sum(nums, target)
+
+    if result:
+        print(result[0], result[1])
     else:
-        for c in range(n - 1, -1, -1):
-            diagonals[r + c].append(matrix[r][c])
+        print(-1)
 
-result = []
-for d in sorted(diagonals.keys()):
-    group = sorted(diagonals[d])
-    size = len(group)
-    if size % 2 == 1:
-        median = group[size // 2]
-        result.append(f"{median:.2f}")
-    else:
-        avg = sum(group) / size
-        result.append(f"{avg:.2f}")
 
-print(' '.join(result))
+if __name__ == "__main__":
+    main()
