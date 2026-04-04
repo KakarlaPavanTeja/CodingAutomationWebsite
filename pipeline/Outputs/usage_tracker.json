@@ -1,0 +1,50 @@
+{
+  "total_requests": 5,
+  "total_tokens": 86496,
+  "total_cost_usd": 0.72204625,
+  "prompt_tokens": 16333,
+  "completion_tokens": 70163,
+  "last_updated": "2026-04-04T21:19:37.527379",
+  "history": [
+    {
+      "timestamp": "2026-04-04T19:54:26.467258",
+      "problem_name": "Grid Shadow Matching_description",
+      "prompt_tokens": 3470,
+      "completion_tokens": 6025,
+      "total_tokens": 9495,
+      "cost_usd": 0.064588
+    },
+    {
+      "timestamp": "2026-04-04T20:04:12.791139",
+      "problem_name": "testcase_generation",
+      "prompt_tokens": 3547,
+      "completion_tokens": 30855,
+      "total_tokens": 34402,
+      "cost_usd": 0.31298375
+    },
+    {
+      "timestamp": "2026-04-04T21:10:36.062149",
+      "problem_name": "Zigzag Diagonal Sum Analyzer_description",
+      "prompt_tokens": 4099,
+      "completion_tokens": 6529,
+      "total_tokens": 10628,
+      "cost_usd": 0.070414
+    },
+    {
+      "timestamp": "2026-04-04T21:11:31.128738",
+      "problem_name": "Zigzag Diagonal Sum Analyzer_topics",
+      "prompt_tokens": 1518,
+      "completion_tokens": 298,
+      "total_tokens": 1816,
+      "cost_usd": 0.004877
+    },
+    {
+      "timestamp": "2026-04-04T21:19:37.527436",
+      "problem_name": "testcase_generation",
+      "prompt_tokens": 3699,
+      "completion_tokens": 26456,
+      "total_tokens": 30155,
+      "cost_usd": 0.26918375
+    }
+  ]
+}

@@ -1,0 +1,253 @@
+import os
+import json
+import shutil
+import re
+
+OUTPUTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Outputs"))
+INPUTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Inputs"))
+TEMPLATE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "zReferenceFiles", "JSONPreparationFilesReference"))
+
+
+def get_problem_name():
+    titles_path = os.path.join(OUTPUTS_DIR, "generated_titles.txt")
+    if not os.path.exists(titles_path):
+        print(f"Warning: {titles_path} not found.")
+        return "ProblemName", "Problem Name"
+        
+    with open(titles_path, "r") as f:
+        title_line = f.readline().strip()
+        # Clean title_line e.g., "- Pair Sum Indices - 95%"
+        if title_line.startswith("- "):
+            title_line = title_line[2:]
+        title_line = title_line.split("-")[0].strip()
+        
+        problem_name = "".join(word.capitalize() for word in title_line.split())
+        return problem_name, title_line
+
+def get_question_type():
+    problem_md_path = os.path.join(INPUTS_DIR, "problem.md")
+    if not os.path.exists(problem_md_path):
+        return "standard"
+    with open(problem_md_path, "r") as f:
+        for line in f:
+            if line.startswith("# Type:"):
+                return line.replace("# Type:", "").strip().lower()
+    return "standard"
+
+
+def read_file(filepath):
+    if not os.path.exists(filepath):
+        print(f"Warning: File {filepath} not found.")
+        return ""
+    with open(filepath, "r") as f:
+        return f.read().strip()
+
+def replace_tag_content(template, start_tag, end_tag, content):
+    start_idx = template.find(start_tag)
+    if start_idx == -1:
+        return template
+    end_idx = template.find(end_tag, start_idx)
+    if end_idx == -1:
+        return template
+    
+    return template[:start_idx + len(start_tag)] + "\n" + content + "\n" + template[end_idx:]
+
+import argparse
+
+def main():
+    parser = argparse.ArgumentParser(description="Prepare LUA and Testcases for Coding Questions")
+    parser.add_argument("--mode", choices=["practice", "exam"], default="practice", help="Type of question JSON to generate (default: practice)")
+    args = parser.parse_args()
+
+    mode = args.mode
+    problem_name, short_text = get_problem_name()
+    question_type = get_question_type()
+    print(f"Mode: {mode}")
+    print(f"Problem Name: {problem_name}")
+    print(f"Short Text: {short_text}")
+    print(f"Question Type: {question_type}")
+
+    if mode == "exam":
+        if question_type in ["binary tree", "linked list"]:
+            template_path = os.path.join(TEMPLATE_DIR, "NodeBasedExamLUATemplate.lua")
+        else:
+            template_path = os.path.join(TEMPLATE_DIR, "NonNodeBasedExamLUATemplate.lua")
+    else:
+        if question_type in ["binary tree", "linked list"]:
+            template_path = os.path.join(TEMPLATE_DIR, "NodeBasedLUATemplate.lua")
+        else:
+            template_path = os.path.join(TEMPLATE_DIR, "NonNodeBasedLUATemplate.lua")
+
+    template_content = read_file(template_path)
+    if not template_content:
+        print(f"Error: LUA Template is empty or missing at {template_path}")
+        return
+
+    # QUESTION_DESCRIPTION
+    desc = read_file(os.path.join(OUTPUTS_DIR, "generated_description.md"))
+    template_content = replace_tag_content(template_content, "----------QUESTION_DESCRIPTION_START----------", "----------QUESTION_DESCRIPTION_END----------", desc)
+
+    # SHORT_TEXT
+    template_content = replace_tag_content(template_content, "----------SHORT_TEXT_START----------", "----------SHORT_TEXT_END----------", short_text)
+
+    # QUESTION_LEVEL
+    level = read_file(os.path.join(OUTPUTS_DIR, "generated_difficulty.txt")).upper()
+    template_content = replace_tag_content(template_content, "----------QUESTION_LEVEL_START----------", "----------QUESTION_LEVEL_END----------", level)
+
+    if mode == "practice":
+        # Topics
+        topics_path = os.path.join(OUTPUTS_DIR, "generated_topics.json")
+        if os.path.exists(topics_path):
+            with open(topics_path, "r") as f:
+                try:
+                    topics_data = json.load(f)
+                except json.JSONDecodeError:
+                    topics_data = {}
+            
+            beg_topics = topics_data.get("beginner_topics", [])
+            int_topics = topics_data.get("intermediate_topics", [])
+            adv_topics = topics_data.get("advanced_topics", [])
+            
+            template_content = replace_tag_content(template_content, "----------BEGINNER_TOPICS_START----------", "----------BEGINNER_TOPICS_END----------", ", ".join(beg_topics))
+            template_content = replace_tag_content(template_content, "----------INTERMEDIATE_TOPICS_START----------", "----------INTERMEDIATE_TOPICS_END----------", ", ".join(int_topics))
+            template_content = replace_tag_content(template_content, "----------ADVANCED_TOPICS_START----------", "----------ADVANCED_TOPICS_END----------", ", ".join(adv_topics))
+
+        # Enrichment (Real life examples, Hints, Follow up questions)
+        enrichment_path = os.path.join(OUTPUTS_DIR, "enrichment.json")
+        if os.path.exists(enrichment_path):
+            with open(enrichment_path, "r") as f:
+                try:
+                    enrichment = json.load(f)
+                except json.JSONDecodeError:
+                    enrichment = {}
+                
+            real_life = enrichment.get("real_life_examples", "")
+            template_content = replace_tag_content(template_content, "----------REAL_LIFE_EXAMPLES_START----------", "----------REAL_LIFE_EXAMPLES_END----------", real_life)
+            
+            hints = enrichment.get("hints", {})
+            hints_content = []
+            for i in range(1, len(hints) + 1):
+                hint_key = f"hint_{i}"
+                if hint_key in hints:
+                    hints_content.append(f"----------HINTS_START_{i}----------\n{hints[hint_key]}\n----------HINTS_END_{i}----------")
+            
+            hints_block = "\n\n".join(hints_content)
+            template_content = replace_tag_content(template_content, "----------HINTS_START----------", "----------HINTS_END----------", hints_block)
+
+            follow_ups = enrichment.get("followup_questions", [])
+            follow_ups_content = []
+            for i, fu in enumerate(follow_ups, 1):
+                question = fu.get("question", "")
+                answer = fu.get("answer", "")
+                
+                inner_payload = f"----------QUESTION_START----------\n{question}\n----------QUESTION_END----------\n\n----------ANSWER_START----------\n{answer}\n----------ANSWER_END----------"
+                follow_ups_content.append(f"----------FOLLOW_UP_QUESTION_START_{i}----------\n{inner_payload}\n----------FOLLOW_UP_QUESTION_END_{i}----------")
+                
+            follow_ups_block = "\n\n".join(follow_ups_content)
+            template_content = replace_tag_content(template_content, "----------FOLLOW_UP_QUESTIONS_START----------", "----------FOLLOW_UP_QUESTIONS_END----------", follow_ups_block)
+
+    # CodeContentFiles
+    lang_dirs = {
+        "Cpp": "CPP",
+        "Python": "PYTHON",
+        "Java": "JAVA",
+        "NodeJS": "NODE_JS"
+    }
+    
+    for d, tag in lang_dirs.items():
+        base_dir = os.path.join(OUTPUTS_DIR, "CodeContentFiles", d)
+        if not os.path.exists(base_dir):
+            continue
+            
+        ext = {"Cpp": "cpp", "Python": "py", "Java": "java", "NodeJS": "js"}[d]
+        
+        # default.ext -> CODE_CONTENT_{LANG}
+        default_path = os.path.join(base_dir, f"default.{ext}")
+        if os.path.exists(default_path):
+            code_content = read_file(default_path)
+            template_content = replace_tag_content(template_content, f"----------CODE_CONTENT_{tag}_START----------", f"----------CODE_CONTENT_{tag}_END----------", code_content)
+        
+        # debugger.ext -> DEBUG_HELPER_CODE_{LANG} (Only for practice)
+        if mode == "practice":
+            debugger_path = os.path.join(base_dir, f"debugger.{ext}")
+            if os.path.exists(debugger_path):
+                debugger_content = read_file(debugger_path)
+                template_content = replace_tag_content(template_content, f"----------DEBUG_HELPER_CODE_{tag}_START----------", f"----------DEBUG_HELPER_CODE_{tag}_END----------", debugger_content)
+
+        # driver.ext -> CODE_BASE64_{LANG}
+        driver_path = os.path.join(base_dir, f"driver.{ext}")
+        if os.path.exists(driver_path):
+            driver_content = read_file(driver_path)
+            template_content = replace_tag_content(template_content, f"----------CODE_BASE64_{tag}_START----------", f"----------CODE_BASE64_{tag}_END----------", driver_content)
+
+        # solution.ext -> SOLUTIONS_{LANG} (Only for practice)
+        if mode == "practice":
+            solution_path = os.path.join(base_dir, f"solution.{ext}")
+            if os.path.exists(solution_path):
+                solution_content = read_file(solution_path)
+                template_content = replace_tag_content(template_content, f"----------SOLUTIONS_{tag}_START----------", f"----------SOLUTIONS_{tag}_END----------", solution_content)
+            
+    # Inject node.h if applicable
+    if question_type in ["binary tree", "linked list"]:
+        node_h_path = os.path.join(OUTPUTS_DIR, "CodeContentFiles", "Cpp", "node.h")
+        if os.path.exists(node_h_path):
+            node_h_content = read_file(node_h_path)
+            template_content = replace_tag_content(template_content, "----------NODE_H_CONTENT_START----------", "----------NODE_H_CONTENT_END----------", node_h_content)
+        else:
+            print(f"Warning: question_type is {question_type} but node.h was not found.")
+
+    # Ensure output dir
+    output_target_dir = os.path.join(OUTPUTS_DIR, "forJSONPreparation")
+    os.makedirs(output_target_dir, exist_ok=True)
+    
+    # Save LUA
+    suffix = f"_{mode}" if mode == "exam" else ""
+    lua_out_path = os.path.join(output_target_dir, f"{problem_name}{suffix}.lua")
+    with open(lua_out_path, "w") as f:
+        f.write(template_content)
+    print(f"Written LUA file to {lua_out_path}")
+    
+    # Copy and Validate testcases
+    testcases_in_path = os.path.join(OUTPUTS_DIR, "testcases.json")
+    if os.path.exists(testcases_in_path):
+        testcases_out_path = os.path.join(output_target_dir, f"testcases_{problem_name}{suffix}.json")
+        try:
+            with open(testcases_in_path, 'r') as fin:
+                testcases_data = json.load(fin)
+                
+            # Validation and Order Correction
+            # Auto-correct if root is a dictionary containing "test_cases"
+            if isinstance(testcases_data, dict) and "test_cases" in testcases_data:
+                print("Auto-correcting testcases.json structure from dictionary to list.")
+                testcases_data = [testcases_data]
+
+            if isinstance(testcases_data, list) and len(testcases_data) > 0:
+                container = testcases_data[0]
+                if "test_cases" in container:
+                    tc_list = container["test_cases"]
+                    print(f"Validating {len(tc_list)} test cases...")
+                    for idx, tc in enumerate(tc_list, 1):
+                        # Ensure all keys are present
+                        for key in ["input", "output", "weightage", "order"]:
+                            if key not in tc:
+                                if key == "weightage": tc[key] = 5
+                                elif key == "order": tc[key] = idx
+                                else: tc[key] = "" # fallback for input/output
+                        
+                        # Fix order if incorrect
+                        if tc["order"] != idx:
+                            tc["order"] = idx
+                else:
+                    print("Warning: 'test_cases' key missing in testcases.json wrapper object.")
+            else:
+                 print("Warning: testcases.json format is unexpected (expected list of objects).")
+
+            with open(testcases_out_path, 'w') as fout:
+                json.dump(testcases_data, fout, indent=4)
+            print(f"Validated and copied testcases to {testcases_out_path}")
+        except Exception as e:
+            print(f"Error processing testcases.json: {e}. Copying raw file instead.")
+            shutil.copy(testcases_in_path, testcases_out_path)
+
+if __name__ == "__main__":
+    main()
