@@ -17,6 +17,8 @@ import {
   FolderOpen,
   Trash2,
   AlertTriangle,
+  FileText,
+  Code,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ProblemPipeline } from "@/components/problems/ProblemPipeline";
@@ -95,6 +97,7 @@ export default function ProblemDetailPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [inputFiles, setInputFiles] = useState<{ name: string; content: string; expanded: boolean }[]>([]);
   const isAdmin = profile?.role === "admin";
 
   const fetchProblem = () => {
@@ -114,8 +117,23 @@ export default function ProblemDetailPage() {
       });
   };
 
+  const fetchInputFiles = () => {
+    const files = ["problem.md", "solution.py"];
+    Promise.all(
+      files.map((name) =>
+        fetch(`/api/files/read?problemId=${id}&path=${encodeURIComponent(name)}&subfolder=inputs`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => (data ? { name, content: data.content, expanded: false } : null))
+          .catch(() => null)
+      )
+    ).then((results) => {
+      setInputFiles(results.filter(Boolean) as { name: string; content: string; expanded: boolean }[]);
+    });
+  };
+
   useEffect(() => {
     fetchProblem();
+    fetchInputFiles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -294,6 +312,59 @@ export default function ProblemDetailPage() {
               </div>
             </div>
           </div>
+
+          {/* Input Files */}
+          {inputFiles.length > 0 && (
+            <div className="rounded-lg border bg-card p-5 space-y-3">
+              <h2 className="text-sm font-semibold">Input Files</h2>
+              <div className="space-y-2">
+                {inputFiles.map((file, idx) => (
+                  <div key={file.name} className="rounded-md border overflow-hidden">
+                    <button
+                      type="button"
+                      className="flex items-center gap-2 w-full px-4 py-2.5 text-sm font-medium hover:bg-muted/50 transition-colors text-left"
+                      onClick={() =>
+                        setInputFiles((prev) =>
+                          prev.map((f, i) => (i === idx ? { ...f, expanded: !f.expanded } : f))
+                        )
+                      }
+                    >
+                      {file.name.endsWith(".md") ? (
+                        <FileText className="h-4 w-4 text-blue-500 shrink-0" />
+                      ) : (
+                        <Code className="h-4 w-4 text-green-500 shrink-0" />
+                      )}
+                      <span>{file.name}</span>
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className={cn(
+                          "ml-auto transition-transform text-muted-foreground",
+                          file.expanded && "rotate-180"
+                        )}
+                      >
+                        <path d="m6 9 6 6 6-6" />
+                      </svg>
+                    </button>
+                    {file.expanded && (
+                      <div className="border-t bg-muted/30">
+                        <pre className="p-4 text-xs overflow-x-auto max-h-80 overflow-y-auto whitespace-pre-wrap font-mono">
+                          {file.content}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Pipeline Runs */}
           <div className="rounded-lg border bg-card p-5 space-y-3">

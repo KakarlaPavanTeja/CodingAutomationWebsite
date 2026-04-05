@@ -12,8 +12,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "problemId parameter required" }, { status: 400 });
   }
 
+  const subfolder = request.nextUrl.searchParams.get("subfolder") || "outputs";
+
   try {
-    const content = await readStorageFile(problemId, filePath);
+    const content = await readStorageFile(problemId, filePath, subfolder);
     return NextResponse.json({ content, path: filePath });
   } catch {
     return NextResponse.json({ error: "File not found" }, { status: 404 });
