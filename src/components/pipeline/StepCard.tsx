@@ -18,6 +18,7 @@ interface StepCardProps {
   isAnyRunning: boolean;
   previousCompleted: boolean;
   onRun: (state: StepState) => void;
+  onStop?: () => void;
   onUpdateLanguages?: (languages: string[]) => void;
 }
 
@@ -35,6 +36,7 @@ export function StepCard({
   isAnyRunning,
   previousCompleted,
   onRun,
+  onStop,
   onUpdateLanguages,
 }: StepCardProps) {
   const config = getStepConfig(stepState.id);
@@ -105,20 +107,24 @@ export function StepCard({
             )}>
               {STATUS_CONFIG[stepState.status].label}
             </span>
-            <Button
-              size="sm"
-              onClick={() => onRun(stepState)}
-              disabled={!canRun}
-            >
-              {isRunning ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-1 h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                  Running
-                </>
-              ) : (
-                "Run"
-              )}
-            </Button>
+            {isRunning ? (
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => onStop?.()}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="mr-1"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                Stop
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                onClick={() => onRun(stepState)}
+                disabled={!canRun}
+              >
+                Run
+              </Button>
+            )}
           </div>
         </div>
       </CardHeader>

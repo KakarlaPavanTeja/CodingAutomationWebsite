@@ -77,6 +77,7 @@ interface PipelineContextType {
   setGlobalTestcaseCount: (count: number) => void;
   updateStepState: (stepId: StepId, partial: Partial<StepState>) => void;
   runStep: (state: StepState) => void;
+  stopStep: () => Promise<void>;
   runAll: () => void;
   cancelRunAll: () => void;
   isRunAllActive: boolean;
@@ -104,6 +105,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   });
 
   const runningStepRef = useRef<StepId | null>(null);
+  const runningRunIdRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingPollRef = useRef<{ runId: string; stepId: StepId } | null>(null);
 
@@ -358,6 +360,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
               endTime: run.finished_at ? new Date(run.finished_at).getTime() : Date.now(),
             });
             runningStepRef.current = null;
+            runningRunIdRef.current = null;
             stopPolling();
             savePipelineState();
           }
@@ -431,6 +434,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
 
         // Start polling for status and logs
         if (data.runId) {
+          runningRunIdRef.current = data.runId;
           startPolling(data.runId, state.id);
         }
       } catch (err) {
@@ -445,6 +449,34 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     },
     [mode, globalLanguages, globalTestcaseCount, currentProblemId, updateStepState, savePipelineState, startPolling, stopPolling]
   );
+
+  const stopStep = useCallback(async () => {
+    const runId = runningRunIdRef.current;
+    const stepId = runningStepRef.current;
+    if (!runId || !stepId) return;
+
+    try {
+      await fetch("/api/pipeline/run/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runId }),
+      });
+    } catch {
+      // Stop request failed — process may have already exited
+    }
+
+    // Update UI immediately — the close handler on the server will finalize
+    updateStepState(stepId, {
+      status: "failed",
+      exitCode: -1,
+      endTime: Date.now(),
+    });
+    runningStepRef.current = null;
+    runningRunIdRef.current = null;
+    setRunAllQueue([]);
+    stopPolling();
+    savePipelineState();
+  }, [updateStepState, stopPolling, savePipelineState]);
 
   const isAnyRunning = Array.from(stepStates.values()).some((s) => s.status === "running");
   const isRunAllActive = runAllQueue.length > 0;
@@ -516,6 +548,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         setGlobalTestcaseCount,
         updateStepState,
         runStep,
+        stopStep,
         runAll,
         cancelRunAll,
         isRunAllActive,

@@ -12,6 +12,7 @@ import {
   cleanupTempDir,
   startPeriodicSync,
 } from "@/lib/storage-sync";
+import { registerProcess, unregisterProcess } from "@/lib/process-registry";
 import type { RunRequest } from "@/types/pipeline";
 
 export async function POST(request: NextRequest) {
@@ -137,6 +138,11 @@ export async function POST(request: NextRequest) {
     stdio: ["ignore", "pipe", "pipe"],
   });
 
+  // Register PID so the stop endpoint can kill it
+  if (runId && proc.pid) {
+    registerProcess(runId, proc.pid);
+  }
+
   // Write logs to file
   const logStream = createWriteStream(logFilePath, { flags: "w" });
   const timestamp = () => new Date().toISOString();
@@ -170,6 +176,9 @@ export async function POST(request: NextRequest) {
   });
 
   proc.on("close", async (code) => {
+    // Unregister from process registry
+    if (runId) unregisterProcess(runId);
+
     logStream.write(`\n[${timestamp()}] Process exited with code ${code ?? 1}\n`);
     logStream.end();
 

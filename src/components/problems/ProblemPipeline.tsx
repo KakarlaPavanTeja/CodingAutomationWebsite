@@ -29,6 +29,7 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
     setGlobalTestcaseCount,
     updateStepState,
     runStep,
+    stopStep,
     runAll,
     cancelRunAll,
     isRunAllActive,
@@ -152,6 +153,7 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
               isAnyRunning={isAnyRunning}
               previousCompleted={previousCompleted}
               onRun={runStep}
+              onStop={stopStep}
               onUpdateLanguages={(langs) => {
                 updateStepState(stepId, { enabledLanguages: langs });
                 savePipelineState();
