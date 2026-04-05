@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProcessPid } from "@/lib/process-registry";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 
 export async function POST(request: NextRequest) {
   const { runId } = await request.json();
@@ -16,22 +16,65 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const pid = getProcessPid(runId);
-  if (!pid) {
-    return NextResponse.json({ error: "Process not found or already finished" }, { status: 404 });
+  // Immediately mark the run as failed in the DB so page reloads don't resume it
+  const serviceClient = await createServiceClient();
+  const { data: run } = await serviceClient
+    .from("pipeline_runs")
+    .select("problem_id, step_id")
+    .eq("id", runId)
+    .single();
+
+  await serviceClient
+    .from("pipeline_runs")
+    .update({
+      status: "failed",
+      exit_code: -1,
+      finished_at: new Date().toISOString(),
+    })
+    .eq("id", runId);
+
+  // Update pipeline_states so the step shows as failed
+  if (run) {
+    const { data: stateData } = await serviceClient
+      .from("pipeline_states")
+      .select("step_statuses")
+      .eq("problem_id", run.problem_id)
+      .single();
+
+    if (stateData) {
+      const stepStatuses = stateData.step_statuses || {};
+      stepStatuses[run.step_id] = {
+        status: "failed",
+        exitCode: -1,
+        endTime: Date.now(),
+      };
+      await serviceClient
+        .from("pipeline_states")
+        .update({ step_statuses: stepStatuses, updated_at: new Date().toISOString() })
+        .eq("problem_id", run.problem_id);
+    }
+
+    // Reset problem status from "processing" back to "draft"
+    await serviceClient
+      .from("problems")
+      .update({ status: "draft", updated_at: new Date().toISOString() })
+      .eq("id", run.problem_id)
+      .eq("status", "processing");
   }
 
-  try {
-    // Kill the process group (negative PID kills the group since we used detached: true)
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    // Process may have already exited
+  // Kill the process
+  const pid = getProcessPid(runId);
+  if (pid) {
     try {
-      process.kill(pid, "SIGTERM");
+      process.kill(-pid, "SIGTERM");
     } catch {
-      // Already dead
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        // Already dead
+      }
     }
   }
 
-  return NextResponse.json({ success: true, message: "Stop signal sent" });
+  return NextResponse.json({ success: true, message: "Step stopped" });
 }

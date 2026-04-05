@@ -238,8 +238,15 @@ export async function POST(request: NextRequest) {
             .eq("problem_id", problemId);
         }
 
-        // Update problem status
-        if (code !== 0) {
+        // Update problem status (skip if manually stopped — stop endpoint already set it to draft)
+        const { data: currentRun } = await supabase
+          .from("pipeline_runs")
+          .select("exit_code")
+          .eq("id", runId)
+          .single();
+        const wasStopped = currentRun?.exit_code === -1;
+
+        if (code !== 0 && !wasStopped) {
           await supabase
             .from("problems")
             .update({ status: "failed", updated_at: new Date().toISOString() })
