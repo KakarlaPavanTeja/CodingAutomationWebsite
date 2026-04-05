@@ -62,13 +62,6 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Redirect authenticated users from root to problems
-  if (user && request.nextUrl.pathname === "/") {
-    const url = request.nextUrl.clone();
-    url.pathname = "/problems";
-    return NextResponse.redirect(url);
-  }
-
   return supabaseResponse;
 }
 
