@@ -1,0 +1,50 @@
+[2026-04-04T21:24:50.181Z] $ /Users/kakarlapavanteja/Documents/CodingAutomationWebsite/pipeline/venv/bin/python3 Scripts/generate_full_question.py --steps description,codes,titles,difficulty,topics --langs python,cpp,java
+============================================================
+CODE-CENTRIC QUESTION GENERATOR (LEAN WORKFLOW)
+============================================================
+Selected steps: ['description', 'codes', 'titles', 'difficulty', 'topics']
+Selected languages: ['python', 'cpp', 'java']
+
+📋 Problem: Two Sum (standard)
+🎭 Scenario Level: heavy
+💻 User Code: solution.py (python)
+
+============================================================
+STEP 1: Description Creation
+============================================================
+✓ Description created and saved to /Users/kakarlapavanteja/Documents/CodingAutomationWebsite/pipeline/Outputs/generated_description.md
+
+⏭ Skipping Step 2: Naming Enforcement
+
+============================================================
+STEP 3: Converting to Other Languages
+============================================================
+  - Converting to C++...
+  - Converting to Java...
+  ⏭ Skipping Node.js (not selected)
+
+============================================================
+STEP 4: Finalizing Solutions
+============================================================
+✓ Solutions saved to /Users/kakarlapavanteja/Documents/CodingAutomationWebsite/pipeline/Outputs/generatedFullCode
+
+============================================================
+STEP 5a: Generating Titles
+============================================================
+✓ Titles generated
+
+============================================================
+STEP 5b: Generating Difficulty
+============================================================
+✓ Difficulty generated
+
+============================================================
+STEP 6: Generating Topics
+============================================================
+✓ Topics generated and saved to /Users/kakarlapavanteja/Documents/CodingAutomationWebsite/pipeline/Outputs/generated_topics.json
+
+============================================================
+✅ SUCCESS! Generation completed.
+============================================================
+
+[2026-04-04T21:26:30.115Z] Process exited with code 0

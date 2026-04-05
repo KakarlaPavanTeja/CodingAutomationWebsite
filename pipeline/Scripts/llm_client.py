@@ -246,6 +246,7 @@ def call_llm(
     if url == RESPONSES_URL:
         content = _text_from_responses_body(data)
         usage = _normalize_usage(data.get("usage") or {})
+        usage["model"] = data.get("model") or model
         return content, usage
 
     choice0 = data["choices"][0]
@@ -255,4 +256,5 @@ def call_llm(
         content = choice0.get("text", "")
 
     usage = _normalize_usage(data.get("usage") or {})
+    usage["model"] = data.get("model") or model
     return content, usage

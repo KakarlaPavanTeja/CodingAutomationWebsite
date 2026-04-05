@@ -1,0 +1,66 @@
+{
+  "total_requests": 7,
+  "total_tokens": 53467,
+  "total_cost_usd": 0.3078,
+  "prompt_tokens": 25928,
+  "completion_tokens": 27539,
+  "last_updated": "2026-04-05T04:12:14.854941",
+  "history": [
+    {
+      "timestamp": "2026-04-05T04:04:22.564887",
+      "problem_name": "Two Sum Exam_description",
+      "prompt_tokens": 2994,
+      "completion_tokens": 4718,
+      "total_tokens": 7712,
+      "cost_usd": 0.050923
+    },
+    {
+      "timestamp": "2026-04-05T04:04:48.667277",
+      "problem_name": "Two Sum Exam_topics",
+      "prompt_tokens": 1105,
+      "completion_tokens": 160,
+      "total_tokens": 1265,
+      "cost_usd": 0.002981
+    },
+    {
+      "timestamp": "2026-04-05T04:11:26.623282",
+      "problem_name": "testcase_generation",
+      "prompt_tokens": 3286,
+      "completion_tokens": 18502,
+      "total_tokens": 21788,
+      "cost_usd": 0.1891275
+    },
+    {
+      "timestamp": "2026-04-05T04:11:45.446905",
+      "problem_name": "code_splitting_Python",
+      "prompt_tokens": 4496,
+      "completion_tokens": 585,
+      "total_tokens": 5081,
+      "cost_usd": 0.01147
+    },
+    {
+      "timestamp": "2026-04-05T04:11:55.557914",
+      "problem_name": "code_splitting_C++",
+      "prompt_tokens": 4602,
+      "completion_tokens": 1188,
+      "total_tokens": 5790,
+      "cost_usd": 0.017633
+    },
+    {
+      "timestamp": "2026-04-05T04:12:07.577166",
+      "problem_name": "code_splitting_Java",
+      "prompt_tokens": 4881,
+      "completion_tokens": 1593,
+      "total_tokens": 6474,
+      "cost_usd": 0.022031
+    },
+    {
+      "timestamp": "2026-04-05T04:12:14.854947",
+      "problem_name": "code_splitting_Node.js",
+      "prompt_tokens": 4564,
+      "completion_tokens": 793,
+      "total_tokens": 5357,
+      "cost_usd": 0.013635
+    }
+  ]
+}

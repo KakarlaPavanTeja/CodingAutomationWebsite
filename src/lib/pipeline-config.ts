@@ -58,7 +58,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     id: "execute_tests_nonfunction",
     label: "Execute Tests (Non-function)",
     description: "Run test cases against full solutions for each language",
-    script: "Scripts/execution_manager_nonfunctionbased.py",
+    script: "Scripts/execution_manager_v2.py",
     subSteps: [],
     hasLanguageSelector: true,
     hasTestcaseCount: false,
@@ -146,6 +146,10 @@ export function buildCommand(
 
   if (config.needsMode) {
     args.push("--mode", mode);
+  }
+
+  if (stepId === "execute_tests_nonfunction") {
+    args.push("--nonfunction");
   }
 
   return { script: config.script, args };

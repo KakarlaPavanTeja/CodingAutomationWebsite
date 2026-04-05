@@ -7,20 +7,26 @@ import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 import { LogOut, Settings, User } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
+import { Button } from "@/components/ui/button";
 
-const NAV_ITEMS = [
+// Nav items are built dynamically based on role
+const BASE_NAV = [
   { href: "/", label: "Dashboard" },
-  { href: "/pipeline", label: "Pipeline" },
-  { href: "/outputs", label: "Outputs" },
-  { href: "/guide", label: "Guide" },
 ];
+const ADMIN_NAV_INSERT = { href: "/admin", label: "Admin" };
+const PROBLEMS_NAV = { href: "/problems", label: "Problems" };
+const GUIDE_NAV = { href: "/guide", label: "Guide" };
 
 export function Header() {
   const pathname = usePathname();
   const { user, profile, loading, signOut } = useAuth();
   const { toast } = useToast();
 
-  const isAuthPage = pathname === "/login" || pathname === "/signup" || pathname === "/reset-password";
+  const isAuthPage =
+    pathname === "/login" ||
+    pathname === "/signup" ||
+    pathname === "/reset-password";
+  const isGuidePage = pathname === "/guide";
 
   const handleSignOut = () => {
     sessionStorage.setItem("toast", "Signed out successfully!");
@@ -30,43 +36,71 @@ export function Header() {
   return (
     <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto flex h-14 items-center px-4">
-        <Link href="/" className="mr-8 flex items-center gap-2 font-semibold">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        <Link
+          href={user ? "/" : "/guide"}
+          className="mr-8 flex items-center gap-2 font-semibold"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="16 18 22 12 16 6" />
+            <polyline points="8 6 2 12 8 18" />
+          </svg>
           Coding Automation
         </Link>
-        {!isAuthPage && !loading && user && (
-          <nav className="flex items-center gap-1">
-            {NAV_ITEMS.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "px-3 py-1.5 text-sm rounded-md transition-colors",
-                  pathname === item.href
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                )}
-              >
-                {item.label}
-              </Link>
-            ))}
-            {profile?.role === "admin" && (
-              <Link
-                href="/admin"
-                className={cn(
-                  "px-3 py-1.5 text-sm rounded-md transition-colors",
-                  pathname.startsWith("/admin")
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                )}
-              >
-                Admin
-              </Link>
-            )}
-          </nav>
-        )}
+
+        {/* Nav for logged-in users (not on auth pages) */}
+        {!isAuthPage && !loading && user && (() => {
+          // Build nav: Dashboard, [Admin], Problems, Guide
+          const navItems = [...BASE_NAV];
+          if (profile?.role === "admin") navItems.push(ADMIN_NAV_INSERT);
+          navItems.push(PROBLEMS_NAV, GUIDE_NAV);
+          return (
+            <nav className="flex items-center gap-1">
+              {navItems.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    "px-3 py-1.5 text-sm rounded-md transition-colors",
+                    (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href))
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                  )}
+                >
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
+          );
+        })()}
+
         <div className="ml-auto flex items-center gap-2">
           <ThemeToggle />
+
+          {/* Guest on guide page: show Login/Signup */}
+          {!loading && !user && isGuidePage && (
+            <div className="flex items-center gap-2 ml-2">
+              <Link href="/login">
+                <Button variant="ghost" size="sm">
+                  Sign in
+                </Button>
+              </Link>
+              <Link href="/signup">
+                <Button size="sm">Sign up</Button>
+              </Link>
+            </div>
+          )}
+
+          {/* Logged-in user: show profile/settings/logout */}
           {!loading && user && !isAuthPage && (
             <div className="flex items-center gap-2 ml-2">
               <Link

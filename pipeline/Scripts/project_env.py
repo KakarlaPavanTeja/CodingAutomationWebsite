@@ -15,7 +15,7 @@ import os
 
 
 def _project_root() -> str:
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _load_env_file(path: str, protected_keys: set[str]) -> None:

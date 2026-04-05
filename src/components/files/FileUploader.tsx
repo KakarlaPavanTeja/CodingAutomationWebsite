@@ -10,7 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 
 interface FileUploaderProps {
-  onUploadComplete?: () => void;
+  onUploadComplete?: (problemId?: string) => void;
 }
 
 const PROBLEM_TYPES = [
@@ -19,11 +19,23 @@ const PROBLEM_TYPES = [
   { id: "binary_tree", label: "Binary Tree" },
 ];
 
+const QUESTION_TYPES = [
+  { id: "function", label: "Function-based" },
+  { id: "nonfunction", label: "Non-function" },
+];
+
+const MODES = [
+  { id: "practice", label: "Practice" },
+  { id: "exam", label: "Exam" },
+];
+
 export function FileUploader({ onUploadComplete }: FileUploaderProps) {
   const [problemFile, setProblemFile] = useState<File | null>(null);
   const [solutionFile, setSolutionFile] = useState<File | null>(null);
   const [problemName, setProblemName] = useState("");
   const [problemType, setProblemType] = useState("standard");
+  const [questionType, setQuestionType] = useState("function");
+  const [mode, setMode] = useState("practice");
   const [scenarioLevel, setScenarioLevel] = useState<"none" | "light" | "moderate" | "heavy">("none");
   const [uploading, setUploading] = useState(false);
   const [uploaded, setUploaded] = useState<string[]>([]);
@@ -58,6 +70,8 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
     if (solutionFile) formData.append("solution", solutionFile);
     formData.append("problemName", problemName.trim());
     formData.append("problemType", problemType);
+    formData.append("questionType", questionType);
+    formData.append("mode", mode);
     formData.append("scenarioLevel", scenarioLevel);
 
     try {
@@ -65,7 +79,7 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setUploaded(data.uploaded);
-      onUploadComplete?.();
+      onUploadComplete?.(data.problemId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -113,6 +127,50 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
               </div>
             </div>
 
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">Question Type</span>
+              <div className="flex gap-1.5">
+                {QUESTION_TYPES.map((qt) => (
+                  <button
+                    key={qt.id}
+                    type="button"
+                    onClick={() => setQuestionType(qt.id)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-md text-sm font-medium transition-colors border",
+                      questionType === qt.id
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background text-foreground border-border hover:bg-muted"
+                    )}
+                  >
+                    {qt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">Mode</span>
+              <div className="flex gap-1.5">
+                {MODES.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setMode(m.id)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-md text-sm font-medium transition-colors border",
+                      mode === m.id
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background text-foreground border-border hover:bg-muted"
+                    )}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-6">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium">Scenario</span>
               <div className="flex gap-1.5">

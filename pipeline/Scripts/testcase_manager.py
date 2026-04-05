@@ -5,14 +5,13 @@ import os
 import sys
 from datetime import datetime
 import random
-import threading
-import time
 
 # Ensure the Scripts directory is in the path for imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from Prompts.testcasesprompt import get_testcases_prompt
 from llm_client import call_llm
+from usage_tracker import update_usage
 
 
 def _testcase_payload_byte_size(tc: dict) -> int:
@@ -128,19 +127,11 @@ def _reorder_testcases_json_root(data) -> bool:
     return False
 
 
-def _llm_timer(stop_event: threading.Event, start_time: float) -> None:
-    while not stop_event.is_set():
-        elapsed = int(time.time() - start_time)
-        sys.stdout.write(f"\rLLM call in progress... {elapsed}s elapsed")
-        sys.stdout.flush()
-        stop_event.wait(1)
-
-
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Generate test cases")
     parser.add_argument("--count", type=int, default=None,
-                        help="Number of test cases to generate (default: random 45-50)")
+                        help="Number of test cases to generate (default: random 30-50)")
     args = parser.parse_args()
 
     description_path = os.path.join("Outputs", "generated_description.md")
@@ -189,7 +180,7 @@ def main():
         num_testcases = args.count
         print(f"Using specified number of test cases: {num_testcases}")
     else:
-        num_testcases = random.randint(45, 50)
+        num_testcases = random.randint(30, 50)
         print(f"Using random number of test cases: {num_testcases}")
 
     # 5. Get Prompt
@@ -198,21 +189,8 @@ def main():
     # 6. Call LLM
     print("Calling LLM to generate test case generator script...")
     try:
-        llm_start_time = time.time()
-        stop_timer = threading.Event()
-        timer_thread = threading.Thread(
-            target=_llm_timer,
-            args=(stop_timer, llm_start_time),
-            daemon=True,
-        )
-        timer_thread.start()
-        try:
-            content, usage = call_llm(system_prompt, user_prompt, purpose="testcases")
-        finally:
-            stop_timer.set()
-            timer_thread.join(timeout=2)
-            total_elapsed = int(time.time() - llm_start_time)
-            print(f"\rLLM call completed in {total_elapsed}s.{' ' * 20}")
+        content, usage = call_llm(system_prompt, user_prompt, purpose="testcases")
+        print("LLM call completed.")
         
         # Remove markdown code blocks if present
         if content.startswith("```python"):
@@ -227,81 +205,106 @@ def main():
         print(f"Successfully saved test case generator script to: {output_script_path}")
         
         # 7. Update Usage Tracker
-        tracker_path = os.path.join("Outputs", "usage_tracker.json")
-        if os.path.exists(tracker_path):
-            try:
-                with open(tracker_path, "r") as f:
-                    tracker = json.load(f)
-                
-                prompt_tokens = usage.get("prompt_tokens", 0)
-                completion_tokens = usage.get("completion_tokens", 0)
-                total_tokens = usage.get("total_tokens", 0)
-                
-                # Prices: $1.25 / 1M prompt, $10.00 / 1M completion (GPT-5 pricing)
-                cost = (prompt_tokens * 1.25 / 1_000_000) + (completion_tokens * 10.00 / 1_000_000)
-                
-                tracker["total_requests"] = tracker.get("total_requests", 0) + 1
-                tracker["total_tokens"] = tracker.get("total_tokens", 0) + total_tokens
-                tracker["total_cost_usd"] = tracker.get("total_cost_usd", 0.0) + cost
-                tracker["prompt_tokens"] = tracker.get("prompt_tokens", 0) + prompt_tokens
-                tracker["completion_tokens"] = tracker.get("completion_tokens", 0) + completion_tokens
-                tracker["last_updated"] = datetime.now().isoformat()
-                
-                history_entry = {
-                    "timestamp": datetime.now().isoformat(),
-                    "problem_name": "testcase_generation",
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens,
-                    "cost_usd": cost
-                }
-                tracker.setdefault("history", []).append(history_entry)
-                
-                with open(tracker_path, "w") as f:
-                    json.dump(tracker, f, indent=2)
-                print(f"Usage tracked. Cost: ${cost:.6f}")
-            except Exception as e:
-                print(f"Error updating usage tracker: {e}")
+        update_usage(
+            usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
+            "testcase_generation",
+            model=usage.get("model", "unknown"),
+            purpose="testcases",
+            step_id="create_testcases",
+        )
 
         # 6. Run the generated script
         print(f"Running {output_script_path}...")
         python_executable = os.path.join("venv", "bin", "python3")
         if not os.path.exists(python_executable):
             python_executable = "python3" # Fallback
-            
+
         import subprocess
         result = subprocess.run([python_executable, output_script_path], capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            print("Successfully generated testcases.json")
-            # Move testcases.json to Outputs if it was generated in root
-            out_path = os.path.join("Outputs", "testcases.json")
-            if os.path.exists("testcases.json"):
-                os.rename("testcases.json", out_path)
-                print("Moved testcases.json to Outputs folder.")
-            # Reformat JSON with indentation for readability
-            if os.path.exists(out_path):
-                try:
-                    with open(out_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    did_reorder = _reorder_testcases_json_root(data)
-                    with open(out_path, "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=4, ensure_ascii=False)
-                    if did_reorder:
-                        print(
-                            "Reordered normal+stress test cases by input+output size (ascending); "
-                            "examples/edge/corner order unchanged."
-                        )
-                except Exception as e:
-                    print(f"Warning: could not reformat testcases.json: {e}")
-        else:
-            print(f"Error running generator script: {result.stderr}")
+
+        if result.returncode != 0:
+            first_error = result.stderr.strip()
+            print(f"Error running generator script:\n{first_error}")
+            print("\n--- Retrying: calling LLM to fix the generator script ---")
+
+            # Read the failed script
+            with open(output_script_path, "r") as f:
+                failed_script = f.read()
+
+            retry_system = (
+                "You are a Python expert. The user gave you a test case generator script that failed. "
+                "Fix the script so it runs without errors and produces the same output format. "
+                "Return ONLY the corrected Python script, no explanations."
+            )
+            retry_user = (
+                f"The following Python script failed with this error:\n\n"
+                f"```\n{first_error[-2000:]}\n```\n\n"
+                f"Here is the script:\n\n```python\n{failed_script}\n```\n\n"
+                f"Fix the error and return the corrected script."
+            )
+
+            try:
+                retry_content, retry_usage = call_llm(retry_system, retry_user, purpose="testcases_retry")
+                print("LLM retry call completed.")
+
+                if retry_content.startswith("```python"):
+                    retry_content = retry_content.replace("```python", "", 1)
+                if retry_content.endswith("```"):
+                    retry_content = retry_content.rsplit("```", 1)[0]
+                retry_content = retry_content.strip()
+
+                with open(output_script_path, "w") as f:
+                    f.write(retry_content)
+                print(f"Saved fixed script to: {output_script_path}")
+
+                # Track retry usage
+                update_usage(
+                    retry_usage.get("prompt_tokens", 0),
+                    retry_usage.get("completion_tokens", 0),
+                    "testcase_generation_retry",
+                    model=retry_usage.get("model", "unknown"),
+                    purpose="testcases",
+                    step_id="create_testcases",
+                )
+
+                # Run the fixed script
+                print(f"Running fixed {output_script_path}...")
+                result = subprocess.run([python_executable, output_script_path], capture_output=True, text=True)
+
+                if result.returncode != 0:
+                    print(f"Error: Fixed script also failed:\n{result.stderr}")
+                    sys.exit(1)
+            except Exception as retry_err:
+                print(f"LLM retry failed: {retry_err}")
+                sys.exit(1)
+
+        # If we get here, the script succeeded
+        print("Successfully generated testcases.json")
+        out_path = os.path.join("Outputs", "testcases.json")
+        if os.path.exists("testcases.json"):
+            os.rename("testcases.json", out_path)
+            print("Moved testcases.json to Outputs folder.")
+        if os.path.exists(out_path):
+            try:
+                with open(out_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                did_reorder = _reorder_testcases_json_root(data)
+                with open(out_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=4, ensure_ascii=False)
+                if did_reorder:
+                    print(
+                        "Reordered normal+stress test cases by input+output size (ascending); "
+                        "examples/edge/corner order unchanged."
+                    )
+            except Exception as e:
+                print(f"Warning: could not reformat testcases.json: {e}")
 
     except Exception as e:
         print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
     # Change CWD to the project root if running from Scripts
-    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root_dir = os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     os.chdir(root_dir)
     main()

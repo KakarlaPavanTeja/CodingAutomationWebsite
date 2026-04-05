@@ -1,67 +1,278 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth-context";
+import {
+  Plus,
+  FileText,
+  CheckCircle2,
+  Clock,
+  Loader2,
+  XCircle,
+  ArrowRight,
+  BarChart3,
+} from "lucide-react";
 
-const FEATURES = [
-  {
-    title: "Pipeline",
-    description: "Run the coding question automation pipeline step by step with granular control over each operation.",
-    href: "/pipeline",
-    icon: (
-      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
-    ),
-  },
-  {
-    title: "Outputs",
-    description: "Browse, view, edit and save all generated files including descriptions, test cases, code, and enrichment.",
-    href: "/outputs",
-    icon: (
-      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
-    ),
-  },
-];
+type Problem = {
+  id: string;
+  name: string;
+  status: string;
+  question_type: string;
+  mode: string;
+  created_at: string;
+  profiles?: { display_name: string | null; email: string } | null;
+};
+
+const STATUS_ICON: Record<string, React.ElementType> = {
+  draft: Clock,
+  processing: Loader2,
+  completed: CheckCircle2,
+  failed: XCircle,
+};
+
+const STATUS_COLOR: Record<string, string> = {
+  draft: "text-gray-500",
+  processing: "text-yellow-500",
+  completed: "text-green-500",
+  failed: "text-red-500",
+};
 
 export default function Home() {
+  const { user, profile } = useAuth();
+  const [problems, setProblems] = useState<Problem[]>([]);
+  const [stats, setStats] = useState<{
+    total: number;
+    completed: number;
+    processing: number;
+    failed: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    fetch("/api/problems")
+      .then((r) => r.json())
+      .then((data) => {
+        const p = data.problems || [];
+        setProblems(p);
+        setStats({
+          total: p.length,
+          completed: p.filter((x: Problem) => x.status === "completed").length,
+          processing: p.filter((x: Problem) => x.status === "processing").length,
+          failed: p.filter((x: Problem) => x.status === "failed").length,
+        });
+      })
+      .catch(() => {});
+  }, [user]);
+
   return (
-    <div className="px-6 py-12">
-      <div className="text-center mb-12">
-        <h1 className="text-4xl font-bold tracking-tight mb-4">
-          Coding Question Automation
+    <div className="px-6 py-8 space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      {/* Welcome */}
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">
+          Welcome back{profile?.display_name ? `, ${profile.display_name}` : ""}
         </h1>
-        <p className="text-lg text-muted-foreground">
-          Automate the creation of multi-language coding interview questions.
-          Generate descriptions, test cases, code translations, enrichment content,
-          and platform-ready packages.
+        <p className="text-sm text-muted-foreground mt-1">
+          Here&apos;s an overview of your coding automation pipeline
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {FEATURES.map((feature) => (
-          <Card key={feature.href} className="relative group hover:shadow-lg transition-shadow">
-            <CardHeader>
-              <div className="mb-2 text-muted-foreground">{feature.icon}</div>
-              <CardTitle>{feature.title}</CardTitle>
-              <CardDescription>{feature.description}</CardDescription>
+      {/* Stats Cards */}
+      {stats && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <Card>
+            <CardContent className="pt-5 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-primary/10">
+                  <FileText className="h-5 w-5 text-primary" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold">{stats.total}</p>
+                  <p className="text-xs text-muted-foreground">Total Problems</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-5 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-green-500/10">
+                  <CheckCircle2 className="h-5 w-5 text-green-500" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold">{stats.completed}</p>
+                  <p className="text-xs text-muted-foreground">Completed</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-5 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-yellow-500/10">
+                  <Loader2 className="h-5 w-5 text-yellow-500" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold">{stats.processing}</p>
+                  <p className="text-xs text-muted-foreground">In Progress</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-5 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-red-500/10">
+                  <XCircle className="h-5 w-5 text-red-500" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold">{stats.failed}</p>
+                  <p className="text-xs text-muted-foreground">Failed</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Quick Actions */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Card className="hover:shadow-md transition-shadow">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Plus className="h-5 w-5 text-primary" />
+              New Problem
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground mb-4">
+              Upload a problem statement and solution to start the automation pipeline.
+            </p>
+            <Link href="/problems">
+              <Button size="sm">
+                Create Problem
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+
+        {profile?.role === "admin" && (
+          <Card className="hover:shadow-md transition-shadow">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <BarChart3 className="h-5 w-5 text-primary" />
+                Admin Dashboard
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              <Link href={feature.href}>
-                <Button className="w-full">
-                  Open {feature.title}
+              <p className="text-sm text-muted-foreground mb-4">
+                View all users, problems, pipeline runs, and LLM costs.
+              </p>
+              <Link href="/admin">
+                <Button size="sm" variant="outline">
+                  Open Admin
+                  <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
               </Link>
             </CardContent>
           </Card>
-        ))}
+        )}
       </div>
 
-      <div className="mt-12">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Supported Workflows</CardTitle>
-          </CardHeader>
-          <CardContent>
+      {/* Recent Problems */}
+      {problems.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Recent Problems</h2>
+            <Link href="/problems" className="text-sm text-primary hover:underline underline-offset-4">
+              View all
+            </Link>
+          </div>
+          <div className="rounded-lg border overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/50">
+                  <th className="text-left px-4 py-2.5 font-medium">Name</th>
+                  {profile?.role === "admin" && (
+                    <th className="text-left px-4 py-2.5 font-medium">Created By</th>
+                  )}
+                  <th className="text-left px-4 py-2.5 font-medium">Type</th>
+                  <th className="text-left px-4 py-2.5 font-medium">Status</th>
+                  <th className="text-left px-4 py-2.5 font-medium">Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {problems.slice(0, 5).map((p) => {
+                  const Icon = STATUS_ICON[p.status] || Clock;
+                  const color = STATUS_COLOR[p.status] || "text-gray-500";
+                  return (
+                    <tr key={p.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-2.5">
+                        <Link href={`/problems/${p.id}`} className="font-medium text-primary hover:underline underline-offset-4">
+                          {p.name}
+                        </Link>
+                      </td>
+                      {profile?.role === "admin" && (
+                        <td className="px-4 py-2.5 text-muted-foreground">
+                          {p.profiles?.display_name || p.profiles?.email || "—"}
+                        </td>
+                      )}
+                      <td className="px-4 py-2.5 text-muted-foreground">
+                        {p.question_type === "function" ? "Function-based" : "Non-function"}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className={`inline-flex items-center gap-1 text-xs font-medium ${color}`}>
+                          <Icon className={`h-3 w-3 ${p.status === "processing" ? "animate-spin" : ""}`} />
+                          <span className="capitalize">{p.status.replace("_", " ")}</span>
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-muted-foreground">
+                        {new Date(p.created_at).toLocaleDateString()}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Pipeline Features */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Pipeline Features</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+            <div className="p-3 rounded-lg border border-border/50 bg-muted/30 space-y-1">
+              <p className="font-medium flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-blue-500" />
+                Run All
+              </p>
+              <p className="text-xs text-muted-foreground">Execute the entire pipeline with one click. Stop after the current step anytime.</p>
+            </div>
+            <div className="p-3 rounded-lg border border-border/50 bg-muted/30 space-y-1">
+              <p className="font-medium flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                Persistent Progress
+              </p>
+              <p className="text-xs text-muted-foreground">Steps continue running even if you close the tab or logout. Come back to see results.</p>
+            </div>
+            <div className="p-3 rounded-lg border border-border/50 bg-muted/30 space-y-1">
+              <p className="font-medium flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-purple-500" />
+                Execution Stats
+              </p>
+              <p className="text-xs text-muted-foreground">View max execution time and memory per language with real-time pass/fail tracking.</p>
+            </div>
+          </div>
+
+          <div className="border-t border-border/50 pt-4">
+            <p className="text-xs font-medium text-muted-foreground mb-3">Supported Workflows</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
               <div className="space-y-1">
                 <p className="font-medium">Function-based Practice</p>
@@ -80,9 +291,9 @@ export default function Home() {
                 <p className="text-muted-foreground">Generate &rarr; Test Cases &rarr; Execute &rarr; Package</p>
               </div>
             </div>
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

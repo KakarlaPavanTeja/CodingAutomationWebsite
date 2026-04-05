@@ -27,7 +27,7 @@ def save_split_code(language_name, split_data, question_type="standard"):
     """
     Saves the split code components to ContentFiles/<language>/
     """
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base_dir = os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     content_files_dir = os.path.join(base_dir, "Outputs", "CodeContentFiles")
     
     # Map friendly names to folder names
@@ -116,7 +116,7 @@ def main():
     print(f"Selected languages: {selected_langs}")
 
     # 1. Load generated code from generatedFullCode folder
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base_dir = os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     generated_full_code_dir = os.path.join(base_dir, "Outputs", "generatedFullCode")
     
     if not os.path.exists(generated_full_code_dir):
@@ -191,7 +191,10 @@ def main():
         update_usage(
             usage.get("prompt_tokens", 0),
             usage.get("completion_tokens", 0),
-            f"code_splitting_{lang_name}"
+            f"code_splitting_{lang_name}",
+            model=usage.get("model", "unknown"),
+            purpose="code",
+            step_id="split_code",
         )
         
         # 3. Parse and Save

@@ -8,7 +8,7 @@ export async function GET() {
     supabase.from("profiles").select("id, role, status"),
     supabase.from("problems").select("id, status, question_type"),
     supabase.from("pipeline_runs").select("id, status"),
-    supabase.from("llm_usage").select("cost_usd, model, purpose"),
+    supabase.from("llm_usage").select("cost_usd, model, purpose, user_id, problem_id, total_tokens"),
   ]);
 
   const users = usersRes.data || [];
@@ -20,12 +20,17 @@ export async function GET() {
     (sum, u) => sum + parseFloat(u.cost_usd || "0"),
     0
   );
+  const totalTokens = usage.reduce((sum, u) => sum + (u.total_tokens || 0), 0);
   const costByModel: Record<string, number> = {};
   const costByPurpose: Record<string, number> = {};
+  const costByUser: Record<string, number> = {};
+  const costByProblem: Record<string, number> = {};
   for (const u of usage) {
     const cost = parseFloat(u.cost_usd || "0");
     costByModel[u.model] = (costByModel[u.model] || 0) + cost;
     costByPurpose[u.purpose] = (costByPurpose[u.purpose] || 0) + cost;
+    if (u.user_id) costByUser[u.user_id] = (costByUser[u.user_id] || 0) + cost;
+    if (u.problem_id) costByProblem[u.problem_id] = (costByProblem[u.problem_id] || 0) + cost;
   }
 
   return NextResponse.json({
@@ -56,8 +61,11 @@ export async function GET() {
     },
     costs: {
       total: totalCost,
+      totalTokens,
       byModel: costByModel,
       byPurpose: costByPurpose,
+      byUser: costByUser,
+      byProblem: costByProblem,
       apiCalls: usage.length,
     },
   });

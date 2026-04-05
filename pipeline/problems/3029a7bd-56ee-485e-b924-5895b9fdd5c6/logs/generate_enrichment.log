@@ -1,0 +1,18 @@
+[2026-04-05T07:53:13.363Z] Starting generate_enrichment...
+[2026-04-05T07:53:13.522Z] ============================================================
+[2026-04-05T07:53:13.523Z] ENRICHMENT GENERATOR (Hints, Real-life, Follow-ups)
+[2026-04-05T07:53:13.523Z] ============================================================
+[2026-04-05T07:53:13.523Z] Selected enrichment types: ['reallife', 'hints', 'followups']
+[2026-04-05T07:53:13.523Z] generating real-life examples...
+[2026-04-05T07:53:16.369Z] [usage] gpt-5.4-2026-03-05 | enrichment | 1528 tokens | $0.002479 → Supabase ✓
+[2026-04-05T07:53:16.369Z] ✓ Real-life examples generated
+[2026-04-05T07:53:16.369Z] generating hints...
+[2026-04-05T07:53:19.531Z] [usage] gpt-5.4-2026-03-05 | enrichment | 1741 tokens | $0.003279 → Supabase ✓
+[2026-04-05T07:53:19.531Z] ✓ Hints generated
+[2026-04-05T07:53:19.531Z] generating follow-up questions...
+[2026-04-05T07:53:26.726Z] [usage] gpt-5.4-2026-03-05 | enrichment | 2020 tokens | $0.006007 → Supabase ✓
+[2026-04-05T07:53:26.726Z] ✓ Follow-up questions generated
+[2026-04-05T07:53:26.726Z] ✅ SUCCESS! Enrichment data saved to /Users/kakarlapavanteja/Documents/CodingAutomationWebsite/pipeline/problems/3029a7bd-56ee-485e-b924-5895b9fdd5c6/Outputs/enrichment.json
+[2026-04-05T07:53:26.726Z] ✓ Enrichment usage tracked per-call to Supabase
+
+[2026-04-05T07:53:26.756Z] Process exited with code 0

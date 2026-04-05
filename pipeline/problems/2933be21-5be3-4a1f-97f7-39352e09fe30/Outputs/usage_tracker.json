@@ -1,0 +1,58 @@
+{
+  "total_requests": 10,
+  "total_tokens": 61532,
+  "total_cost_usd": 0.46613249999999995,
+  "prompt_tokens": 17050,
+  "completion_tokens": 44482,
+  "last_updated": "2026-04-05T04:45:55.904590",
+  "history": [
+    {
+      "timestamp": "2026-04-05T04:19:48.328686",
+      "problem_name": "Two Sum NonFunctionBased practice_description",
+      "prompt_tokens": 2997,
+      "completion_tokens": 5612,
+      "total_tokens": 8609,
+      "cost_usd": 0.059866
+    },
+    {
+      "timestamp": "2026-04-05T04:20:08.824766",
+      "problem_name": "Two Sum NonFunctionBased practice_topics",
+      "prompt_tokens": 1137,
+      "completion_tokens": 91,
+      "total_tokens": 1228,
+      "cost_usd": 0.002331
+    },
+    {
+      "timestamp": "2026-04-05T04:27:57.944986",
+      "problem_name": "testcase_generation",
+      "prompt_tokens": 3318,
+      "completion_tokens": 16185,
+      "total_tokens": 19503,
+      "cost_usd": 0.1659975
+    },
+    {
+      "timestamp": "2026-04-05T04:28:57.818534",
+      "problem_name": "enrichment_generation",
+      "prompt_tokens": 3140,
+      "completion_tokens": 596,
+      "total_tokens": 3736,
+      "cost_usd": 0.009885000000000001
+    },
+    {
+      "timestamp": "2026-04-05T04:39:54.533362",
+      "problem_name": "testcase_generation",
+      "prompt_tokens": 3318,
+      "completion_tokens": 21397,
+      "total_tokens": 24715,
+      "cost_usd": 0.2181175
+    },
+    {
+      "timestamp": "2026-04-05T04:45:55.904607",
+      "problem_name": "enrichment_generation",
+      "prompt_tokens": 3140,
+      "completion_tokens": 601,
+      "total_tokens": 3741,
+      "cost_usd": 0.009935
+    }
+  ]
+}

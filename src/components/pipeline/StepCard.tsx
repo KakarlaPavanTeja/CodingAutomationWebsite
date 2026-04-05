@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -44,12 +44,27 @@ export function StepCard({
   const canRun = !isAnyRunning && previousCompleted;
   const isExecution = stepState.id === "execute_tests_function" || stepState.id === "execute_tests_nonfunction";
 
+  // Live elapsed timer
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (stepState.status !== "running" || !stepState.startTime) return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [stepState.status, stepState.startTime]);
+
+  const formatDuration = (ms: number) => {
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    return `${m}m ${s % 60}s`;
+  };
+
   const duration =
     stepState.startTime && stepState.endTime
-      ? ((stepState.endTime - stepState.startTime) / 1000).toFixed(1)
-      : stepState.startTime && isRunning
-      ? null // will be shown in progress items
-      : null;
+      ? formatDuration(stepState.endTime - stepState.startTime)
+      : stepState.startTime && stepState.status === "running"
+        ? formatDuration(now - stepState.startTime)
+        : null;
 
   const hasLogs = stepState.logs.length > 0;
 
@@ -82,7 +97,7 @@ export function StepCard({
           </div>
           <div className="flex items-center gap-2">
             {duration && (
-              <span className="text-xs text-muted-foreground">{duration}s</span>
+              <span className="text-xs text-muted-foreground">{duration}</span>
             )}
             <span className={cn(
               "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold",

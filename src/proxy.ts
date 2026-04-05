@@ -30,20 +30,22 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const isAuthPage =
+  const isPublicPage =
     request.nextUrl.pathname === "/login" ||
     request.nextUrl.pathname === "/signup" ||
     request.nextUrl.pathname === "/reset-password" ||
+    request.nextUrl.pathname === "/guide" ||
     request.nextUrl.pathname.startsWith("/auth/");
 
-  // Redirect unauthenticated users to login (except auth pages and API routes)
+  // Redirect unauthenticated users (except public pages and API routes)
   if (
     !user &&
-    !isAuthPage &&
+    !isPublicPage &&
     !request.nextUrl.pathname.startsWith("/api")
   ) {
     const url = request.nextUrl.clone();
-    url.pathname = "/login";
+    // Redirect root to guide for guests, everything else to login
+    url.pathname = request.nextUrl.pathname === "/" ? "/guide" : "/login";
     return NextResponse.redirect(url);
   }
 

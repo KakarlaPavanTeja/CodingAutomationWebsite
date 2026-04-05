@@ -61,6 +61,7 @@ export interface RunRequest {
   subSteps: string[];
   languages: string[];
   testcaseCount?: number;
+  problemId?: string;
 }
 
 export interface OutputFile {

@@ -1,8 +1,8 @@
 "use client";
 
 import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { LANGUAGES, STEP_CONFIGS } from "@/lib/pipeline-config";
 import type { StepId } from "@/types/pipeline";
 
@@ -63,15 +63,14 @@ export function GlobalConfig({
           <div className="flex items-center gap-2">
             <Input
               type="number"
-              min={5}
-              max={100}
-              value={testcaseCount}
-              onChange={(e) => onTestcaseCountChange(parseInt(e.target.value) || 45)}
+              value={testcaseCount || ""}
+              onChange={(e) => onTestcaseCountChange(parseInt(e.target.value) || 0)}
               className="w-24"
               disabled={disabled}
+              placeholder=""
             />
             <span className="text-xs text-muted-foreground">
-              (default: random 45-50)
+              Recommended: 30 to 50
             </span>
           </div>
         </div>

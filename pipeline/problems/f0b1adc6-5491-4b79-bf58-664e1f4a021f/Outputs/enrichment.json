@@ -1,0 +1,21 @@
+{
+    "real_life_examples": "1. This kind of pair-finding is used in payment and billing systems to quickly detect two transactions that exactly match a target refund or balance amount without checking every possible pair.\n\n2. The hash-map approach matters in real systems like sensor or game event processing because it finds a matching pair in one pass, which keeps performance fast even when thousands of values arrive.",
+    "hints": {
+        "hint_1": "Try checking every pair of positions `i` and `j` with `i < j`. If `values[i] + values[j] == required`, return those indices; otherwise keep going until all pairs are tested.",
+        "hint_2": "That pair-checking repeats a lot of work and takes about `O(n^2)`. While scanning left to right, think about what earlier value would be needed to complete the current one to `required`, and store seen values with their indices so you can test in near `O(1)` each time."
+    },
+    "followup_questions": [
+        {
+            "question": "Your solution uses an `unordered_map` with `O(n)` extra space. Can you reduce the auxiliary space, and what trade-off would that introduce?",
+            "answer": "Yes \u2014 we can sort value-index pairs and then use the two-pointer technique to find the target sum in `O(n log n)` time with `O(n)` if we preserve indices, or `O(1)` extra beyond the array if modifying input is allowed. The trade-off is losing the linear-time `O(n)` behavior of hashing."
+        },
+        {
+            "question": "Given the constraints allow values up to `10^9` and down to `-10^9`, is using `int` always safe here? What would you change for stricter constraints like values near `10^18`?",
+            "answer": "For the current bounds, `int` is safe because `target - num` stays within roughly `[-2 * 10^9, 2 * 10^9]`, which fits in `32`-bit signed range. For larger bounds, we should use `long long` for the array values, target, and complement computation to avoid overflow."
+        },
+        {
+            "question": "Your hash-based approach works well for a finite array. How would you adapt it if the numbers arrived as an infinite stream and you needed to report the first valid pair as early as possible?",
+            "answer": "We can keep the same incremental hash-map idea: for each incoming value, check whether its complement has already appeared, and if yes, return immediately. This still gives expected `O(1)` processing per element, but memory can grow without bound unless we are allowed a sliding window or other constraint."
+        }
+    ]
+}

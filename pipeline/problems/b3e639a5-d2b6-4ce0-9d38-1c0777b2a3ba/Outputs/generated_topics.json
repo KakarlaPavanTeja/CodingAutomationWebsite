@@ -1,0 +1,11 @@
+{
+    "beginner_topics": [
+        "Matrix",
+        "Sorting",
+        "Simulation"
+    ],
+    "intermediate_topics": [
+        "Hash Table"
+    ],
+    "advanced_topics": []
+}

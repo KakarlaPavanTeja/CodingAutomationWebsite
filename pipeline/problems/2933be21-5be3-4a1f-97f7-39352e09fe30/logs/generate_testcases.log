@@ -1,0 +1,13 @@
+[2026-04-04T23:04:50.926Z] Starting generate_testcases...
+[2026-04-04T23:04:51.087Z] Detected difficulty: medium. Setting total weightage to: 25
+[2026-04-04T23:04:51.087Z] Using specified number of test cases: 10
+[2026-04-04T23:04:51.087Z] Calling LLM to generate test case generator script...
+[2026-04-04T23:09:54.530Z] LLM call completed.
+[2026-04-04T23:09:54.532Z] Successfully saved test case generator script to: Outputs/testcases_generator_script.py
+[2026-04-04T23:09:54.534Z] Usage tracked. Cost: $0.218117
+[2026-04-04T23:09:54.534Z] Running Outputs/testcases_generator_script.py...
+[2026-04-04T23:09:54.604Z] Successfully generated testcases.json
+[2026-04-04T23:09:54.604Z] Moved testcases.json to Outputs folder.
+[2026-04-04T23:09:54.605Z] Reordered normal+stress test cases by input+output size (ascending); examples/edge/corner order unchanged.
+
+[2026-04-04T23:09:54.620Z] Process exited with code 0

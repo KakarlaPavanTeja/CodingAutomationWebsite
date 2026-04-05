@@ -1,0 +1,234 @@
+[2026-04-05T07:53:41.616Z] Starting execute_tests_function...
+[2026-04-05T07:53:41.757Z] [execution_manager_v2 config]
+[2026-04-05T07:53:41.757Z]   Upload mode: proxy
+[2026-04-05T07:53:41.757Z]   Upload service URL set: yes
+[2026-04-05T07:53:41.757Z]   Output S3 enabled: no
+[2026-04-05T07:53:41.757Z]   Env files found: none
+[2026-04-05T07:53:41.757Z]   Note: create .env.execution_manager_v2 for local overrides.
+[2026-04-05T07:53:41.757Z] Checking S3 upload service health: https://testcasess3urlcreationproject.onrender.com/health
+[2026-04-05T07:53:42.042Z] S3 upload service is live.
+[2026-04-05T07:53:42.045Z] Filtered to run only: Python, C++, Java, Node.js
+[2026-04-05T07:53:42.045Z] ================================================================================
+[2026-04-05T07:53:42.045Z] TESTING PYTHON - 20 TEST CASES (CASE-2 IO PAYLOAD)
+[2026-04-05T07:53:42.045Z] ================================================================================
+[2026-04-05T07:53:43.510Z] [Python] Progress 1/20 - CORRECT | time=0.000037s | memory=6.40MB | input_s3=no | output_s3=no
+[2026-04-05T07:53:44.933Z] [Python] Progress 2/20 - CORRECT | time=0.000040s | memory=6.40MB | input_s3=no | output_s3=no
+[2026-04-05T07:53:46.423Z] [Python] Progress 3/20 - CORRECT | time=0.000030s | memory=6.30MB | input_s3=no | output_s3=no
+[2026-04-05T07:53:47.943Z] [Python] Progress 4/20 - CORRECT | time=0.000159s | memory=6.30MB | input_s3=no | output_s3=no
+[2026-04-05T07:53:49.390Z] [Python] Progress 5/20 - CORRECT | time=0.000209s | memory=6.30MB | input_s3=no | output_s3=no
+[2026-04-05T07:53:50.917Z] [Python] Progress 6/20 - CORRECT | time=0.000034s | memory=6.40MB | input_s3=no | output_s3=no
+[2026-04-05T07:53:52.371Z] [Python] Progress 7/20 - CORRECT | time=0.000047s | memory=6.30MB | input_s3=no | output_s3=no
+[2026-04-05T07:53:55.791Z] [Python] Progress 8/20 - CORRECT | time=0.000049s | memory=6.30MB | input_s3=no | output_s3=no
+[2026-04-05T07:53:57.311Z] [Python] Progress 9/20 - CORRECT | time=0.000070s | memory=6.40MB | input_s3=no | output_s3=no
+[2026-04-05T07:53:58.756Z] [Python] Progress 10/20 - CORRECT | time=0.000058s | memory=6.30MB | input_s3=no | output_s3=no
+[2026-04-05T07:54:02.196Z] [Python] Progress 11/20 - CORRECT | time=0.007475s | memory=7.30MB | input_s3=yes | output_s3=no
+[2026-04-05T07:54:05.653Z] [Python] Progress 12/20 - CORRECT | time=0.007377s | memory=7.20MB | input_s3=yes | output_s3=no
+[2026-04-05T07:54:08.960Z] [Python] Progress 13/20 - CORRECT | time=0.011604s | memory=7.20MB | input_s3=yes | output_s3=no
+[2026-04-05T07:54:11.809Z] [Python] Progress 14/20 - CORRECT | time=0.003327s | memory=7.30MB | input_s3=yes | output_s3=no
+[2026-04-05T07:54:14.612Z] [Python] Progress 15/20 - CORRECT | time=0.002918s | memory=7.30MB | input_s3=yes | output_s3=no
+[2026-04-05T07:54:17.408Z] [Python] Progress 16/20 - CORRECT | time=0.002340s | memory=7.30MB | input_s3=yes | output_s3=no
+[2026-04-05T07:54:20.251Z] [Python] Progress 17/20 - CORRECT | time=0.002808s | memory=7.20MB | input_s3=yes | output_s3=no
+[2026-04-05T07:54:23.056Z] [Python] Progress 18/20 - CORRECT | time=0.002813s | memory=7.20MB | input_s3=yes | output_s3=no
+[2026-04-05T07:54:25.993Z] [Python] Progress 19/20 - CORRECT | time=0.002251s | memory=7.30MB | input_s3=yes | output_s3=no
+[2026-04-05T07:54:28.800Z] [Python] Progress 20/20 - CORRECT | time=0.002768s | memory=7.20MB | input_s3=yes | output_s3=no
+[2026-04-05T07:54:28.800Z] Python - Execution Details
+[2026-04-05T07:54:28.800Z] +------+---------+------+-----------+--------+
+[2026-04-05T07:54:28.800Z] | Test | Status  | Pass | API Time  | Memory |
+[2026-04-05T07:54:28.800Z] +------+---------+------+-----------+--------+
+[2026-04-05T07:54:28.800Z] | 1    | CORRECT | Yes  | 0.000037s | 6.40MB |
+[2026-04-05T07:54:28.800Z] | 2    | CORRECT | Yes  | 0.000040s | 6.40MB |
+[2026-04-05T07:54:28.800Z] | 3    | CORRECT | Yes  | 0.000030s | 6.30MB |
+[2026-04-05T07:54:28.800Z] | 4    | CORRECT | Yes  | 0.000159s | 6.30MB |
+[2026-04-05T07:54:28.800Z] | 5    | CORRECT | Yes  | 0.000209s | 6.30MB |
+[2026-04-05T07:54:28.800Z] | 6    | CORRECT | Yes  | 0.000034s | 6.40MB |
+[2026-04-05T07:54:28.800Z] | 7    | CORRECT | Yes  | 0.000047s | 6.30MB |
+[2026-04-05T07:54:28.800Z] | 8    | CORRECT | Yes  | 0.000049s | 6.30MB |
+[2026-04-05T07:54:28.800Z] | 9    | CORRECT | Yes  | 0.000070s | 6.40MB |
+[2026-04-05T07:54:28.800Z] | 10   | CORRECT | Yes  | 0.000058s | 6.30MB |
+[2026-04-05T07:54:28.800Z] | 11   | CORRECT | Yes  | 0.007475s | 7.30MB |
+[2026-04-05T07:54:28.800Z] | 12   | CORRECT | Yes  | 0.007377s | 7.20MB |
+[2026-04-05T07:54:28.800Z] | 13   | CORRECT | Yes  | 0.011604s | 7.20MB |
+[2026-04-05T07:54:28.800Z] | 14   | CORRECT | Yes  | 0.003327s | 7.30MB |
+[2026-04-05T07:54:28.800Z] | 15   | CORRECT | Yes  | 0.002918s | 7.30MB |
+[2026-04-05T07:54:28.800Z] | 16   | CORRECT | Yes  | 0.002340s | 7.30MB |
+[2026-04-05T07:54:28.800Z] | 17   | CORRECT | Yes  | 0.002808s | 7.20MB |
+[2026-04-05T07:54:28.800Z] | 18   | CORRECT | Yes  | 0.002813s | 7.20MB |
+[2026-04-05T07:54:28.800Z] | 19   | CORRECT | Yes  | 0.002251s | 7.30MB |
+[2026-04-05T07:54:28.800Z] | 20   | CORRECT | Yes  | 0.002768s | 7.20MB |
+[2026-04-05T07:54:28.800Z] +------+---------+------+-----------+--------+
+[2026-04-05T07:54:28.800Z] Python: passed 20/20
+[2026-04-05T07:54:28.800Z] ================================================================================
+[2026-04-05T07:54:28.800Z] TESTING C++ - 20 TEST CASES (CASE-2 IO PAYLOAD)
+[2026-04-05T07:54:28.800Z] ================================================================================
+[2026-04-05T07:54:32.348Z] [C++] Progress 1/20 - CORRECT | time=0.000033s | memory=0.90MB | input_s3=no | output_s3=no
+[2026-04-05T07:54:35.904Z] [C++] Progress 2/20 - CORRECT | time=0.000033s | memory=0.90MB | input_s3=no | output_s3=no
+[2026-04-05T07:54:39.440Z] [C++] Progress 3/20 - CORRECT | time=0.000019s | memory=0.80MB | input_s3=no | output_s3=no
+[2026-04-05T07:54:42.934Z] [C++] Progress 4/20 - CORRECT | time=0.008350s | memory=2.10MB | input_s3=no | output_s3=no
+[2026-04-05T07:54:46.560Z] [C++] Progress 5/20 - CORRECT | time=0.000278s | memory=2.20MB | input_s3=no | output_s3=no
+[2026-04-05T07:54:50.063Z] [C++] Progress 6/20 - CORRECT | time=0.000026s | memory=0.80MB | input_s3=no | output_s3=no
+[2026-04-05T07:54:53.506Z] [C++] Progress 7/20 - CORRECT | time=0.000042s | memory=0.90MB | input_s3=no | output_s3=no
+[2026-04-05T07:54:57.083Z] [C++] Progress 8/20 - CORRECT | time=0.000048s | memory=2.20MB | input_s3=no | output_s3=no
+[2026-04-05T07:55:00.754Z] [C++] Progress 9/20 - CORRECT | time=0.000046s | memory=0.90MB | input_s3=no | output_s3=no
+[2026-04-05T07:55:04.430Z] [C++] Progress 10/20 - CORRECT | time=0.000055s | memory=0.90MB | input_s3=no | output_s3=no
+[2026-04-05T07:55:10.315Z] [C++] Progress 11/20 - CORRECT | time=0.009145s | memory=2.10MB | input_s3=yes | output_s3=no
+[2026-04-05T07:55:15.378Z] [C++] Progress 12/20 - CORRECT | time=0.004941s | memory=2.20MB | input_s3=yes | output_s3=no
+[2026-04-05T07:55:20.427Z] [C++] Progress 13/20 - CORRECT | time=0.004994s | memory=2.10MB | input_s3=yes | output_s3=no
+[2026-04-05T07:55:25.449Z] [C++] Progress 14/20 - CORRECT | time=0.008842s | memory=2.10MB | input_s3=yes | output_s3=no
+[2026-04-05T07:55:30.644Z] [C++] Progress 15/20 - CORRECT | time=0.008740s | memory=2.20MB | input_s3=yes | output_s3=no
+[2026-04-05T07:55:35.648Z] [C++] Progress 16/20 - CORRECT | time=0.004506s | memory=2.20MB | input_s3=yes | output_s3=no
+[2026-04-05T07:55:40.701Z] [C++] Progress 17/20 - CORRECT | time=0.004486s | memory=2.20MB | input_s3=yes | output_s3=no
+[2026-04-05T07:55:45.710Z] [C++] Progress 18/20 - CORRECT | time=0.012533s | memory=2.10MB | input_s3=yes | output_s3=no
+[2026-04-05T07:55:50.780Z] [C++] Progress 19/20 - CORRECT | time=0.008491s | memory=2.20MB | input_s3=yes | output_s3=no
+[2026-04-05T07:55:56.530Z] [C++] Progress 20/20 - CORRECT | time=0.004356s | memory=2.20MB | input_s3=yes | output_s3=no
+[2026-04-05T07:55:56.531Z] C++ - Execution Details
+[2026-04-05T07:55:56.531Z] +------+---------+------+-----------+--------+
+[2026-04-05T07:55:56.531Z] | Test | Status  | Pass | API Time  | Memory |
+[2026-04-05T07:55:56.531Z] +------+---------+------+-----------+--------+
+[2026-04-05T07:55:56.531Z] | 1    | CORRECT | Yes  | 0.000033s | 0.90MB |
+[2026-04-05T07:55:56.531Z] | 2    | CORRECT | Yes  | 0.000033s | 0.90MB |
+[2026-04-05T07:55:56.531Z] | 3    | CORRECT | Yes  | 0.000019s | 0.80MB |
+[2026-04-05T07:55:56.531Z] | 4    | CORRECT | Yes  | 0.008350s | 2.10MB |
+[2026-04-05T07:55:56.531Z] | 5    | CORRECT | Yes  | 0.000278s | 2.20MB |
+[2026-04-05T07:55:56.531Z] | 6    | CORRECT | Yes  | 0.000026s | 0.80MB |
+[2026-04-05T07:55:56.531Z] | 7    | CORRECT | Yes  | 0.000042s | 0.90MB |
+[2026-04-05T07:55:56.531Z] | 8    | CORRECT | Yes  | 0.000048s | 2.20MB |
+[2026-04-05T07:55:56.531Z] | 9    | CORRECT | Yes  | 0.000046s | 0.90MB |
+[2026-04-05T07:55:56.531Z] | 10   | CORRECT | Yes  | 0.000055s | 0.90MB |
+[2026-04-05T07:55:56.531Z] | 11   | CORRECT | Yes  | 0.009145s | 2.10MB |
+[2026-04-05T07:55:56.531Z] | 12   | CORRECT | Yes  | 0.004941s | 2.20MB |
+[2026-04-05T07:55:56.531Z] | 13   | CORRECT | Yes  | 0.004994s | 2.10MB |
+[2026-04-05T07:55:56.531Z] | 14   | CORRECT | Yes  | 0.008842s | 2.10MB |
+[2026-04-05T07:55:56.531Z] | 15   | CORRECT | Yes  | 0.008740s | 2.20MB |
+[2026-04-05T07:55:56.531Z] | 16   | CORRECT | Yes  | 0.004506s | 2.20MB |
+[2026-04-05T07:55:56.531Z] | 17   | CORRECT | Yes  | 0.004486s | 2.20MB |
+[2026-04-05T07:55:56.531Z] | 18   | CORRECT | Yes  | 0.012533s | 2.10MB |
+[2026-04-05T07:55:56.531Z] | 19   | CORRECT | Yes  | 0.008491s | 2.20MB |
+[2026-04-05T07:55:56.531Z] | 20   | CORRECT | Yes  | 0.004356s | 2.20MB |
+[2026-04-05T07:55:56.531Z] +------+---------+------+-----------+--------+
+[2026-04-05T07:55:56.531Z] C++: passed 20/20
+[2026-04-05T07:55:56.531Z] ================================================================================
+[2026-04-05T07:55:56.531Z] TESTING JAVA - 20 TEST CASES (CASE-2 IO PAYLOAD)
+[2026-04-05T07:55:56.531Z] ================================================================================
+[2026-04-05T07:56:00.309Z] [Java] Progress 1/20 - CORRECT | time=0.014286s | memory=1.10MB | input_s3=no | output_s3=no
+[2026-04-05T07:56:04.068Z] [Java] Progress 2/20 - CORRECT | time=0.018126s | memory=1.10MB | input_s3=no | output_s3=no
+[2026-04-05T07:56:07.826Z] [Java] Progress 3/20 - CORRECT | time=0.018363s | memory=1.10MB | input_s3=no | output_s3=no
+[2026-04-05T07:56:11.492Z] [Java] Progress 4/20 - CORRECT | time=0.020597s | memory=1.20MB | input_s3=no | output_s3=no
+[2026-04-05T07:56:15.122Z] [Java] Progress 5/20 - CORRECT | time=0.027931s | memory=1.20MB | input_s3=no | output_s3=no
+[2026-04-05T07:56:18.940Z] [Java] Progress 6/20 - CORRECT | time=0.018016s | memory=1.10MB | input_s3=no | output_s3=no
+[2026-04-05T07:56:22.506Z] [Java] Progress 7/20 - CORRECT | time=0.018505s | memory=1.10MB | input_s3=no | output_s3=no
+[2026-04-05T07:56:26.100Z] [Java] Progress 8/20 - CORRECT | time=0.017884s | memory=1.10MB | input_s3=no | output_s3=no
+[2026-04-05T07:56:29.703Z] [Java] Progress 9/20 - CORRECT | time=0.018928s | memory=1.10MB | input_s3=no | output_s3=no
+[2026-04-05T07:56:33.504Z] [Java] Progress 10/20 - CORRECT | time=0.018534s | memory=1.10MB | input_s3=no | output_s3=no
+[2026-04-05T07:56:39.348Z] [Java] Progress 11/20 - CORRECT | time=0.080320s | memory=2.40MB | input_s3=yes | output_s3=no
+[2026-04-05T07:56:44.545Z] [Java] Progress 12/20 - INCORRECT | time=0.073666s | memory=2.40MB | input_s3=yes | output_s3=no
+[2026-04-05T07:56:49.849Z] [Java] Progress 13/20 - INCORRECT | time=0.077314s | memory=2.40MB | input_s3=yes | output_s3=no
+[2026-04-05T07:56:55.149Z] [Java] Progress 14/20 - INCORRECT | time=0.076025s | memory=2.40MB | input_s3=yes | output_s3=no
+[2026-04-05T07:57:00.386Z] [Java] Progress 15/20 - INCORRECT | time=0.079959s | memory=2.40MB | input_s3=yes | output_s3=no
+[2026-04-05T07:57:05.607Z] [Java] Progress 16/20 - CORRECT | time=0.064267s | memory=2.40MB | input_s3=yes | output_s3=no
+[2026-04-05T07:57:10.803Z] [Java] Progress 17/20 - CORRECT | time=0.073529s | memory=2.40MB | input_s3=yes | output_s3=no
+[2026-04-05T07:57:16.162Z] [Java] Progress 18/20 - CORRECT | time=0.071985s | memory=2.40MB | input_s3=yes | output_s3=no
+[2026-04-05T07:57:21.379Z] [Java] Progress 19/20 - CORRECT | time=0.058664s | memory=2.40MB | input_s3=yes | output_s3=no
+[2026-04-05T07:57:26.628Z] [Java] Progress 20/20 - CORRECT | time=0.071720s | memory=2.60MB | input_s3=yes | output_s3=no
+[2026-04-05T07:57:26.629Z] Java - Execution Details
+[2026-04-05T07:57:26.629Z] +------+-----------+------+-----------+--------+
+[2026-04-05T07:57:26.629Z] | Test | Status    | Pass | API Time  | Memory |
+[2026-04-05T07:57:26.629Z] +------+-----------+------+-----------+--------+
+[2026-04-05T07:57:26.629Z] | 1    | CORRECT   | Yes  | 0.014286s | 1.10MB |
+[2026-04-05T07:57:26.629Z] | 2    | CORRECT   | Yes  | 0.018126s | 1.10MB |
+[2026-04-05T07:57:26.629Z] | 3    | CORRECT   | Yes  | 0.018363s | 1.10MB |
+[2026-04-05T07:57:26.629Z] | 4    | CORRECT   | Yes  | 0.020597s | 1.20MB |
+[2026-04-05T07:57:26.629Z] | 5    | CORRECT   | Yes  | 0.027931s | 1.20MB |
+[2026-04-05T07:57:26.629Z] | 6    | CORRECT   | Yes  | 0.018016s | 1.10MB |
+[2026-04-05T07:57:26.629Z] | 7    | CORRECT   | Yes  | 0.018505s | 1.10MB |
+[2026-04-05T07:57:26.629Z] | 8    | CORRECT   | Yes  | 0.017884s | 1.10MB |
+[2026-04-05T07:57:26.629Z] | 9    | CORRECT   | Yes  | 0.018928s | 1.10MB |
+[2026-04-05T07:57:26.629Z] | 10   | CORRECT   | Yes  | 0.018534s | 1.10MB |
+[2026-04-05T07:57:26.629Z] | 11   | CORRECT   | Yes  | 0.080320s | 2.40MB |
+[2026-04-05T07:57:26.629Z] | 12   | INCORRECT | No   | 0.073666s | 2.40MB |
+[2026-04-05T07:57:26.629Z] | 13   | INCORRECT | No   | 0.077314s | 2.40MB |
+[2026-04-05T07:57:26.629Z] | 14   | INCORRECT | No   | 0.076025s | 2.40MB |
+[2026-04-05T07:57:26.629Z] | 15   | INCORRECT | No   | 0.079959s | 2.40MB |
+[2026-04-05T07:57:26.629Z] | 16   | CORRECT   | Yes  | 0.064267s | 2.40MB |
+[2026-04-05T07:57:26.629Z] | 17   | CORRECT   | Yes  | 0.073529s | 2.40MB |
+[2026-04-05T07:57:26.629Z] | 18   | CORRECT   | Yes  | 0.071985s | 2.40MB |
+[2026-04-05T07:57:26.629Z] | 19   | CORRECT   | Yes  | 0.058664s | 2.40MB |
+[2026-04-05T07:57:26.629Z] | 20   | CORRECT   | Yes  | 0.071720s | 2.60MB |
+[2026-04-05T07:57:26.629Z] +------+-----------+------+-----------+--------+
+[2026-04-05T07:57:26.629Z] Java: passed 16/20
+[2026-04-05T07:57:26.629Z] ================================================================================
+[2026-04-05T07:57:26.629Z] TESTING NODE.JS - 20 TEST CASES (CASE-2 IO PAYLOAD)
+[2026-04-05T07:57:26.629Z] ================================================================================
+[2026-04-05T07:57:28.288Z] [Node.js] Progress 1/20 - CORRECT | time=0.000296s | memory=32.60MB | input_s3=no | output_s3=no
+[2026-04-05T07:57:29.873Z] [Node.js] Progress 2/20 - CORRECT | time=0.000293s | memory=33.10MB | input_s3=no | output_s3=no
+[2026-04-05T07:57:31.417Z] [Node.js] Progress 3/20 - CORRECT | time=0.000191s | memory=32.40MB | input_s3=no | output_s3=no
+[2026-04-05T07:57:32.993Z] [Node.js] Progress 4/20 - CORRECT | time=0.000367s | memory=32.50MB | input_s3=no | output_s3=no
+[2026-04-05T07:57:34.602Z] [Node.js] Progress 5/20 - CORRECT | time=0.000391s | memory=32.80MB | input_s3=no | output_s3=no
+[2026-04-05T07:57:36.204Z] [Node.js] Progress 6/20 - CORRECT | time=0.004434s | memory=32.70MB | input_s3=no | output_s3=no
+[2026-04-05T07:57:37.768Z] [Node.js] Progress 7/20 - CORRECT | time=0.000296s | memory=33.10MB | input_s3=no | output_s3=no
+[2026-04-05T07:57:39.341Z] [Node.js] Progress 8/20 - CORRECT | time=0.000308s | memory=32.70MB | input_s3=no | output_s3=no
+[2026-04-05T07:57:40.925Z] [Node.js] Progress 9/20 - CORRECT | time=0.000313s | memory=32.20MB | input_s3=no | output_s3=no
+[2026-04-05T07:57:42.480Z] [Node.js] Progress 10/20 - CORRECT | time=0.000323s | memory=32.80MB | input_s3=no | output_s3=no
+[2026-04-05T07:57:46.015Z] [Node.js] Progress 11/20 - CORRECT | time=0.005279s | memory=33.70MB | input_s3=yes | output_s3=no
+[2026-04-05T07:57:49.082Z] [Node.js] Progress 12/20 - CORRECT | time=0.012419s | memory=33.00MB | input_s3=yes | output_s3=no
+[2026-04-05T07:57:52.056Z] [Node.js] Progress 13/20 - INCORRECT | time=0.005321s | memory=33.50MB | input_s3=yes | output_s3=no
+[2026-04-05T07:57:55.558Z] [Node.js] Progress 14/20 - INCORRECT | time=0.005572s | memory=33.80MB | input_s3=yes | output_s3=no
+[2026-04-05T07:57:58.558Z] [Node.js] Progress 15/20 - INCORRECT | time=0.004934s | memory=33.10MB | input_s3=yes | output_s3=no
+[2026-04-05T07:58:01.697Z] [Node.js] Progress 16/20 - CORRECT | time=0.004241s | memory=33.30MB | input_s3=yes | output_s3=no
+[2026-04-05T07:58:04.896Z] [Node.js] Progress 17/20 - CORRECT | time=0.004933s | memory=33.50MB | input_s3=yes | output_s3=no
+[2026-04-05T07:58:07.891Z] [Node.js] Progress 18/20 - CORRECT | time=0.013193s | memory=33.60MB | input_s3=yes | output_s3=no
+[2026-04-05T07:58:10.918Z] [Node.js] Progress 19/20 - CORRECT | time=0.004143s | memory=33.10MB | input_s3=yes | output_s3=no
+[2026-04-05T07:58:14.056Z] [Node.js] Progress 20/20 - CORRECT | time=0.003550s | memory=33.80MB | input_s3=yes | output_s3=no
+[2026-04-05T07:58:14.056Z] Node.js - Execution Details
+[2026-04-05T07:58:14.056Z] +------+-----------+------+-----------+---------+
+[2026-04-05T07:58:14.056Z] | Test | Status    | Pass | API Time  | Memory  |
+[2026-04-05T07:58:14.056Z] +------+-----------+------+-----------+---------+
+[2026-04-05T07:58:14.056Z] | 1    | CORRECT   | Yes  | 0.000296s | 32.60MB |
+[2026-04-05T07:58:14.056Z] | 2    | CORRECT   | Yes  | 0.000293s | 33.10MB |
+[2026-04-05T07:58:14.056Z] | 3    | CORRECT   | Yes  | 0.000191s | 32.40MB |
+[2026-04-05T07:58:14.056Z] | 4    | CORRECT   | Yes  | 0.000367s | 32.50MB |
+[2026-04-05T07:58:14.056Z] | 5    | CORRECT   | Yes  | 0.000391s | 32.80MB |
+[2026-04-05T07:58:14.056Z] | 6    | CORRECT   | Yes  | 0.004434s | 32.70MB |
+[2026-04-05T07:58:14.056Z] | 7    | CORRECT   | Yes  | 0.000296s | 33.10MB |
+[2026-04-05T07:58:14.056Z] | 8    | CORRECT   | Yes  | 0.000308s | 32.70MB |
+[2026-04-05T07:58:14.056Z] | 9    | CORRECT   | Yes  | 0.000313s | 32.20MB |
+[2026-04-05T07:58:14.056Z] | 10   | CORRECT   | Yes  | 0.000323s | 32.80MB |
+[2026-04-05T07:58:14.056Z] | 11   | CORRECT   | Yes  | 0.005279s | 33.70MB |
+[2026-04-05T07:58:14.056Z] | 12   | CORRECT   | Yes  | 0.012419s | 33.00MB |
+[2026-04-05T07:58:14.056Z] | 13   | INCORRECT | No   | 0.005321s | 33.50MB |
+[2026-04-05T07:58:14.056Z] | 14   | INCORRECT | No   | 0.005572s | 33.80MB |
+[2026-04-05T07:58:14.056Z] | 15   | INCORRECT | No   | 0.004934s | 33.10MB |
+[2026-04-05T07:58:14.056Z] | 16   | CORRECT   | Yes  | 0.004241s | 33.30MB |
+[2026-04-05T07:58:14.056Z] | 17   | CORRECT   | Yes  | 0.004933s | 33.50MB |
+[2026-04-05T07:58:14.056Z] | 18   | CORRECT   | Yes  | 0.013193s | 33.60MB |
+[2026-04-05T07:58:14.056Z] | 19   | CORRECT   | Yes  | 0.004143s | 33.10MB |
+[2026-04-05T07:58:14.056Z] | 20   | CORRECT   | Yes  | 0.003550s | 33.80MB |
+[2026-04-05T07:58:14.056Z] +------+-----------+------+-----------+---------+
+[2026-04-05T07:58:14.056Z] Node.js: passed 17/20
+[2026-04-05T07:58:14.056Z] ================================================================================
+[2026-04-05T07:58:14.056Z] SUMMARY (execution_manager_v2)
+[2026-04-05T07:58:14.056Z] ================================================================================
+[2026-04-05T07:58:14.056Z] Language Summary
+[2026-04-05T07:58:14.056Z] +----------+--------+-----------+
+[2026-04-05T07:58:14.056Z] | Language | Passed | Pass Rate |
+[2026-04-05T07:58:14.056Z] +----------+--------+-----------+
+[2026-04-05T07:58:14.056Z] | Python   | 20/20  | 100.0%    |
+[2026-04-05T07:58:14.056Z] | C++      | 20/20  | 100.0%    |
+[2026-04-05T07:58:14.056Z] | Java     | 16/20  | 80.0%     |
+[2026-04-05T07:58:14.056Z] | Node.js  | 17/20  | 85.0%     |
+[2026-04-05T07:58:14.056Z] +----------+--------+-----------+
+[2026-04-05T07:58:14.056Z] Errors (if any)
+[2026-04-05T07:58:14.056Z] +----------+------+-------+-----------+----------------------------------------------------------------------------------+
+[2026-04-05T07:58:14.056Z] | Language | Test | Order | Status    | Error                                                                            |
+[2026-04-05T07:58:14.056Z] +----------+------+-------+-----------+----------------------------------------------------------------------------------+
+[2026-04-05T07:58:14.056Z] | Java     | 12   | 12    | INCORRECT | Expected: -10000.00 -9368.00 -8719.00 -8087.00 -7404.00 -6783.33 -6055.00 -54... |
+[2026-04-05T07:58:14.056Z] | Java     | 13   | 13    | INCORRECT | Expected: -10000.00 -8131.50 -6263.00 -4394.50 -2526.00 -657.50 -2452.00 -192... |
+[2026-04-05T07:58:14.056Z] | Java     | 14   | 14    | INCORRECT | Expected: 9991.00 9993.00 9995.00 9993.50 9995.00 9994.00 9994.00 9993.62 999... |
+[2026-04-05T07:58:14.056Z] | Java     | 15   | 15    | INCORRECT | Expected: 10000.00 10000.00 10000.00 0.00 -10000.00 -3333.33 9999.00 4999.50 ... |
+[2026-04-05T07:58:14.056Z] | Node.js  | 13   | 13    | INCORRECT | Expected: -10000.00 -8131.50 -6263.00 -4394.50 -2526.00 -657.50 -2452.00 -192... |
+[2026-04-05T07:58:14.056Z] | Node.js  | 14   | 14    | INCORRECT | Expected: 9991.00 9993.00 9995.00 9993.50 9995.00 9994.00 9994.00 9993.62 999... |
+[2026-04-05T07:58:14.056Z] | Node.js  | 15   | 15    | INCORRECT | Expected: 10000.00 10000.00 10000.00 0.00 -10000.00 -3333.33 9999.00 4999.50 ... |
+[2026-04-05T07:58:14.056Z] +----------+------+-------+-----------+----------------------------------------------------------------------------------+
+[2026-04-05T07:58:14.056Z] All passed: False
+[2026-04-05T07:58:14.056Z] Total testcases processed: 20
+
+[2026-04-05T07:58:14.097Z] Process exited with code 0

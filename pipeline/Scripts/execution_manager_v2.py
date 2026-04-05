@@ -74,6 +74,37 @@ LANG_CONFIG = {
     },
 }
 
+NONFUNCTION_LANG_CONFIG = {
+    "C++": {
+        "id": 7,
+        "endpoint": "cpp",
+        "file_name": "CPP.cpp",
+        "main_file": "main.cpp",
+        "default_execution_time_limit": 1.0,
+    },
+    "Python": {
+        "id": 23,
+        "endpoint": "py310",
+        "file_name": "PYTHON.py",
+        "main_file": "main.py",
+        "default_execution_time_limit": 4.0,
+    },
+    "Java": {
+        "id": 30,
+        "endpoint": "java11",
+        "file_name": "JAVA.java",
+        "main_file": "Main.java",
+        "default_execution_time_limit": 2.0,
+    },
+    "Node.js": {
+        "id": 4,
+        "endpoint": "nodejs",
+        "file_name": "NodeJS.js",
+        "main_file": "Main.js",
+        "default_execution_time_limit": 2.0,
+    },
+}
+
 _S3_CLIENT = None
 _UPLOAD_CONFIG_WARNING_PRINTED = False
 
@@ -172,6 +203,7 @@ def _write_blob_and_get_s3_url(base_dir, question_id, question_name, order, io_k
         uploaded, info = _upload_blob_to_s3(local_path, filename)
     if uploaded:
         return info, local_path, True
+    print(f"  S3 upload error for {filename}: {info}", flush=True)
     return "", local_path, False
 
 
@@ -313,34 +345,14 @@ def _print_error_table(all_results):
     _print_table("Errors (if any)", headers, rows)
 
 
-def _debug_dir_for(base_dir, lang):
-    safe_lang = (lang or "unknown").lower().replace("+", "p").replace(".", "").replace(" ", "_")
-    path = os.path.join(base_dir, "Outputs", "execution_debug", safe_lang)
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
 def _write_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False, default=str)
 
 
-def _write_testcase_debug_files(base_dir, lang, test_index, order, payload, response):
-    debug_dir = _debug_dir_for(base_dir, lang)
-    stem = f"test_{int(test_index):03d}_order_{int(order):03d}"
-    payload_dir = os.path.join(debug_dir, "payloads")
-    response_dir = os.path.join(debug_dir, "responses")
-    os.makedirs(payload_dir, exist_ok=True)
-    os.makedirs(response_dir, exist_ok=True)
-    payload_path = os.path.join(payload_dir, f"{stem}.json")
-    response_path = os.path.join(response_dir, f"{stem}.json")
-    _write_json(payload_path, payload or {})
-    _write_json(response_path, response or {})
-
-
 def load_file(path):
     if not os.path.exists(path):
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base = os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         print(f"Error: File not found: {_short_path(path, base)}")
         return None
     with open(path, "r", encoding="utf-8") as f:
@@ -574,8 +586,254 @@ def _build_files_payload(config, solution_code, driver_code_raw, node_h_content=
     return files
 
 
+##############################################################################
+# NON-FUNCTION BASED EXECUTION
+##############################################################################
+
+def run_test_case_nonfunction(base_dir, config, code_content, tc, question_id, question_name, order):
+    """Execute a single non-function test case using v2 IO testcase API — sends one file."""
+    url = f"{API_BASE_URL}/{config['endpoint']}"
+    code_b64 = base64.b64encode(code_content.encode("utf-8")).decode("utf-8")
+
+    input_obj, output_obj, input_s3_used, output_s3_used, s3_error = _build_testcase_io_objects(
+        base_dir, tc, question_id, question_name, order
+    )
+
+    testcase_id = tc.get("id") or str(uuid.uuid4())
+    request_id = str(uuid.uuid4())
+
+    files_payload = [
+        {
+            "base64_encoded": True,
+            "file_contents": code_b64,
+            "file_path": config["main_file"],
+        }
+    ]
+
+    payload = {
+        "language": config["id"],
+        "files": files_payload,
+        "main_file_path": config["main_file"],
+        "request_id": request_id,
+        "request_type": "CODE_EVALUATION_WITH_IO_TESTCASES",
+        "default_execution_time_limit": config.get("default_execution_time_limit", 2.0),
+        "ignore_trailing_whitespaces": True,
+        "url": url,
+        "testcases": [
+            {
+                "testcase_id": testcase_id,
+                "execution_time_limit": None,
+                "inputs": [input_obj],
+                "outputs": [output_obj],
+            }
+        ],
+    }
+
+    headers = {"Content-Type": "application/json"}
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=20)
+        if response.status_code == 413:
+            return {"_request_error": "PAYLOAD_TOO_LARGE", "_input_s3_used": input_s3_used, "_output_s3_used": output_s3_used, "_s3_error": s3_error}
+        response.raise_for_status()
+        return {"_api_response": response.json(), "_input_s3_used": input_s3_used, "_output_s3_used": output_s3_used, "_s3_error": s3_error}
+    except requests.exceptions.RequestException as e:
+        return {"_request_error": str(e), "_input_s3_used": input_s3_used, "_output_s3_used": output_s3_used, "_s3_error": s3_error}
+    except json.JSONDecodeError:
+        return {"_request_error": f"Failed to decode JSON: {response.text}", "_input_s3_used": input_s3_used, "_output_s3_used": output_s3_used, "_s3_error": s3_error}
+
+
+def run_all_tests_nonfunction(base_dir=None, selected_lang=None):
+    """Run non-function based execution using the v2 IO testcase API (same format as function-based)."""
+    base_dir = base_dir or os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    testcases_path = os.path.join(base_dir, "Outputs", "testcases.json")
+    if not os.path.exists(testcases_path):
+        print("Error: Outputs/testcases.json not found.")
+        return False, {}, []
+
+    with open(testcases_path, "r", encoding="utf-8") as f:
+        test_data = json.load(f)
+        question_payload = test_data[0] if isinstance(test_data, list) else test_data
+        testcases = question_payload.get("test_cases") or question_payload.get("testcases", [])
+
+    if not testcases:
+        print("No test cases found.")
+        return False, {}, []
+
+    generated_dir = os.path.join(base_dir, "Outputs", "generatedFullCode")
+    if not os.path.exists(generated_dir):
+        print("Error: Outputs/generatedFullCode directory not found.")
+        return False, {}, []
+
+    # Extract question metadata for S3 uploads
+    question_id = question_payload.get("question_id") or question_payload.get("id") or "unknown"
+    question_name = question_payload.get("question_name") or question_payload.get("name") or "unknown"
+
+    all_results = {}
+    target_languages = list(NONFUNCTION_LANG_CONFIG.keys())
+
+    if selected_lang == "__multi__":
+        target_languages = _multi_target_languages
+        print(f"\nFiltered to run only: {', '.join(target_languages)}")
+    elif selected_lang:
+        mapped_lang = None
+        for k in NONFUNCTION_LANG_CONFIG.keys():
+            if k.lower() == selected_lang or k.lower().replace(".", "") == selected_lang:
+                mapped_lang = k
+                break
+        if mapped_lang:
+            target_languages = [mapped_lang]
+            print(f"\nFiltered to run only: {mapped_lang}")
+        else:
+            print(f"\nWarning: Language \"{selected_lang}\" not supported. Running all.")
+
+    for lang in target_languages:
+        config = NONFUNCTION_LANG_CONFIG[lang]
+        print(f"\n{'=' * 80}")
+        print(f"TESTING {lang.upper()} - {len(testcases)} TEST CASES (NONFUNCTION IO PAYLOAD)")
+        print(f"{'=' * 80}")
+
+        code_file_path = os.path.join(generated_dir, config["file_name"])
+        code_content = load_file(code_file_path)
+        if not code_content:
+            print(f"Warning: missing {config['file_name']}. Skipping.")
+            continue
+
+        language_results = []
+        passed_count = 0
+        global_error_occurred = False
+
+        for i, tc in enumerate(testcases):
+            order = tc.get("order", i + 1)
+            expected_output = (tc.get("output") or "").strip()
+
+            result = run_test_case_nonfunction(
+                base_dir=base_dir,
+                config=config,
+                code_content=code_content,
+                tc=tc,
+                question_id=question_id,
+                question_name=question_name,
+                order=order,
+            )
+
+            test_res = {
+                "test_index": i + 1,
+                "order": order,
+                "passed": False,
+                "api_time": None,
+                "memory_mb": None,
+                "status": None,
+                "error": None,
+                "input_s3_used": bool(result.get("_input_s3_used")) if result else False,
+                "output_s3_used": bool(result.get("_output_s3_used")) if result else False,
+                "s3_error": (result.get("_s3_error") or "") if result else "",
+            }
+
+            if not result:
+                test_res["error"] = "API request failed"
+                language_results.append(test_res)
+                _print_progress(lang, i + 1, len(testcases), "API_ERROR",
+                    api_time=test_res["api_time"], memory_mb=test_res["memory_mb"],
+                    input_s3_used=test_res["input_s3_used"], output_s3_used=test_res["output_s3_used"],
+                    s3_error=test_res["s3_error"], error_details=test_res["error"])
+                continue
+
+            if result.get("_request_error"):
+                test_res["error"] = f"API request failed: {result.get('_request_error')}"
+                language_results.append(test_res)
+                _print_progress(lang, i + 1, len(testcases), "API_ERROR",
+                    api_time=test_res["api_time"], memory_mb=test_res["memory_mb"],
+                    input_s3_used=test_res["input_s3_used"], output_s3_used=test_res["output_s3_used"],
+                    s3_error=test_res["s3_error"], error_details=test_res["error"][:180])
+                if "PAYLOAD_TOO_LARGE" in (result.get("_request_error") or ""):
+                    continue
+                continue
+
+            api_result = result.get("_api_response") or {}
+
+            if api_result.get("is_compilation_error"):
+                test_res["status"] = "COMPILATION_ERROR"
+                api_error = _extract_api_error_message(api_result)
+                test_res["error"] = f"Compilation error: {api_error}" if api_error else "Compilation error"
+                language_results.append(test_res)
+                _print_progress(lang, i + 1, len(testcases), "COMPILATION_ERROR",
+                    api_time=test_res["api_time"], memory_mb=test_res["memory_mb"],
+                    input_s3_used=test_res["input_s3_used"], output_s3_used=test_res["output_s3_used"],
+                    s3_error=test_res["s3_error"])
+                global_error_occurred = True
+                break
+
+            results_list = api_result.get("results") or []
+            if not results_list:
+                test_res["error"] = "No results returned"
+                language_results.append(test_res)
+                _print_progress(lang, i + 1, len(testcases), "NO_RESULTS",
+                    api_time=test_res["api_time"], memory_mb=test_res["memory_mb"],
+                    input_s3_used=test_res["input_s3_used"], output_s3_used=test_res["output_s3_used"],
+                    s3_error=test_res["s3_error"])
+                continue
+
+            r0 = results_list[0]
+            test_res["status"] = r0.get("status")
+            test_res["api_time"] = r0.get("execution_time")
+            test_res["memory_mb"] = r0.get("memory_consumed")
+
+            output_entries = r0.get("outputs") or []
+            stdout_entry = next((o for o in output_entries if o.get("output_type") == "STDOUT"), None)
+            stderr_entry = next((o for o in output_entries if o.get("output_type") == "STDERR"), None)
+            actual_output = _decode_output_contents(stdout_entry)
+            stderr_text = _decode_output_contents(stderr_entry)
+
+            if test_res["status"] == "CORRECT":
+                test_res["passed"] = True
+                passed_count += 1
+            elif test_res["status"] == "WRONG_ANSWER":
+                test_res["error"] = f"Wrong answer. Expected: \"{expected_output[:80]}\" Got: \"{actual_output[:80]}\""
+            elif test_res["status"] == "TIME_LIMIT_EXCEEDED":
+                test_res["error"] = "Time limit exceeded"
+            elif test_res["status"] == "MEMORY_LIMIT_EXCEEDED":
+                test_res["error"] = "Memory limit exceeded"
+            elif test_res["status"] == "RUNTIME_ERROR":
+                test_res["error"] = f"Runtime error: {stderr_text[:200]}" if stderr_text else "Runtime error"
+                global_error_occurred = True
+            else:
+                if actual_output.strip() == expected_output:
+                    test_res["passed"] = True
+                    test_res["status"] = "CORRECT"
+                    passed_count += 1
+                else:
+                    test_res["error"] = f"Status: {test_res['status']}. Expected: \"{expected_output[:80]}\" Got: \"{actual_output[:80]}\""
+
+            _print_progress(
+                lang, i + 1, len(testcases), test_res["status"] or "UNKNOWN",
+                api_time=test_res["api_time"],
+                memory_mb=test_res["memory_mb"],
+                input_s3_used=test_res["input_s3_used"],
+                output_s3_used=test_res["output_s3_used"],
+                s3_error=test_res["s3_error"],
+                error_details=test_res.get("error", "")[:180] if not test_res["passed"] else "",
+            )
+            language_results.append(test_res)
+
+            if global_error_occurred:
+                break
+
+        all_results[lang] = language_results
+        _print_language_results_table(lang, language_results)
+        print(f"{lang}: passed {passed_count}/{len(language_results)}")
+        if global_error_occurred:
+            print(f"Halting remaining languages due to error in {lang}.")
+            break
+
+    all_passed = bool(all_results) and all(
+        tests and all(t.get("passed") for t in tests) for tests in all_results.values()
+    )
+    return all_passed, all_results, testcases
+
+
 def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
-    base_dir = base_dir or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base_dir = base_dir or os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     testcases_path = testcases_path or os.path.join(base_dir, "Outputs", "testcases.json")
     if not os.path.exists(testcases_path):
         print("Error: Outputs/testcases.json not found.")
@@ -649,22 +907,6 @@ def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
                 question_name=question_name,
                 order=order,
             )
-            payload_for_debug = (result or {}).get("_request_payload")
-            api_response_for_debug = (result or {}).get("_api_response")
-            response_for_debug = (
-                api_response_for_debug
-                if api_response_for_debug is not None
-                else {"request_error": (result or {}).get("_request_error", "unknown error")}
-            )
-            _write_testcase_debug_files(
-                base_dir=base_dir,
-                lang=lang,
-                test_index=i + 1,
-                order=order,
-                payload=payload_for_debug,
-                response=response_for_debug,
-            )
-
             test_res = {
                 "test_index": i + 1,
                 "order": order,
@@ -814,35 +1056,61 @@ def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
 
 
 def main():
+    is_nonfunction = "--nonfunction" in sys.argv
+
     selected_lang = None
     # Support multiple language args: python cpp java nodejs
     if len(sys.argv) > 1:
         requested_langs = [arg.lower() for arg in sys.argv[1:] if not arg.startswith("--")]
+        lang_config = NONFUNCTION_LANG_CONFIG if is_nonfunction else LANG_CONFIG
         if len(requested_langs) == 1:
             selected_lang = requested_langs[0]
         elif len(requested_langs) > 1:
-            # Filter LANG_CONFIG to only requested languages
             filtered = []
             for req in requested_langs:
-                for k in LANG_CONFIG.keys():
+                for k in lang_config.keys():
                     if k.lower() == req or k.lower().replace(".", "").replace("+", "p") == req:
                         if k not in filtered:
                             filtered.append(k)
             if filtered:
-                # Temporarily override LANG_CONFIG keys ordering
                 selected_lang = "__multi__"
                 global _multi_target_languages
                 _multi_target_languages = filtered
 
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base_dir = os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    if is_nonfunction:
+        print(f"\n[execution_manager_v2] Running in NON-FUNCTION mode")
     _print_runtime_config(base_dir)
     _warn_if_upload_env_incomplete()
-    all_passed, all_results, testcases = run_all_tests_v2(base_dir=base_dir, selected_lang=selected_lang)
+
+    if not is_nonfunction:
+        # Health check: ensure S3 upload service is alive before starting execution
+        S3_HEALTH_URL = "https://testcasess3urlcreationproject.onrender.com/health"
+        print(f"\nChecking S3 upload service health: {S3_HEALTH_URL}")
+        try:
+            health_resp = requests.get(S3_HEALTH_URL, timeout=300)
+            health_data = health_resp.json()
+            if health_data.get("ok"):
+                print("S3 upload service is live.")
+            else:
+                print(f"Warning: S3 upload service returned unexpected response: {health_data}")
+                print("Proceeding anyway — large testcases may fall back to inline base64.")
+        except Exception as e:
+            print(f"Warning: S3 upload service health check failed: {e}")
+            print("Proceeding anyway — large testcases may fall back to inline base64.")
+
+    if is_nonfunction:
+        all_passed, all_results, testcases = run_all_tests_nonfunction(base_dir=base_dir, selected_lang=selected_lang)
+    else:
+        all_passed, all_results, testcases = run_all_tests_v2(base_dir=base_dir, selected_lang=selected_lang)
+
     if not all_results:
         return
 
+    mode_label = "nonfunction" if is_nonfunction else "v2"
     print(f"\n{'=' * 80}")
-    print("SUMMARY (execution_manager_v2)")
+    print(f"SUMMARY (execution_manager_{mode_label})")
     print(f"{'=' * 80}")
     summary_rows = []
     for lang, tests in all_results.items():

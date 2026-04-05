@@ -12,6 +12,8 @@ interface LangResult {
   current: number;
   errors: { index: number; status: string; detail: string }[];
   passRate: number;
+  maxTime: number;
+  maxMemory: number;
   startTs?: number;
   endTs?: number;
 }
@@ -27,15 +29,21 @@ function parseExecutionResults(logs: LogLine[]): LangResult[] {
     // Also matches nonfunctionbased: "TESTING PYTHON - 48 TEST CASES"
     const langMatch = line.match(/TESTING\s+(\S+)\s+-\s+(\d+)\s+TEST\s+CASES/i);
     if (langMatch) {
-      currentLang = langMatch[1];
-      results.set(currentLang, {
-        name: currentLang,
+      const rawName = langMatch[1];
+      const key = rawName.toUpperCase();
+      // Capitalize nicely: "PYTHON" -> "Python", "C++" -> "C++"
+      const displayName = rawName.length > 3 ? rawName.charAt(0).toUpperCase() + rawName.slice(1).toLowerCase() : rawName;
+      currentLang = key;
+      results.set(key, {
+        name: displayName,
         total: parseInt(langMatch[2]),
         passed: 0,
         failed: 0,
         current: 0,
         errors: [],
         passRate: 0,
+        maxTime: 0,
+        maxMemory: 0,
         startTs: log.ts,
       });
       continue;
@@ -44,17 +52,32 @@ function parseExecutionResults(logs: LogLine[]): LangResult[] {
     // v2 format: [LANG] Progress X/Y - STATUS | time=... | memory=...
     const progressMatch = line.match(/\[(\S+)\]\s+Progress\s+(\d+)\/(\d+)\s+-\s+(\w+)/i);
     if (progressMatch) {
-      const lang = progressMatch[1];
+      const key = progressMatch[1].toUpperCase();
       const index = parseInt(progressMatch[2]);
       const status = progressMatch[4];
 
-      let result = results.get(lang);
+      let result = results.get(key);
       if (!result) {
-        result = { name: lang, total: parseInt(progressMatch[3]), passed: 0, failed: 0, current: 0, errors: [], passRate: 0, startTs: log.ts };
-        results.set(lang, result);
+        const rawName = progressMatch[1];
+        const displayName = rawName.length > 3 ? rawName.charAt(0).toUpperCase() + rawName.slice(1).toLowerCase() : rawName;
+        result = { name: displayName, total: parseInt(progressMatch[3]), passed: 0, failed: 0, current: 0, errors: [], passRate: 0, maxTime: 0, maxMemory: 0, startTs: log.ts };
+        results.set(key, result);
       }
 
       result.current = index;
+
+      // Parse time and memory from progress line
+      const timeMatch = line.match(/time=(\d+\.?\d*)s/);
+      if (timeMatch) {
+        const t = parseFloat(timeMatch[1]);
+        if (t > result.maxTime) result.maxTime = t;
+      }
+      const memMatch = line.match(/memory=(\d+\.?\d*)MB/i);
+      if (memMatch) {
+        const m = parseFloat(memMatch[1]);
+        if (m > result.maxMemory) result.maxMemory = m;
+      }
+
       if (status === "CORRECT") {
         result.passed++;
       } else {
@@ -79,7 +102,8 @@ function parseExecutionResults(logs: LogLine[]): LangResult[] {
 
       let result = results.get(currentLang);
       if (!result) {
-        result = { name: currentLang, total, passed: 0, failed: 0, current: 0, errors: [], passRate: 0, startTs: log.ts };
+        const displayName = currentLang.length > 3 ? currentLang.charAt(0).toUpperCase() + currentLang.slice(1).toLowerCase() : currentLang;
+        result = { name: displayName, total, passed: 0, failed: 0, current: 0, errors: [], passRate: 0, maxTime: 0, maxMemory: 0, startTs: log.ts };
         results.set(currentLang, result);
       }
 
@@ -105,7 +129,7 @@ function parseExecutionResults(logs: LogLine[]): LangResult[] {
     // Detect per-language summary: "LANG: passed X/Y"
     const summaryMatch = line.match(/^(\S+):\s+passed\s+(\d+)\/(\d+)/i);
     if (summaryMatch) {
-      const lang = summaryMatch[1];
+      const lang = summaryMatch[1].toUpperCase();
       const result = results.get(lang);
       if (result) {
         result.endTs = log.ts;
@@ -207,12 +231,24 @@ export function ExecutionResults({ logs, isRunning }: ExecutionResultsProps) {
                 </div>
               </div>
 
-              {/* Progress text */}
+              {/* Progress text + max time/memory */}
               <div className="flex justify-between text-xs text-muted-foreground">
                 <span>{processed}/{result.total} tests processed</span>
-                {done && <span className={allPassed ? "text-green-400" : "text-red-400"}>
-                  {result.passRate.toFixed(1)}% pass rate
-                </span>}
+                <div className="flex items-center gap-3">
+                  {result.maxTime > 0 && (
+                    <span className="tabular-nums">
+                      Max: <span className="text-foreground font-medium">{result.maxTime < 0.001 ? `${(result.maxTime * 1000000).toFixed(0)}µs` : result.maxTime < 1 ? `${(result.maxTime * 1000).toFixed(2)}ms` : `${result.maxTime.toFixed(3)}s`}</span>
+                    </span>
+                  )}
+                  {result.maxMemory > 0 && (
+                    <span className="tabular-nums">
+                      Mem: <span className="text-foreground font-medium">{result.maxMemory.toFixed(1)}MB</span>
+                    </span>
+                  )}
+                  {done && <span className={allPassed ? "text-green-400" : "text-red-400"}>
+                    {result.passRate.toFixed(1)}%
+                  </span>}
+                </div>
               </div>
 
               {/* Error summary */}

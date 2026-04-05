@@ -1,0 +1,32 @@
+[2026-04-05T07:47:37.541Z] Starting split_code...
+[2026-04-05T07:47:37.688Z] ============================================================
+[2026-04-05T07:47:37.688Z] CODE SPLITTER & WRAPPER GENERATOR
+[2026-04-05T07:47:37.688Z] ============================================================
+[2026-04-05T07:47:37.688Z] Selected languages: ['python', 'cpp', 'java', 'nodejs']
+[2026-04-05T07:47:37.689Z] Processing Python...
+[2026-04-05T07:47:45.160Z] [usage] gpt-5.3-codex | code | 5635 tokens | $0.013843 → Supabase ✓
+[2026-04-05T07:47:45.160Z]   -> Saved default.py
+[2026-04-05T07:47:45.161Z]   -> Saved solution.py
+[2026-04-05T07:47:45.161Z]   -> Saved driver.py
+[2026-04-05T07:47:45.161Z]   -> Saved debugger.py
+[2026-04-05T07:47:45.161Z] Processing C++...
+[2026-04-05T07:47:57.969Z] [usage] gpt-5.3-codex | code | 6520 tokens | $0.020068 → Supabase ✓
+[2026-04-05T07:47:57.969Z]   -> Saved default.cpp
+[2026-04-05T07:47:57.969Z]   -> Saved solution.cpp
+[2026-04-05T07:47:57.969Z]   -> Saved driver.cpp
+[2026-04-05T07:47:57.969Z]   -> Saved debugger.cpp
+[2026-04-05T07:47:57.969Z] Processing Java...
+[2026-04-05T07:48:14.015Z] [usage] gpt-5.3-codex | code | 7359 tokens | $0.025649 → Supabase ✓
+[2026-04-05T07:48:14.018Z]   -> Saved default.java
+[2026-04-05T07:48:14.018Z]   -> Saved solution.java
+[2026-04-05T07:48:14.018Z]   -> Saved driver.java
+[2026-04-05T07:48:14.018Z]   -> Saved debugger.java
+[2026-04-05T07:48:14.018Z] Processing Node.js...
+[2026-04-05T07:48:24.844Z] [usage] gpt-5.3-codex | code | 6282 tokens | $0.017705 → Supabase ✓
+[2026-04-05T07:48:24.845Z]   -> Saved default.js
+[2026-04-05T07:48:24.845Z]   -> Saved solution.js
+[2026-04-05T07:48:24.845Z]   -> Saved driver.js
+[2026-04-05T07:48:24.845Z]   -> Saved debugger.js
+[2026-04-05T07:48:24.845Z] ✅ Code splitting completed.
+
+[2026-04-05T07:48:24.872Z] Process exited with code 0

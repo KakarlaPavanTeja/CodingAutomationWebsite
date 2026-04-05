@@ -1,0 +1,74 @@
+{
+  "total_requests": 10,
+  "total_tokens": 55371,
+  "total_cost_usd": 0.2976325,
+  "prompt_tokens": 29266,
+  "completion_tokens": 26105,
+  "last_updated": "2026-04-05T03:51:20.663188",
+  "history": [
+    {
+      "timestamp": "2026-04-05T03:29:52.673210",
+      "problem_name": "Two Sum_description",
+      "prompt_tokens": 2993,
+      "completion_tokens": 5695,
+      "total_tokens": 8688,
+      "cost_usd": 0.060691
+    },
+    {
+      "timestamp": "2026-04-05T03:30:12.490212",
+      "problem_name": "Two Sum_topics",
+      "prompt_tokens": 1128,
+      "completion_tokens": 99,
+      "total_tokens": 1227,
+      "cost_usd": 0.0024
+    },
+    {
+      "timestamp": "2026-04-05T03:34:34.335481",
+      "problem_name": "testcase_generation",
+      "prompt_tokens": 3309,
+      "completion_tokens": 15667,
+      "total_tokens": 18976,
+      "cost_usd": 0.16080625
+    },
+    {
+      "timestamp": "2026-04-05T03:35:08.564094",
+      "problem_name": "code_splitting_Python",
+      "prompt_tokens": 4520,
+      "completion_tokens": 619,
+      "total_tokens": 5139,
+      "cost_usd": 0.01184
+    },
+    {
+      "timestamp": "2026-04-05T03:35:18.990600",
+      "problem_name": "code_splitting_C++",
+      "prompt_tokens": 4647,
+      "completion_tokens": 1075,
+      "total_tokens": 5722,
+      "cost_usd": 0.016559
+    },
+    {
+      "timestamp": "2026-04-05T03:35:32.477131",
+      "problem_name": "code_splitting_Java",
+      "prompt_tokens": 4905,
+      "completion_tokens": 1597,
+      "total_tokens": 6502,
+      "cost_usd": 0.022101
+    },
+    {
+      "timestamp": "2026-04-05T03:35:40.076970",
+      "problem_name": "code_splitting_Node.js",
+      "prompt_tokens": 4600,
+      "completion_tokens": 789,
+      "total_tokens": 5389,
+      "cost_usd": 0.01364
+    },
+    {
+      "timestamp": "2026-04-05T03:51:20.663212",
+      "problem_name": "enrichment_generation",
+      "prompt_tokens": 3164,
+      "completion_tokens": 564,
+      "total_tokens": 3728,
+      "cost_usd": 0.009595
+    }
+  ]
+}

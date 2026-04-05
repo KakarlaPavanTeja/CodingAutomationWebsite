@@ -133,12 +133,16 @@ function parseExecutionProgress(logs: LogLine[], isRunning: boolean): ProgressIt
   const languages: { name: string; count: number; startTs?: number }[] = [];
 
   while ((match = langPattern.exec(allText)) !== null) {
-    languages.push({ name: match[1], count: parseInt(match[2]) });
+    const raw = match[1];
+    // Capitalize nicely: "PYTHON" -> "Python", "C++" -> "C++"
+    const displayName = raw.length > 3 ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase() : raw;
+    languages.push({ name: displayName, count: parseInt(match[2]) });
   }
 
   // Find timestamps for each language
   for (const lang of languages) {
-    const re = new RegExp(`TESTING\\s+${lang.name}`, "i");
+    const escapedName = lang.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`TESTING\\s+${escapedName}`, "i");
     for (const log of logs) {
       if (re.test(log.line)) {
         lang.startTs = log.ts;
@@ -149,7 +153,8 @@ function parseExecutionProgress(logs: LogLine[], isRunning: boolean): ProgressIt
 
   // Count progress per language from "[LANG] Progress X/Y" lines
   for (const lang of languages) {
-    const progressRe = new RegExp(`\\[${lang.name}\\]\\s+Progress\\s+(\\d+)/(\\d+)\\s+-\\s+(\\w+)`, "gi");
+    const escapedName = lang.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const progressRe = new RegExp(`\\[${escapedName}\\]\\s+Progress\\s+(\\d+)/(\\d+)\\s+-\\s+(\\w+)`, "gi");
     let lastProgress = 0;
     let lastTotal = lang.count;
     let allCorrect = true;

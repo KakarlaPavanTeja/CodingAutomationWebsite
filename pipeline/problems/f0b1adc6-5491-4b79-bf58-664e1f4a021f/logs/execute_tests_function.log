@@ -1,0 +1,158 @@
+[2026-04-04T22:23:26.923Z] Starting execute_tests_function...
+
+[execution_manager_v2 config]
+  Upload mode: proxy
+  Upload service URL set: yes
+  Output S3 enabled: no
+  Env files found: none
+  Note: create .env.execution_manager_v2 for local overrides.
+
+Checking S3 upload service health: https://testcasess3urlcreationproject.onrender.com/health
+S3 upload service is live.
+
+Filtered to run only: Python, C++, Java, Node.js
+
+================================================================================
+TESTING PYTHON - 10 TEST CASES (CASE-2 IO PAYLOAD)
+================================================================================
+[Python] Progress 1/10 - CORRECT | time=0.000004s | memory=5.80MB | input_s3=no | output_s3=no
+[Python] Progress 2/10 - CORRECT | time=0.000004s | memory=5.90MB | input_s3=no | output_s3=no
+[Python] Progress 3/10 - CORRECT | time=0.000004s | memory=5.90MB | input_s3=no | output_s3=no
+[Python] Progress 4/10 - CORRECT | time=0.000003s | memory=5.90MB | input_s3=no | output_s3=no
+[Python] Progress 5/10 - CORRECT | time=0.000004s | memory=5.90MB | input_s3=no | output_s3=no
+[Python] Progress 6/10 - CORRECT | time=0.001242s | memory=6.20MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_6_input.txt
+[Python] Progress 7/10 - CORRECT | time=0.001308s | memory=6.80MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_7_input.txt
+[Python] Progress 8/10 - CORRECT | time=0.001734s | memory=7.40MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_8_input.txt
+[Python] Progress 9/10 - CORRECT | time=0.001792s | memory=7.40MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_9_input.txt
+[Python] Progress 10/10 - CORRECT | time=0.004725s | memory=7.00MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_10_input.txt
+
+Python - Execution Details
++------+---------+------+-----------+--------+
+| Test | Status  | Pass | API Time  | Memory |
++------+---------+------+-----------+--------+
+| 1    | CORRECT | Yes  | 0.000004s | 5.80MB |
+| 2    | CORRECT | Yes  | 0.000004s | 5.90MB |
+| 3    | CORRECT | Yes  | 0.000004s | 5.90MB |
+| 4    | CORRECT | Yes  | 0.000003s | 5.90MB |
+| 5    | CORRECT | Yes  | 0.000004s | 5.90MB |
+| 6    | CORRECT | Yes  | 0.001242s | 6.20MB |
+| 7    | CORRECT | Yes  | 0.001308s | 6.80MB |
+| 8    | CORRECT | Yes  | 0.001734s | 7.40MB |
+| 9    | CORRECT | Yes  | 0.001792s | 7.40MB |
+| 10   | CORRECT | Yes  | 0.004725s | 7.00MB |
++------+---------+------+-----------+--------+
+Python: passed 10/10
+
+================================================================================
+TESTING C++ - 10 TEST CASES (CASE-2 IO PAYLOAD)
+================================================================================
+[C++] Progress 1/10 - CORRECT | time=0.000007s | memory=0.90MB | input_s3=no | output_s3=no
+[C++] Progress 2/10 - CORRECT | time=0.000009s | memory=0.90MB | input_s3=no | output_s3=no
+[C++] Progress 3/10 - CORRECT | time=0.000005s | memory=0.90MB | input_s3=no | output_s3=no
+[C++] Progress 4/10 - CORRECT | time=0.000005s | memory=0.80MB | input_s3=no | output_s3=no
+[C++] Progress 5/10 - CORRECT | time=0.000007s | memory=0.80MB | input_s3=no | output_s3=no
+[C++] Progress 6/10 - CORRECT | time=0.002461s | memory=2.20MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_6_input.txt
+[C++] Progress 7/10 - CORRECT | time=0.002884s | memory=2.20MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_7_input.txt
+[C++] Progress 8/10 - CORRECT | time=0.010078s | memory=2.50MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_8_input.txt
+[C++] Progress 9/10 - CORRECT | time=0.010085s | memory=2.40MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_9_input.txt
+[C++] Progress 10/10 - CORRECT | time=0.001000s | memory=2.10MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_10_input.txt
+
+C++ - Execution Details
++------+---------+------+-----------+--------+
+| Test | Status  | Pass | API Time  | Memory |
++------+---------+------+-----------+--------+
+| 1    | CORRECT | Yes  | 0.000007s | 0.90MB |
+| 2    | CORRECT | Yes  | 0.000009s | 0.90MB |
+| 3    | CORRECT | Yes  | 0.000005s | 0.90MB |
+| 4    | CORRECT | Yes  | 0.000005s | 0.80MB |
+| 5    | CORRECT | Yes  | 0.000007s | 0.80MB |
+| 6    | CORRECT | Yes  | 0.002461s | 2.20MB |
+| 7    | CORRECT | Yes  | 0.002884s | 2.20MB |
+| 8    | CORRECT | Yes  | 0.010078s | 2.50MB |
+| 9    | CORRECT | Yes  | 0.010085s | 2.40MB |
+| 10   | CORRECT | Yes  | 0.001000s | 2.10MB |
++------+---------+------+-----------+--------+
+C++: passed 10/10
+
+================================================================================
+TESTING JAVA - 10 TEST CASES (CASE-2 IO PAYLOAD)
+================================================================================
+[Java] Progress 1/10 - CORRECT | time=0.000051s | memory=1.20MB | input_s3=no | output_s3=no
+[Java] Progress 2/10 - CORRECT | time=0.000066s | memory=0.90MB | input_s3=no | output_s3=no
+[Java] Progress 3/10 - CORRECT | time=0.000050s | memory=1.20MB | input_s3=no | output_s3=no
+[Java] Progress 4/10 - CORRECT | time=0.000046s | memory=0.90MB | input_s3=no | output_s3=no
+[Java] Progress 5/10 - CORRECT | time=0.000060s | memory=1.20MB | input_s3=no | output_s3=no
+[Java] Progress 6/10 - CORRECT | time=0.016610s | memory=1.90MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_6_input.txt
+[Java] Progress 7/10 - CORRECT | time=0.018267s | memory=2.00MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_7_input.txt
+[Java] Progress 8/10 - CORRECT | time=0.027674s | memory=2.70MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_8_input.txt
+[Java] Progress 9/10 - CORRECT | time=0.027517s | memory=2.70MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_9_input.txt
+[Java] Progress 10/10 - CORRECT | time=0.012751s | memory=2.30MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_10_input.txt
+
+Java - Execution Details
++------+---------+------+-----------+--------+
+| Test | Status  | Pass | API Time  | Memory |
++------+---------+------+-----------+--------+
+| 1    | CORRECT | Yes  | 0.000051s | 1.20MB |
+| 2    | CORRECT | Yes  | 0.000066s | 0.90MB |
+| 3    | CORRECT | Yes  | 0.000050s | 1.20MB |
+| 4    | CORRECT | Yes  | 0.000046s | 0.90MB |
+| 5    | CORRECT | Yes  | 0.000060s | 1.20MB |
+| 6    | CORRECT | Yes  | 0.016610s | 1.90MB |
+| 7    | CORRECT | Yes  | 0.018267s | 2.00MB |
+| 8    | CORRECT | Yes  | 0.027674s | 2.70MB |
+| 9    | CORRECT | Yes  | 0.027517s | 2.70MB |
+| 10   | CORRECT | Yes  | 0.012751s | 2.30MB |
++------+---------+------+-----------+--------+
+Java: passed 10/10
+
+================================================================================
+TESTING NODE.JS - 10 TEST CASES (CASE-2 IO PAYLOAD)
+================================================================================
+[Node.js] Progress 1/10 - CORRECT | time=0.000072s | memory=32.80MB | input_s3=no | output_s3=no
+[Node.js] Progress 2/10 - CORRECT | time=0.000079s | memory=32.00MB | input_s3=no | output_s3=no
+[Node.js] Progress 3/10 - CORRECT | time=0.000069s | memory=32.50MB | input_s3=no | output_s3=no
+[Node.js] Progress 4/10 - CORRECT | time=0.000068s | memory=32.00MB | input_s3=no | output_s3=no
+[Node.js] Progress 5/10 - CORRECT | time=0.000074s | memory=32.20MB | input_s3=no | output_s3=no
+[Node.js] Progress 6/10 - CORRECT | time=0.001152s | memory=33.10MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_6_input.txt
+[Node.js] Progress 7/10 - CORRECT | time=0.001212s | memory=33.60MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_7_input.txt
+[Node.js] Progress 8/10 - CORRECT | time=0.002457s | memory=34.10MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_8_input.txt
+[Node.js] Progress 9/10 - CORRECT | time=0.002447s | memory=34.00MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_9_input.txt
+[Node.js] Progress 10/10 - CORRECT | time=0.000611s | memory=33.30MB | input_s3=no | output_s3=no | s3_error=input upload failed: Outputs/s3_blobs/unknown_question_testcases_10_input.txt
+
+Node.js - Execution Details
++------+---------+------+-----------+---------+
+| Test | Status  | Pass | API Time  | Memory  |
++------+---------+------+-----------+---------+
+| 1    | CORRECT | Yes  | 0.000072s | 32.80MB |
+| 2    | CORRECT | Yes  | 0.000079s | 32.00MB |
+| 3    | CORRECT | Yes  | 0.000069s | 32.50MB |
+| 4    | CORRECT | Yes  | 0.000068s | 32.00MB |
+| 5    | CORRECT | Yes  | 0.000074s | 32.20MB |
+| 6    | CORRECT | Yes  | 0.001152s | 33.10MB |
+| 7    | CORRECT | Yes  | 0.001212s | 33.60MB |
+| 8    | CORRECT | Yes  | 0.002457s | 34.10MB |
+| 9    | CORRECT | Yes  | 0.002447s | 34.00MB |
+| 10   | CORRECT | Yes  | 0.000611s | 33.30MB |
++------+---------+------+-----------+---------+
+Node.js: passed 10/10
+
+================================================================================
+SUMMARY (execution_manager_v2)
+================================================================================
+
+Language Summary
++----------+--------+-----------+
+| Language | Passed | Pass Rate |
++----------+--------+-----------+
+| Python   | 10/10  | 100.0%    |
+| C++      | 10/10  | 100.0%    |
+| Java     | 10/10  | 100.0%    |
+| Node.js  | 10/10  | 100.0%    |
++----------+--------+-----------+
+
+Errors (if any)
+  (no rows)
+All passed: True
+Total testcases processed: 10
+
+[2026-04-04T22:25:29.057Z] Process exited with code 0

@@ -95,40 +95,6 @@ export default function AdminOverview() {
         />
       </div>
 
-      {/* Cost by Model */}
-      {Object.keys(stats.costs.byModel).length > 0 && (
-        <div className="rounded-lg border bg-card p-5 space-y-3">
-          <h3 className="text-sm font-semibold">Cost by Model</h3>
-          <div className="space-y-2">
-            {Object.entries(stats.costs.byModel)
-              .sort(([, a], [, b]) => b - a)
-              .map(([model, cost]) => (
-                <div key={model} className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground font-mono">{model}</span>
-                  <span className="font-medium">${cost.toFixed(4)}</span>
-                </div>
-              ))}
-          </div>
-        </div>
-      )}
-
-      {/* Cost by Purpose */}
-      {Object.keys(stats.costs.byPurpose).length > 0 && (
-        <div className="rounded-lg border bg-card p-5 space-y-3">
-          <h3 className="text-sm font-semibold">Cost by Purpose</h3>
-          <div className="space-y-2">
-            {Object.entries(stats.costs.byPurpose)
-              .sort(([, a], [, b]) => b - a)
-              .map(([purpose, cost]) => (
-                <div key={purpose} className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground capitalize">{purpose}</span>
-                  <span className="font-medium">${cost.toFixed(4)}</span>
-                </div>
-              ))}
-          </div>
-        </div>
-      )}
-
       {/* Problems by Type */}
       {stats.problems.total > 0 && (
         <div className="rounded-lg border bg-card p-5 space-y-3">

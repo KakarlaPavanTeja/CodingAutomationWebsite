@@ -1,0 +1,12 @@
+node_modules
+.next
+pipeline/venv
+pipeline/problems
+pipeline/Outputs
+.env.local
+.env
+.git
+.claude
+*.pyc
+__pycache__
+.DS_Store

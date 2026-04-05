@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
+import { AlertTriangle, CheckCircle2, FileText, Info } from "lucide-react";
 
 const WORKFLOW_STEPS = [
   {
@@ -39,7 +41,7 @@ const WORKFLOW_STEPS = [
   {
     step: 4,
     title: "Create & Execute Tests",
-    description: "Generate diverse test cases, split code into components, and execute against all target languages. View real-time progress with per-language pass/fail results.",
+    description: "Generate diverse test cases (with auto-retry on failures), split code into components, and execute against all target languages. View real-time progress with per-language pass rates, max time, and memory usage.",
     icon: (
       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
     ),
@@ -75,7 +77,7 @@ const FEATURES = [
   },
   {
     title: "Real-time Progress",
-    description: "Watch each step execute with live status updates and elapsed time tracking.",
+    description: "Live status updates with per-language max time and memory stats. Timers persist across tab close and logout.",
     icon: (
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
     ),
@@ -88,15 +90,15 @@ const FEATURES = [
     ),
   },
   {
-    title: "Step-by-Step Execution",
-    description: "Run each pipeline stage independently. No forced sequential execution.",
+    title: "Run All or Step-by-Step",
+    description: "Run individual steps or use Run All to execute the entire pipeline. Stop after the current step anytime.",
     icon: (
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6L12 2l4 4"/><path d="M12 2v10.3"/><path d="M4 14l4 4 4-4"/><path d="M8 22v-4"/><path d="M16 18l4 4 4-4"/></svg>
     ),
   },
   {
-    title: "AI-Powered Generation",
-    description: "Leverages LLMs to create descriptions, test cases, hints, and enrichment.",
+    title: "AI-Powered with Self-Healing",
+    description: "LLM-generated descriptions, test cases, and enrichment. Auto-retries failed test case scripts with error context.",
     icon: (
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
     ),
@@ -112,11 +114,13 @@ const WORKFLOWS = [
 
 export default function GuidePage() {
   const [activeWorkflow, setActiveWorkflow] = useState(0);
+  const { user, loading } = useAuth();
+  const isLoggedIn = !loading && !!user;
 
   return (
     <div className="min-h-screen">
-      {/* Hero Section */}
-      <section className="relative overflow-hidden">
+      {/* Hero Section — guests only */}
+      {!isLoggedIn && (<section className="relative overflow-hidden">
         {/* Background gradient effects */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
           <div className="absolute -top-40 -right-40 w-80 h-80 rounded-full bg-purple-500/10 blur-3xl" />
@@ -146,21 +150,39 @@ export default function GuidePage() {
             </p>
 
             <div className="flex flex-wrap items-center justify-center gap-3">
-              <Link href="/pipeline">
-                <Button size="lg" className="h-12 px-8 text-base">
-                  Open Pipeline
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="ml-2"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-                </Button>
-              </Link>
-              <Link href="/outputs">
-                <Button variant="outline" size="lg" className="h-12 px-8 text-base">
-                  Browse Outputs
-                </Button>
-              </Link>
+              {isLoggedIn ? (
+                <>
+                  <Link href="/problems">
+                    <Button size="lg" className="h-12 px-8 text-base">
+                      Go to Problems
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="ml-2"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                    </Button>
+                  </Link>
+                  <Link href="/">
+                    <Button variant="outline" size="lg" className="h-12 px-8 text-base">
+                      Dashboard
+                    </Button>
+                  </Link>
+                </>
+              ) : (
+                <>
+                  <Link href="/signup">
+                    <Button size="lg" className="h-12 px-8 text-base">
+                      Get Started
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="ml-2"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                    </Button>
+                  </Link>
+                  <Link href="/login">
+                    <Button variant="outline" size="lg" className="h-12 px-8 text-base">
+                      Sign In
+                    </Button>
+                  </Link>
+                </>
+              )}
             </div>
           </div>
         </div>
-      </section>
+      </section>)}
 
       {/* How It Works */}
       <section className="px-6 py-20 border-t border-border/50">
@@ -207,8 +229,8 @@ export default function GuidePage() {
         </div>
       </section>
 
-      {/* Features Grid */}
-      <section className="px-6 py-20 border-t border-border/50">
+      {/* Features Grid — guests only */}
+      {!isLoggedIn && (<section className="px-6 py-20 border-t border-border/50">
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-16">
             <h2 className="text-3xl sm:text-4xl font-bold mb-4">Key Features</h2>
@@ -232,7 +254,7 @@ export default function GuidePage() {
             ))}
           </div>
         </div>
-      </section>
+      </section>)}
 
       {/* Workflows Section */}
       <section className="px-6 py-20 border-t border-border/50">
@@ -290,8 +312,8 @@ export default function GuidePage() {
         </div>
       </section>
 
-      {/* Languages Section */}
-      <section className="px-6 py-20 border-t border-border/50">
+      {/* Languages Section — guests only */}
+      {!isLoggedIn && (<section className="px-6 py-20 border-t border-border/50">
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-12">
             <h2 className="text-3xl sm:text-4xl font-bold mb-4">Supported Languages</h2>
@@ -317,33 +339,121 @@ export default function GuidePage() {
             ))}
           </div>
         </div>
-      </section>
+      </section>)}
 
-      {/* CTA Section */}
-      <section className="px-6 py-20 border-t border-border/50">
+      {/* Tool Usage & Guidelines — only for logged-in users */}
+      {isLoggedIn && (
+        <section className="px-6 py-20 border-t border-border/50">
+          <div className="max-w-5xl mx-auto">
+            <div className="text-center mb-16">
+              <h2 className="text-3xl sm:text-4xl font-bold mb-4">Tool Usage & Guidelines</h2>
+              <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
+                Important information for using the automation pipeline effectively
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Getting Started */}
+              <div className="p-6 rounded-xl border border-border/50 bg-card/30 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-blue-500/10">
+                    <Info className="h-5 w-5 text-blue-500" />
+                  </div>
+                  <h3 className="font-semibold">Getting Started</h3>
+                </div>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li className="flex gap-2"><span className="text-primary font-bold">1.</span> Go to Problems and click &quot;New Problem&quot;</li>
+                  <li className="flex gap-2"><span className="text-primary font-bold">2.</span> Upload problem.md and your solution file</li>
+                  <li className="flex gap-2"><span className="text-primary font-bold">3.</span> Select question type and mode</li>
+                  <li className="flex gap-2"><span className="text-primary font-bold">4.</span> Open the Pipeline tab — run steps individually or use <strong>Run All</strong></li>
+                  <li className="flex gap-2"><span className="text-primary font-bold">5.</span> Monitor execution results with per-language stats</li>
+                  <li className="flex gap-2"><span className="text-primary font-bold">6.</span> View and edit outputs in the Outputs tab</li>
+                </ul>
+              </div>
+
+              {/* File Requirements */}
+              <div className="p-6 rounded-xl border border-border/50 bg-card/30 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-emerald-500/10">
+                    <FileText className="h-5 w-5 text-emerald-500" />
+                  </div>
+                  <h3 className="font-semibold">File Requirements</h3>
+                </div>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li className="flex gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" /> Problem statement must be a <strong>.md</strong> file</li>
+                  <li className="flex gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" /> Solution file: <strong>.py, .cpp, .java,</strong> or <strong>.js</strong></li>
+                  <li className="flex gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" /> Solution must be a working, complete implementation</li>
+                  <li className="flex gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" /> Problem name should be descriptive and unique</li>
+                </ul>
+              </div>
+
+              {/* Restrictions */}
+              <div className="p-6 rounded-xl border border-border/50 bg-card/30 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-orange-500/10">
+                    <AlertTriangle className="h-5 w-5 text-orange-500" />
+                  </div>
+                  <h3 className="font-semibold">Restrictions & Limits</h3>
+                </div>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li className="flex gap-2"><AlertTriangle className="h-4 w-4 text-orange-500 shrink-0 mt-0.5" /> Test case count: <strong>5 to 100</strong> (recommended 30-50)</li>
+                  <li className="flex gap-2"><AlertTriangle className="h-4 w-4 text-orange-500 shrink-0 mt-0.5" /> Each step uses LLM calls — <strong>costs are tracked</strong></li>
+                  <li className="flex gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" /> Steps <strong>persist across tab close and logout</strong> — safe to navigate away</li>
+                  <li className="flex gap-2"><AlertTriangle className="h-4 w-4 text-orange-500 shrink-0 mt-0.5" /> Run All auto-stops if any step fails</li>
+                  <li className="flex gap-2"><AlertTriangle className="h-4 w-4 text-orange-500 shrink-0 mt-0.5" /> Completed problems <strong>cannot be deleted</strong></li>
+                </ul>
+              </div>
+
+              {/* Tips */}
+              <div className="p-6 rounded-xl border border-border/50 bg-card/30 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-purple-500/10">
+                    <CheckCircle2 className="h-5 w-5 text-purple-500" />
+                  </div>
+                  <h3 className="font-semibold">Tips for Best Results</h3>
+                </div>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li className="flex gap-2"><CheckCircle2 className="h-4 w-4 text-purple-500 shrink-0 mt-0.5" /> Write clear, detailed problem descriptions</li>
+                  <li className="flex gap-2"><CheckCircle2 className="h-4 w-4 text-purple-500 shrink-0 mt-0.5" /> Include edge cases in your solution</li>
+                  <li className="flex gap-2"><CheckCircle2 className="h-4 w-4 text-purple-500 shrink-0 mt-0.5" /> Review generated test cases before execution</li>
+                  <li className="flex gap-2"><CheckCircle2 className="h-4 w-4 text-purple-500 shrink-0 mt-0.5" /> Check max time and memory per language after execution</li>
+                  <li className="flex gap-2"><CheckCircle2 className="h-4 w-4 text-purple-500 shrink-0 mt-0.5" /> Use <strong>Run All</strong> for full pipeline, or <strong>Stop After Current Step</strong> to pause</li>
+                  <li className="flex gap-2"><CheckCircle2 className="h-4 w-4 text-purple-500 shrink-0 mt-0.5" /> Use the inline editor to fix issues without re-running</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* CTA Section — guests only */}
+      {!isLoggedIn && (<section className="px-6 py-20 border-t border-border/50">
         <div className="max-w-3xl mx-auto text-center">
           <div className="relative p-10 rounded-3xl border border-border/50 overflow-hidden">
-            {/* Background glow */}
             <div className="absolute inset-0 pointer-events-none">
               <div className="absolute top-0 left-1/4 w-64 h-64 rounded-full bg-violet-500/10 blur-3xl" />
               <div className="absolute bottom-0 right-1/4 w-64 h-64 rounded-full bg-blue-500/10 blur-3xl" />
             </div>
 
             <div className="relative">
-              <h2 className="text-2xl sm:text-3xl font-bold mb-3">Ready to Get Started?</h2>
+              <h2 className="text-2xl sm:text-3xl font-bold mb-3">
+                {isLoggedIn ? "Create Your Next Problem" : "Ready to Get Started?"}
+              </h2>
               <p className="text-muted-foreground mb-8 max-w-lg mx-auto">
-                Upload your solution and let the pipeline handle the rest. Create complete coding questions in minutes, not hours.
+                {isLoggedIn
+                  ? "Head to Problems to upload your solution and start the automation pipeline."
+                  : "Upload your solution and let the pipeline handle the rest. Create complete coding questions in minutes, not hours."}
               </p>
-              <Link href="/pipeline">
+              <Link href={isLoggedIn ? "/problems" : "/signup"}>
                 <Button size="lg" className="h-12 px-10 text-base">
-                  Launch Pipeline
+                  {isLoggedIn ? "Go to Problems" : "Get Started Free"}
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="ml-2"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                 </Button>
               </Link>
             </div>
           </div>
         </div>
-      </section>
+      </section>)}
     </div>
   );
 }

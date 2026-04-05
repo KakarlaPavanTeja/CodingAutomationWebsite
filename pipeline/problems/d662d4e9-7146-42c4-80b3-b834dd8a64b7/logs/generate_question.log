@@ -1,0 +1,50 @@
+[2026-04-04T21:40:05.725Z] $ /Users/kakarlapavanteja/Documents/CodingAutomationWebsite/pipeline/venv/bin/python3 Scripts/generate_full_question.py --steps description,codes,titles,difficulty,topics --langs python,cpp,java
+============================================================
+CODE-CENTRIC QUESTION GENERATOR (LEAN WORKFLOW)
+============================================================
+Selected steps: ['description', 'codes', 'titles', 'difficulty', 'topics']
+Selected languages: ['python', 'cpp', 'java']
+
+📋 Problem: Two Sum (standard)
+🎭 Scenario Level: heavy
+💻 User Code: solution.py (python)
+
+============================================================
+STEP 1: Description Creation
+============================================================
+✓ Description created and saved to /Users/kakarlapavanteja/Documents/CodingAutomationWebsite/pipeline/problems/d662d4e9-7146-42c4-80b3-b834dd8a64b7/Outputs/generated_description.md
+
+⏭ Skipping Step 2: Naming Enforcement
+
+============================================================
+STEP 3: Converting to Other Languages
+============================================================
+  - Converting to C++...
+  - Converting to Java...
+  ⏭ Skipping Node.js (not selected)
+
+============================================================
+STEP 4: Finalizing Solutions
+============================================================
+✓ Solutions saved to /Users/kakarlapavanteja/Documents/CodingAutomationWebsite/pipeline/problems/d662d4e9-7146-42c4-80b3-b834dd8a64b7/Outputs/generatedFullCode
+
+============================================================
+STEP 5a: Generating Titles
+============================================================
+✓ Titles generated
+
+============================================================
+STEP 5b: Generating Difficulty
+============================================================
+✓ Difficulty generated
+
+============================================================
+STEP 6: Generating Topics
+============================================================
+Warning: /Users/kakarlapavanteja/Documents/CodingAutomationWebsite/pipeline/problems/d662d4e9-7146-42c4-80b3-b834dd8a64b7/Inputs/topics_list.txt not found. Skipping topic generation.
+
+============================================================
+✅ SUCCESS! Generation completed.
+============================================================
+
+[2026-04-04T21:41:39.977Z] Process exited with code 0

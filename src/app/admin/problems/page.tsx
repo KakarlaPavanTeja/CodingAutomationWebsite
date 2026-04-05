@@ -17,6 +17,7 @@ type Problem = {
 export default function AdminProblemsPage() {
   const [problems, setProblems] = useState<Problem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showAll, setShowAll] = useState(false);
   const supabase = createClient();
 
   useEffect(() => {
@@ -50,6 +51,8 @@ export default function AdminProblemsPage() {
     );
   }
 
+  const displayedProblems = showAll ? problems : problems.slice(0, 5);
+
   return (
     <div className="space-y-4">
       <h2 className="text-lg font-semibold">
@@ -69,7 +72,7 @@ export default function AdminProblemsPage() {
             </tr>
           </thead>
           <tbody>
-            {problems.map((p) => (
+            {displayedProblems.map((p) => (
               <tr key={p.id} className="border-b last:border-0">
                 <td className="px-4 py-3 font-medium">{p.name}</td>
                 <td className="px-4 py-3 text-muted-foreground capitalize">
@@ -104,6 +107,16 @@ export default function AdminProblemsPage() {
           </tbody>
         </table>
       </div>
+      {problems.length > 5 && (
+        <div className="flex justify-center">
+          <button
+            onClick={() => setShowAll(!showAll)}
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {showAll ? "Show recent 5" : `View all ${problems.length} problems`}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -18,7 +18,7 @@ from code_cleaner import clean_generated_code
 
 # Directory constants
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(SCRIPT_DIR)
+BASE_DIR = os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(SCRIPT_DIR)
 INPUT_DIR = os.path.join(BASE_DIR, 'Inputs')
 OUTPUT_DIR = os.path.join(BASE_DIR, 'Outputs')
 
@@ -115,7 +115,10 @@ def main():
         update_usage(
             desc_usage.get('prompt_tokens', 0),
             desc_usage.get('completion_tokens', 0),
-            f"{problem_name}_description"
+            f"{problem_name}_description",
+            model=desc_usage.get('model', 'unknown'),
+            purpose="chat",
+            step_id="generate_question",
         )
 
         with open(desc_path, 'w') as f:
@@ -140,7 +143,7 @@ def main():
 
         sig_prompt = get_signature_extraction_prompt(desc_response)
         sig_response, sig_usage = call_llm(sig_prompt, "", purpose="chat")
-        update_usage(sig_usage.get('prompt_tokens', 0), sig_usage.get('completion_tokens', 0), f"{problem_name}_signature")
+        update_usage(sig_usage.get('prompt_tokens', 0), sig_usage.get('completion_tokens', 0), f"{problem_name}_signature", model=sig_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question")
 
         try:
             clean_sig = sig_response.strip()
@@ -153,7 +156,8 @@ def main():
         if description_signature:
             print(f"Enforcing function name: {description_signature.get('function_name')}")
             refactor_prompt = get_normalization_prompt(user_code, detected_lang, description_signature, desc_response, question_type)
-            renamed_code, _ = call_llm(refactor_prompt, "", purpose="chat")
+            renamed_code, refactor_usage = call_llm(refactor_prompt, "", purpose="chat")
+            update_usage(refactor_usage.get('prompt_tokens', 0), refactor_usage.get('completion_tokens', 0), f"{problem_name}_refactor", model=refactor_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question")
 
             if renamed_code.strip().startswith("```"):
                 renamed_code = renamed_code.strip().split('\n', 1)[1].rsplit('\n', 1)[0].strip()
@@ -204,7 +208,8 @@ def main():
                 continue
             print(f"  - Converting to {lang}...")
             conv_prompt = get_conversion_prompt(lang, user_code, question_type, description_signature, desc_response)
-            conv_response, _ = call_llm(conv_prompt, "", purpose="code")
+            conv_response, conv_usage = call_llm(conv_prompt, "", purpose="code")
+            update_usage(conv_usage.get('prompt_tokens', 0), conv_usage.get('completion_tokens', 0), f"{problem_name}_convert_{lang}", model=conv_usage.get('model', 'unknown'), purpose="code", step_id="generate_question")
 
             clean_code = conv_response.strip()
             if clean_code.startswith("```"):
@@ -245,7 +250,8 @@ def main():
         print("=" * 60)
 
         title_prompt = get_title_prompt(desc_response)
-        title_response, _ = call_llm(title_prompt, "", purpose="chat")
+        title_response, title_usage = call_llm(title_prompt, "", purpose="chat")
+        update_usage(title_usage.get('prompt_tokens', 0), title_usage.get('completion_tokens', 0), f"{problem_name}_titles", model=title_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question")
         titles_path = os.path.join(OUTPUT_DIR, 'generated_titles.txt')
         with open(titles_path, 'w') as f:
             f.write(title_response)
@@ -259,7 +265,8 @@ def main():
         print("=" * 60)
 
         diff_prompt = get_difficulty_prompt(desc_response)
-        diff_response, _ = call_llm(diff_prompt, "", purpose="chat")
+        diff_response, diff_usage = call_llm(diff_prompt, "", purpose="chat")
+        update_usage(diff_usage.get('prompt_tokens', 0), diff_usage.get('completion_tokens', 0), f"{problem_name}_difficulty", model=diff_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question")
         diff_path = os.path.join(OUTPUT_DIR, 'generated_difficulty.txt')
         with open(diff_path, 'w') as f:
             f.write(diff_response.strip())
@@ -280,7 +287,7 @@ def main():
 
             topics_prompt = get_topics_prompt(desc_response, user_code, topics_list_content)
             topics_response, topics_usage = call_llm(topics_prompt, "", purpose="chat")
-            update_usage(topics_usage.get('prompt_tokens', 0), topics_usage.get('completion_tokens', 0), f"{problem_name}_topics")
+            update_usage(topics_usage.get('prompt_tokens', 0), topics_usage.get('completion_tokens', 0), f"{problem_name}_topics", model=topics_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question")
 
             topics_out_path = os.path.join(OUTPUT_DIR, 'generated_topics.json')
             try:

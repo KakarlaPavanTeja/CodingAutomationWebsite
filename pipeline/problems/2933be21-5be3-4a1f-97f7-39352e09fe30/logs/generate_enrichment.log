@@ -1,0 +1,15 @@
+[2026-04-04T23:15:43.122Z] Starting generate_enrichment...
+[2026-04-04T23:15:43.279Z] ============================================================
+[2026-04-04T23:15:43.279Z] ENRICHMENT GENERATOR (Hints, Real-life, Follow-ups)
+[2026-04-04T23:15:43.279Z] ============================================================
+[2026-04-04T23:15:43.279Z] Selected enrichment types: ['reallife', 'hints', 'followups']
+[2026-04-04T23:15:43.279Z] generating real-life examples...
+[2026-04-04T23:15:45.809Z] ✓ Real-life examples generated
+[2026-04-04T23:15:45.810Z] generating hints...
+[2026-04-04T23:15:49.039Z] ✓ Hints generated
+[2026-04-04T23:15:49.039Z] generating follow-up questions...
+[2026-04-04T23:15:55.903Z] ✓ Follow-up questions generated
+[2026-04-04T23:15:55.904Z] ✅ SUCCESS! Enrichment data saved to /Users/kakarlapavanteja/Documents/CodingAutomationWebsite/pipeline/problems/2933be21-5be3-4a1f-97f7-39352e09fe30/Outputs/enrichment.json
+[2026-04-04T23:15:55.905Z] Usage tracked. Batch Cost: $0.009935
+
+[2026-04-04T23:15:55.928Z] Process exited with code 0

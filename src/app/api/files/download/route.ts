@@ -1,20 +1,30 @@
-import { NextResponse } from "next/server";
-import path from "path";
+import { NextRequest, NextResponse } from "next/server";
 import archiver from "archiver";
 import { PassThrough } from "stream";
+import { downloadAllOutputs } from "@/lib/storage-sync";
 
-export async function GET() {
-  const pipelineRoot = process.env.PIPELINE_ROOT;
-  if (!pipelineRoot) {
+export async function GET(request: NextRequest) {
+  const problemId = request.nextUrl.searchParams.get("problemId");
+  if (!problemId) {
+    return NextResponse.json({ error: "problemId parameter required" }, { status: 400 });
+  }
+
+  // Download all output files from Supabase Storage
+  let outputFiles: { path: string; buffer: Buffer }[];
+  try {
+    outputFiles = await downloadAllOutputs(problemId);
+  } catch (err) {
     return NextResponse.json(
-      { error: "PIPELINE_ROOT not configured" },
+      { error: `Failed to fetch outputs: ${err instanceof Error ? err.message : "Unknown"}` },
       { status: 500 }
     );
   }
 
-  const outputsDir = path.join(pipelineRoot, "Outputs");
+  if (outputFiles.length === 0) {
+    return NextResponse.json({ error: "No output files found" }, { status: 404 });
+  }
 
-  // Create a zip archive streaming through a PassThrough
+  // Create ZIP archive in memory
   const passthrough = new PassThrough();
   const archive = archiver("zip", { zlib: { level: 5 } });
 
@@ -24,13 +34,12 @@ export async function GET() {
 
   archive.pipe(passthrough);
 
-  // Add the entire Outputs directory
-  archive.directory(outputsDir, "Outputs");
+  for (const file of outputFiles) {
+    archive.append(file.buffer, { name: `Outputs/${file.path}` });
+  }
 
-  // Finalize (don't await — it writes asynchronously)
   archive.finalize();
 
-  // Convert Node stream to Web ReadableStream
   const readable = new ReadableStream({
     start(controller) {
       passthrough.on("data", (chunk: Buffer) => {
@@ -49,10 +58,12 @@ export async function GET() {
     },
   });
 
+  const filename = `outputs-${problemId.slice(0, 8)}-${Date.now()}.zip`;
+
   return new Response(readable, {
     headers: {
       "Content-Type": "application/zip",
-      "Content-Disposition": `attachment; filename="outputs-${Date.now()}.zip"`,
+      "Content-Disposition": `attachment; filename="${filename}"`,
     },
   });
 }

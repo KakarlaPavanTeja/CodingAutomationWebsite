@@ -3,9 +3,10 @@ import json
 import shutil
 import re
 
-OUTPUTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Outputs"))
-INPUTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Inputs"))
-TEMPLATE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "zReferenceFiles", "JSONPreparationFilesReference"))
+_BASE = os.environ.get("PIPELINE_BASE_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+OUTPUTS_DIR = os.path.join(_BASE, "Outputs")
+INPUTS_DIR = os.path.join(_BASE, "Inputs")
+TEMPLATE_DIR = os.path.join(_BASE, "zReferenceFiles", "JSONPreparationFilesReference")
 
 
 def get_problem_name():

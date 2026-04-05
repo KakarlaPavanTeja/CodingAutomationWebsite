@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { OutputBrowser } from "@/components/files/OutputBrowser";
 import { TabbedEditor } from "@/components/files/TabbedEditor";
 
@@ -27,6 +28,16 @@ const EXT_TO_LANGUAGE: Record<string, string> = {
 };
 
 export default function OutputsPage() {
+  return (
+    <Suspense>
+      <OutputsContent />
+    </Suspense>
+  );
+}
+
+function OutputsContent() {
+  const searchParams = useSearchParams();
+  const problemId = searchParams.get("problemId");
   const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
   const [activeTabPath, setActiveTabPath] = useState<string | null>(null);
 
@@ -57,7 +68,10 @@ export default function OutputsPage() {
 
     // Fetch content
     try {
-      const res = await fetch(`/api/files/read?path=${encodeURIComponent(path)}`);
+      const readUrl = problemId
+        ? `/api/files/read?path=${encodeURIComponent(path)}&problemId=${encodeURIComponent(problemId)}`
+        : `/api/files/read?path=${encodeURIComponent(path)}`;
+      const res = await fetch(readUrl);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setOpenTabs((prev) =>
@@ -105,7 +119,7 @@ export default function OutputsPage() {
       const res = await fetch("/api/files/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path, content: tab.content }),
+        body: JSON.stringify({ path, content: tab.content, problemId }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -131,7 +145,9 @@ export default function OutputsPage() {
             <button
               onClick={() => {
                 const a = document.createElement("a");
-                a.href = "/api/files/download";
+                a.href = problemId
+                  ? `/api/files/download?problemId=${encodeURIComponent(problemId)}`
+                  : "/api/files/download";
                 a.download = "outputs.zip";
                 a.click();
               }}
@@ -146,6 +162,7 @@ export default function OutputsPage() {
               selectedPath={activeTabPath}
               openPaths={openPaths}
               onSelectFile={openFile}
+              problemId={problemId}
             />
           </div>
         </div>
