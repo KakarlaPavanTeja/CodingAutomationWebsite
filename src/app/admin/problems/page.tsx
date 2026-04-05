@@ -31,6 +31,10 @@ export default function AdminProblemsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Problem | null>(null);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterType, setFilterType] = useState("all");
+  const [filterMode, setFilterMode] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const supabase = createClient();
 
   const fetchProblems = async () => {
@@ -90,14 +94,98 @@ export default function AdminProblemsPage() {
     );
   }
 
-  const displayedProblems = showAll ? problems : problems.slice(0, 5);
+  const filteredProblems = problems.filter((p) => {
+    if (filterStatus !== "all" && p.status !== filterStatus) return false;
+    if (filterType !== "all" && p.question_type !== filterType) return false;
+    if (filterMode !== "all" && p.mode !== filterMode) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const creator = (p.profiles?.display_name || p.profiles?.email || "").toLowerCase();
+      if (!p.name.toLowerCase().includes(q) && !creator.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const displayedProblems = showAll ? filteredProblems : filteredProblems.slice(0, 5);
+
+  const statuses = [...new Set(problems.map((p) => p.status))].sort();
+  const types = [...new Set(problems.map((p) => p.question_type))].sort();
+  const modes = [...new Set(problems.map((p) => p.mode))].sort();
+  const hasActiveFilters = filterStatus !== "all" || filterType !== "all" || filterMode !== "all" || searchQuery !== "";
 
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-semibold">
-        Problems ({problems.length})
-      </h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">
+          Problems ({hasActiveFilters ? `${filteredProblems.length}/${problems.length}` : problems.length})
+        </h2>
+        {hasActiveFilters && (
+          <button
+            onClick={() => { setFilterStatus("all"); setFilterType("all"); setFilterMode("all"); setSearchQuery(""); }}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
 
+      <div className="flex flex-wrap gap-3 items-end">
+        <div className="flex-1 min-w-[180px]">
+          <label className="text-xs font-medium text-muted-foreground mb-1 block">Search</label>
+          <input
+            type="text"
+            placeholder="Name or creator..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="flex w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground mb-1 block">Status</label>
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="flex rounded-md border border-input bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <option value="all">All</option>
+            {statuses.map((s) => (
+              <option key={s} value={s}>{s === "deletion_pending" ? "Deletion Pending" : s.charAt(0).toUpperCase() + s.slice(1)}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground mb-1 block">Type</label>
+          <select
+            value={filterType}
+            onChange={(e) => setFilterType(e.target.value)}
+            className="flex rounded-md border border-input bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <option value="all">All</option>
+            {types.map((t) => (
+              <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground mb-1 block">Mode</label>
+          <select
+            value={filterMode}
+            onChange={(e) => setFilterMode(e.target.value)}
+            className="flex rounded-md border border-input bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <option value="all">All</option>
+            {modes.map((m) => (
+              <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {filteredProblems.length === 0 && hasActiveFilters ? (
+        <div className="rounded-lg border bg-card p-6 text-center">
+          <p className="text-muted-foreground text-sm">No problems match the current filters.</p>
+        </div>
+      ) : (
       <div className="rounded-lg border overflow-hidden">
         <table className="w-full text-sm">
           <thead>
@@ -149,14 +237,15 @@ export default function AdminProblemsPage() {
           </tbody>
         </table>
       </div>
+      )}
 
-      {problems.length > 5 && (
+      {filteredProblems.length > 5 && (
         <div className="flex justify-center">
           <button
             onClick={() => setShowAll(!showAll)}
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
-            {showAll ? "Show recent 5" : `View all ${problems.length} problems`}
+            {showAll ? "Show recent 5" : `View all ${filteredProblems.length} problems`}
           </button>
         </div>
       )}
