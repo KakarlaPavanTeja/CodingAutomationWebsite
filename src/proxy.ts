@@ -4,6 +4,21 @@ import { NextResponse, type NextRequest } from "next/server";
 export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
+  const isPublicPage =
+    request.nextUrl.pathname === "/login" ||
+    request.nextUrl.pathname === "/signup" ||
+    request.nextUrl.pathname === "/reset-password" ||
+    request.nextUrl.pathname === "/guide" ||
+    request.nextUrl.pathname === "/" ||
+    request.nextUrl.pathname.startsWith("/auth/");
+
+  const isApiRoute = request.nextUrl.pathname.startsWith("/api");
+
+  // Skip auth check entirely for API routes — they handle their own auth
+  if (isApiRoute) {
+    return supabaseResponse;
+  }
+
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -30,32 +45,27 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const isPublicPage =
-    request.nextUrl.pathname === "/login" ||
-    request.nextUrl.pathname === "/signup" ||
-    request.nextUrl.pathname === "/reset-password" ||
-    request.nextUrl.pathname === "/guide" ||
-    request.nextUrl.pathname.startsWith("/auth/");
-
-  // Redirect unauthenticated users (except public pages and API routes)
-  if (
-    !user &&
-    !isPublicPage &&
-    !request.nextUrl.pathname.startsWith("/api")
-  ) {
+  // Redirect unauthenticated users (except public pages)
+  if (!user && !isPublicPage) {
     const url = request.nextUrl.clone();
-    // Redirect root to guide for guests, everything else to login
-    url.pathname = request.nextUrl.pathname === "/" ? "/guide" : "/login";
+    url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
-  // Redirect authenticated users away from login/signup (but allow reset-password and auth callback)
+  // Redirect authenticated users away from login/signup
   const isLoginSignup =
     request.nextUrl.pathname === "/login" ||
     request.nextUrl.pathname === "/signup";
   if (user && isLoginSignup) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
+    return NextResponse.redirect(url);
+  }
+
+  // Redirect authenticated users from root to problems
+  if (user && request.nextUrl.pathname === "/") {
+    const url = request.nextUrl.clone();
+    url.pathname = "/problems";
     return NextResponse.redirect(url);
   }
 

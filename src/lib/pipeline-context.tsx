@@ -366,9 +366,9 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         }
       };
 
-      // Poll immediately, then every 2 seconds
+      // Poll immediately, then every 4 seconds
       poll();
-      pollRef.current = setInterval(poll, 2000);
+      pollRef.current = setInterval(poll, 4000);
     },
     [currentProblemId, updateStepState, stopPolling, savePipelineState]
   );

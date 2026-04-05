@@ -48,7 +48,7 @@ export function StepCard({
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (stepState.status !== "running" || !stepState.startTime) return;
-    const interval = setInterval(() => setNow(Date.now()), 1000);
+    const interval = setInterval(() => setNow(Date.now()), 3000);
     return () => clearInterval(interval);
   }, [stepState.status, stepState.startTime]);
 
