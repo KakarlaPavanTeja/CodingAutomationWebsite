@@ -22,6 +22,7 @@ export async function GET() {
   let query = supabase
     .from("problems")
     .select("*, profiles:created_by(display_name, email)")
+    .neq("status", "deleted")
     .order("created_at", { ascending: false });
 
   if (!isAdmin) {

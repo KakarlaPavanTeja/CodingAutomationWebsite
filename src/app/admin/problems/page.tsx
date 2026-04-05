@@ -11,27 +11,67 @@ type Problem = {
   status: string;
   languages: string[];
   created_at: string;
+  deletion_reason: string | null;
   profiles: { email: string; display_name: string | null } | null;
+};
+
+const STATUS_STYLES: Record<string, string> = {
+  completed: "bg-green-500/10 text-green-700 dark:text-green-400",
+  failed: "bg-red-500/10 text-red-700 dark:text-red-400",
+  processing: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400",
+  draft: "bg-gray-500/10 text-gray-700 dark:text-gray-400",
+  deletion_pending: "bg-orange-500/10 text-orange-700 dark:text-orange-400",
+  deleted: "bg-red-500/10 text-red-700 dark:text-red-400 line-through",
 };
 
 export default function AdminProblemsPage() {
   const [problems, setProblems] = useState<Problem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Problem | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const supabase = createClient();
 
-  useEffect(() => {
-    const fetchProblems = async () => {
-      const { data } = await supabase
-        .from("problems")
-        .select("*, profiles:created_by(email, display_name)")
-        .order("created_at", { ascending: false });
+  const fetchProblems = async () => {
+    const { data } = await supabase
+      .from("problems")
+      .select("*, profiles:created_by(email, display_name)")
+      .neq("status", "deleted")
+      .order("created_at", { ascending: false });
 
-      setProblems((data as Problem[]) || []);
-      setLoading(false);
-    };
+    setProblems((data as Problem[]) || []);
+    setLoading(false);
+  };
+
+  useEffect(() => {
     fetchProblems();
-  }, [supabase]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleDelete = async () => {
+    if (!deleteTarget || deleteReason.trim().length < 5) return;
+    setDeleting(true);
+
+    try {
+      const res = await fetch(`/api/problems/${deleteTarget.id}/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: deleteReason.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      // Remove from list
+      setProblems((prev) => prev.filter((p) => p.id !== deleteTarget.id));
+      setDeleteTarget(null);
+      setDeleteReason("");
+    } catch {
+      // Error handling
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   if (loading) {
     return <p className="text-muted-foreground">Loading problems...</p>;
@@ -43,8 +83,7 @@ export default function AdminProblemsPage() {
         <h2 className="text-lg font-semibold">Problems</h2>
         <div className="rounded-lg border bg-card p-8 text-center">
           <p className="text-muted-foreground">
-            No problems created yet. Problems will appear here when users run
-            the pipeline.
+            No problems created yet.
           </p>
         </div>
       </div>
@@ -69,6 +108,7 @@ export default function AdminProblemsPage() {
               <th className="text-left px-4 py-3 font-medium">Status</th>
               <th className="text-left px-4 py-3 font-medium">Created By</th>
               <th className="text-left px-4 py-3 font-medium">Date</th>
+              <th className="text-left px-4 py-3 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -84,16 +124,10 @@ export default function AdminProblemsPage() {
                 <td className="px-4 py-3">
                   <span
                     className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                      p.status === "completed"
-                        ? "bg-green-500/10 text-green-700 dark:text-green-400"
-                        : p.status === "failed"
-                          ? "bg-red-500/10 text-red-700 dark:text-red-400"
-                          : p.status === "processing"
-                            ? "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400"
-                            : "bg-gray-500/10 text-gray-700 dark:text-gray-400"
+                      STATUS_STYLES[p.status] || STATUS_STYLES.draft
                     }`}
                   >
-                    {p.status}
+                    {p.status === "deletion_pending" ? "deletion pending" : p.status}
                   </span>
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">
@@ -102,11 +136,20 @@ export default function AdminProblemsPage() {
                 <td className="px-4 py-3 text-muted-foreground">
                   {new Date(p.created_at).toLocaleDateString()}
                 </td>
+                <td className="px-4 py-3">
+                  <button
+                    onClick={() => { setDeleteTarget(p); setDeleteReason(""); }}
+                    className="text-xs text-red-500 hover:text-red-700 font-medium transition-colors"
+                  >
+                    Delete
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
       {problems.length > 5 && (
         <div className="flex justify-center">
           <button
@@ -115,6 +158,46 @@ export default function AdminProblemsPage() {
           >
             {showAll ? "Show recent 5" : `View all ${problems.length} problems`}
           </button>
+        </div>
+      )}
+
+      {/* Delete Dialog */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-card border rounded-lg p-6 w-full max-w-md space-y-4 shadow-lg mx-4">
+            <h3 className="font-semibold">Delete Problem</h3>
+            <p className="text-sm text-muted-foreground">
+              Deleting <span className="font-medium text-foreground">{deleteTarget.name}</span>
+              {" "}(status: {deleteTarget.status}). The problem setter will be notified with your reason.
+              Files will be permanently removed after 5 hours.
+            </p>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Reason <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                value={deleteReason}
+                onChange={(e) => setDeleteReason(e.target.value)}
+                placeholder="Why are you deleting this problem? (min 5 characters)"
+                className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring min-h-[80px] resize-none"
+              />
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => { setDeleteTarget(null); setDeleteReason(""); }}
+                className="px-3 py-1.5 rounded-md text-sm font-medium border hover:bg-muted transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={deleting || deleteReason.trim().length < 5}
+                className="px-3 py-1.5 rounded-md text-sm font-medium bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {deleting ? "Deleting..." : "Delete Problem"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

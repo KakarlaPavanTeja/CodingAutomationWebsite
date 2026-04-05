@@ -182,13 +182,24 @@ export default function ProblemDetailPage() {
     }
   };
 
+  const [adminDeleteReason, setAdminDeleteReason] = useState("");
+  const [showAdminDeleteDialog, setShowAdminDeleteDialog] = useState(false);
+
   const handleAdminDelete = async () => {
+    if (adminDeleteReason.trim().length < 5) {
+      toast("Please provide a reason (at least 5 characters).", "error");
+      return;
+    }
     setDeleting(true);
     try {
-      const res = await fetch(`/api/problems/${id}/delete`, { method: "DELETE" });
+      const res = await fetch(`/api/problems/${id}/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: adminDeleteReason.trim() }),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      toast("Problem permanently deleted.", "success");
+      toast("Problem deleted. Files will be removed after 5 hours.", "success");
       router.push("/problems");
     } catch (err) {
       toast(err instanceof Error ? err.message : "Failed to delete", "error");
@@ -437,28 +448,89 @@ export default function ProblemDetailPage() {
             </div>
           )}
 
-          {/* Admin: approve deletion */}
+          {/* Admin: approve deletion request */}
           {problem.status === "deletion_pending" && isAdmin && (
             <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-5 space-y-3">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="h-5 w-5 text-orange-500" />
                 <h2 className="text-sm font-semibold text-orange-700 dark:text-orange-400">
-                  Deletion Requested
+                  Deletion Requested by Problem Setter
                 </h2>
               </div>
               <p className="text-sm text-muted-foreground">
                 Reason: <span className="text-foreground">{problem.deletion_reason}</span>
               </p>
-              <div className="flex gap-2">
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={handleAdminDelete}
-                  disabled={deleting}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  {deleting ? "Deleting..." : "Approve & Delete Permanently"}
-                </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  setAdminDeleteReason(problem.deletion_reason || "Approved deletion request");
+                  setShowAdminDeleteDialog(true);
+                }}
+                disabled={deleting}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Approve & Delete
+              </Button>
+            </div>
+          )}
+
+          {/* Admin: delete any problem */}
+          {isAdmin && problem.status !== "deletion_pending" && (
+            <div className="rounded-lg border border-destructive/30 bg-card p-5 space-y-3">
+              <h2 className="text-sm font-semibold text-destructive">Admin: Delete Problem</h2>
+              <p className="text-sm text-muted-foreground">
+                Delete this problem and notify the problem setter. Files will be permanently removed after 5 hours.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowAdminDeleteDialog(true)}
+                className="border-destructive/50 text-destructive hover:bg-destructive/10"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete Problem
+              </Button>
+            </div>
+          )}
+
+          {/* Admin delete reason dialog */}
+          {showAdminDeleteDialog && isAdmin && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+              <div className="bg-card border rounded-lg p-6 w-full max-w-md space-y-4 shadow-lg mx-4">
+                <h3 className="font-semibold">Delete Problem</h3>
+                <p className="text-sm text-muted-foreground">
+                  This will soft-delete <span className="font-medium text-foreground">{problem.name}</span>.
+                  Files will be permanently removed after 5 hours.
+                </p>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">
+                    Reason for the problem setter <span className="text-destructive">*</span>
+                  </label>
+                  <textarea
+                    value={adminDeleteReason}
+                    onChange={(e) => setAdminDeleteReason(e.target.value)}
+                    placeholder="Why are you deleting this problem? (min 5 characters)"
+                    className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring min-h-[80px] resize-none"
+                  />
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => { setShowAdminDeleteDialog(false); setAdminDeleteReason(""); }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleAdminDelete}
+                    disabled={deleting || adminDeleteReason.trim().length < 5}
+                  >
+                    {deleting ? "Deleting..." : "Delete Problem"}
+                  </Button>
+                </div>
               </div>
             </div>
           )}
