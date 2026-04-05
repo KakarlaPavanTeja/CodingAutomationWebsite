@@ -322,6 +322,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   const startPolling = useCallback(
     (runId: string, stepId: StepId) => {
       stopPolling();
+      runningRunIdRef.current = runId;
 
       const poll = async () => {
         try {
