@@ -452,7 +452,7 @@ export default function ProblemDetailPage() {
         </div>
       )}
 
-      {activeTab === "pipeline" && <ProblemPipeline problemId={id} />}
+      {activeTab === "pipeline" && <ProblemPipeline problemId={id} onStatusChange={fetchProblem} />}
 
       {activeTab === "outputs" && <ProblemOutputs problemId={id} />}
     </div>

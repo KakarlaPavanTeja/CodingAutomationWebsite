@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
@@ -13,9 +13,10 @@ import { Button } from "@/components/ui/button";
 
 interface ProblemPipelineProps {
   problemId: string;
+  onStatusChange?: () => void;
 }
 
-export function ProblemPipeline({ problemId }: ProblemPipelineProps) {
+export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelineProps) {
   const {
     questionType,
     mode,
@@ -38,6 +39,15 @@ export function ProblemPipeline({ problemId }: ProblemPipelineProps) {
   useEffect(() => {
     loadProblemState(problemId);
   }, [problemId, loadProblemState]);
+
+  // Notify parent when a step starts or finishes so it can refetch problem status
+  const prevRunning = useRef(isAnyRunning);
+  useEffect(() => {
+    if (prevRunning.current !== isAnyRunning) {
+      prevRunning.current = isAnyRunning;
+      onStatusChange?.();
+    }
+  }, [isAnyRunning, onStatusChange]);
 
   const workflowSteps = getWorkflowSteps(questionType, mode);
 
