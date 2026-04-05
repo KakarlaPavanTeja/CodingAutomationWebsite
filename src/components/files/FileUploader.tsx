@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 
 interface FileUploaderProps {
@@ -29,9 +28,23 @@ const MODES = [
   { id: "exam", label: "Exam" },
 ];
 
+const SOLUTION_LANGUAGES = [
+  { id: "py", label: "Python", ext: ".py" },
+  { id: "cpp", label: "C++", ext: ".cpp" },
+  { id: "java", label: "Java", ext: ".java" },
+  { id: "js", label: "Node.js", ext: ".js" },
+];
+
+type InputMode = "paste" | "file";
+
 export function FileUploader({ onUploadComplete }: FileUploaderProps) {
   const [problemFile, setProblemFile] = useState<File | null>(null);
   const [solutionFile, setSolutionFile] = useState<File | null>(null);
+  const [problemText, setProblemText] = useState("");
+  const [solutionText, setSolutionText] = useState("");
+  const [solutionLang, setSolutionLang] = useState("py");
+  const [problemInputMode, setProblemInputMode] = useState<InputMode>("paste");
+  const [solutionInputMode, setSolutionInputMode] = useState<InputMode>("paste");
   const [problemName, setProblemName] = useState("");
   const [problemType, setProblemType] = useState("standard");
   const [questionType, setQuestionType] = useState("function");
@@ -40,23 +53,26 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
   const [uploading, setUploading] = useState(false);
   const [uploaded, setUploaded] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState(false);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    setDragOver(false);
 
     for (const file of Array.from(e.dataTransfer.files)) {
       if (file.name === "problem.md" || file.name.endsWith(".md")) {
         setProblemFile(file);
+        setProblemInputMode("file");
       } else if (/\.(py|cpp|java|js)$/.test(file.name)) {
         setSolutionFile(file);
+        setSolutionInputMode("file");
       }
     }
   }, []);
 
+  const hasProblemContent = problemInputMode === "paste" ? problemText.trim().length > 0 : !!problemFile;
+  const hasSolutionContent = solutionInputMode === "paste" ? solutionText.trim().length > 0 : !!solutionFile;
+
   const handleUpload = async () => {
-    if (!problemFile && !solutionFile) return;
+    if (!hasProblemContent && !hasSolutionContent) return;
     if (!problemName.trim()) {
       setError("Problem name is required");
       return;
@@ -66,13 +82,28 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
     setError(null);
 
     const formData = new FormData();
-    if (problemFile) formData.append("problemMd", problemFile);
-    if (solutionFile) formData.append("solution", solutionFile);
     formData.append("problemName", problemName.trim());
     formData.append("problemType", problemType);
     formData.append("questionType", questionType);
     formData.append("mode", mode);
     formData.append("scenarioLevel", scenarioLevel);
+
+    // Problem description
+    if (problemInputMode === "paste" && problemText.trim()) {
+      const blob = new Blob([problemText], { type: "text/markdown" });
+      formData.append("problemMd", blob, "problem.md");
+    } else if (problemInputMode === "file" && problemFile) {
+      formData.append("problemMd", problemFile);
+    }
+
+    // Solution code
+    if (solutionInputMode === "paste" && solutionText.trim()) {
+      const ext = SOLUTION_LANGUAGES.find((l) => l.id === solutionLang)?.ext || ".py";
+      const blob = new Blob([solutionText], { type: "text/plain" });
+      formData.append("solution", blob, `solution${ext}`);
+    } else if (solutionInputMode === "file" && solutionFile) {
+      formData.append("solution", solutionFile);
+    }
 
     try {
       const res = await fetch("/api/files/upload", { method: "POST", body: formData });
@@ -90,7 +121,7 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Upload Inputs</CardTitle>
+        <CardTitle className="text-base">Create New Problem</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Problem Metadata */}
@@ -199,53 +230,152 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
           </div>
         </div>
 
-        {/* File Drop Zone */}
-        <div
-          className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
-            dragOver
-              ? "border-primary bg-primary/5"
-              : "border-muted-foreground/25 hover:border-muted-foreground/50"
-          }`}
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={handleDrop}
-        >
-          <p className="text-sm text-muted-foreground mb-2">
-            Drag & drop files here, or select below
-          </p>
-          <div className="flex flex-wrap gap-2 justify-center">
-            <label className="cursor-pointer">
-              <input
-                type="file"
-                accept=".md"
-                className="hidden"
-                onChange={(e) => setProblemFile(e.target.files?.[0] || null)}
-              />
-              <Badge variant="outline" className="cursor-pointer hover:bg-muted">
-                {problemFile ? problemFile.name : "Select problem.md"}
-              </Badge>
-            </label>
-            <label className="cursor-pointer">
-              <input
-                type="file"
-                accept=".py,.cpp,.java,.js"
-                className="hidden"
-                onChange={(e) => setSolutionFile(e.target.files?.[0] || null)}
-              />
-              <Badge variant="outline" className="cursor-pointer hover:bg-muted">
-                {solutionFile ? solutionFile.name : "Select solution file"}
-              </Badge>
-            </label>
+        {/* Problem Description */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Label className="text-sm">Problem Description</Label>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => setProblemInputMode("paste")}
+                className={cn(
+                  "px-2.5 py-1 rounded text-xs font-medium transition-colors",
+                  problemInputMode === "paste"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                )}
+              >
+                Paste
+              </button>
+              <button
+                type="button"
+                onClick={() => setProblemInputMode("file")}
+                className={cn(
+                  "px-2.5 py-1 rounded text-xs font-medium transition-colors",
+                  problemInputMode === "file"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                )}
+              >
+                Upload File
+              </button>
+            </div>
           </div>
+
+          {problemInputMode === "paste" ? (
+            <textarea
+              value={problemText}
+              onChange={(e) => setProblemText(e.target.value)}
+              placeholder="Paste your problem description here (markdown supported)..."
+              className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring min-h-[160px] resize-y font-mono"
+            />
+          ) : (
+            <div
+              className="border-2 border-dashed rounded-lg p-4 text-center transition-colors border-muted-foreground/25 hover:border-muted-foreground/50"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={handleDrop}
+            >
+              <label className="cursor-pointer">
+                <input
+                  type="file"
+                  accept=".md"
+                  className="hidden"
+                  onChange={(e) => setProblemFile(e.target.files?.[0] || null)}
+                />
+                <Badge variant="outline" className="cursor-pointer hover:bg-muted">
+                  {problemFile ? problemFile.name : "Select problem.md"}
+                </Badge>
+              </label>
+            </div>
+          )}
+        </div>
+
+        {/* Solution Code */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Label className="text-sm">Solution Code</Label>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => setSolutionInputMode("paste")}
+                className={cn(
+                  "px-2.5 py-1 rounded text-xs font-medium transition-colors",
+                  solutionInputMode === "paste"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                )}
+              >
+                Paste
+              </button>
+              <button
+                type="button"
+                onClick={() => setSolutionInputMode("file")}
+                className={cn(
+                  "px-2.5 py-1 rounded text-xs font-medium transition-colors",
+                  solutionInputMode === "file"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                )}
+              >
+                Upload File
+              </button>
+            </div>
+          </div>
+
+          {solutionInputMode === "paste" ? (
+            <div className="space-y-2">
+              <div className="flex gap-1.5">
+                {SOLUTION_LANGUAGES.map((lang) => (
+                  <button
+                    key={lang.id}
+                    type="button"
+                    onClick={() => setSolutionLang(lang.id)}
+                    className={cn(
+                      "px-2.5 py-1 rounded text-xs font-medium transition-colors border",
+                      solutionLang === lang.id
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background text-foreground border-border hover:bg-muted"
+                    )}
+                  >
+                    {lang.label}
+                  </button>
+                ))}
+              </div>
+              <textarea
+                value={solutionText}
+                onChange={(e) => setSolutionText(e.target.value)}
+                placeholder="Paste your solution code here..."
+                className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring min-h-[160px] resize-y font-mono"
+              />
+            </div>
+          ) : (
+            <div
+              className="border-2 border-dashed rounded-lg p-4 text-center transition-colors border-muted-foreground/25 hover:border-muted-foreground/50"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={handleDrop}
+            >
+              <label className="cursor-pointer">
+                <input
+                  type="file"
+                  accept=".py,.cpp,.java,.js"
+                  className="hidden"
+                  onChange={(e) => setSolutionFile(e.target.files?.[0] || null)}
+                />
+                <Badge variant="outline" className="cursor-pointer hover:bg-muted">
+                  {solutionFile ? solutionFile.name : "Select solution file"}
+                </Badge>
+              </label>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
           <Button
             size="sm"
             onClick={handleUpload}
-            disabled={uploading || (!problemFile && !solutionFile)}
+            disabled={uploading || (!hasProblemContent && !hasSolutionContent)}
           >
-            {uploading ? "Uploading..." : "Upload"}
+            {uploading ? "Creating..." : "Create Problem"}
           </Button>
 
           {uploaded.length > 0 && (
