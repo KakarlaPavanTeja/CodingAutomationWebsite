@@ -24,6 +24,11 @@ RUN npm ci
 # Copy application source
 COPY . .
 
+# Next.js inlines NEXT_PUBLIC_* vars at build time — they must be available here.
+# These are public (browser-safe) keys, safe to bake into the image.
+ENV NEXT_PUBLIC_SUPABASE_URL=https://vrdwbzmkvmlihtztgymg.supabase.co
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZyZHdiem1rdm1saWh0enRneW1nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUzMjMxMjYsImV4cCI6MjA5MDg5OTEyNn0.LvUZmcFJT_obIzjZgcK-H_EZXLBfaFuhlf31hw7M7FU
+
 # Build Next.js
 RUN npm run build
 
