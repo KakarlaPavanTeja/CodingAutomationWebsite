@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import { requireAdminApi } from "@/lib/supabase/server";
 
 export async function GET() {
-  const supabase = await createServiceClient();
+  const auth = await requireAdminApi();
+  if (auth.error) return auth.error;
+  const supabase = auth.supabase;
 
   const [usersRes, problemsRes, runsRes, usageRes] = await Promise.all([
     supabase.from("profiles").select("id, role, status"),

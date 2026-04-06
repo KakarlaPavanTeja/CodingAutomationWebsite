@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import { requireAdminApi } from "@/lib/supabase/server";
 import { createClient as createAdminAuth } from "@supabase/supabase-js";
 
 export async function GET() {
-  const supabase = await createServiceClient();
+  const auth = await requireAdminApi();
+  if (auth.error) return auth.error;
+  const supabase = auth.supabase;
 
   const { data, error } = await supabase
     .from("profiles")
@@ -18,7 +20,9 @@ export async function GET() {
 }
 
 export async function PATCH(request: NextRequest) {
-  const supabase = await createServiceClient();
+  const auth = await requireAdminApi();
+  if (auth.error) return auth.error;
+  const supabase = auth.supabase;
   const body = await request.json();
   const { userId, status, role } = body;
 
@@ -44,7 +48,9 @@ export async function PATCH(request: NextRequest) {
 
 // DELETE — deactivate user: wipe personal data but keep problems
 export async function DELETE(request: NextRequest) {
-  const supabase = await createServiceClient();
+  const auth = await requireAdminApi();
+  if (auth.error) return auth.error;
+  const supabase = auth.supabase;
   const body = await request.json();
   const { userId } = body;
 

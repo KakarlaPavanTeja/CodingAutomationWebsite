@@ -3,7 +3,17 @@ import path from "path";
 import { createClient } from "@/lib/supabase/server";
 import { uploadInputFiles, uploadSharedInputs } from "@/lib/storage-sync";
 
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+const ALLOWED_SOLUTION_EXTS = new Set([".py", ".cpp", ".java", ".js"]);
+const ALLOWED_PROBLEM_EXTS = new Set([".md"]);
+
 export async function POST(request: NextRequest) {
+  // Reject oversized requests early (10MB total — accounts for FormData overhead)
+  const contentLength = parseInt(request.headers.get("content-length") || "0", 10);
+  if (contentLength > 10 * 1024 * 1024) {
+    return NextResponse.json({ error: "Request too large. Max 10MB total." }, { status: 413 });
+  }
+
   // Get authenticated user
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -50,6 +60,15 @@ export async function POST(request: NextRequest) {
 
   const problemMd = formData.get("problemMd") as File | null;
   if (problemMd) {
+    // Validate file type and size
+    const ext = path.extname(problemMd.name).toLowerCase();
+    if (ext && !ALLOWED_PROBLEM_EXTS.has(ext)) {
+      return NextResponse.json({ error: `Invalid problem file type: ${ext}. Only .md files are allowed.` }, { status: 400 });
+    }
+    if (problemMd.size > MAX_FILE_SIZE) {
+      return NextResponse.json({ error: `Problem file too large (${(problemMd.size / 1024 / 1024).toFixed(1)}MB). Max 5MB.` }, { status: 413 });
+    }
+
     const bytes = await problemMd.arrayBuffer();
     const originalContent = Buffer.from(bytes).toString("utf-8");
 
@@ -71,6 +90,15 @@ export async function POST(request: NextRequest) {
 
   const solution = formData.get("solution") as File | null;
   if (solution) {
+    // Validate file type and size
+    const solExt = path.extname(solution.name).toLowerCase();
+    if (solExt && !ALLOWED_SOLUTION_EXTS.has(solExt)) {
+      return NextResponse.json({ error: `Invalid solution file type: ${solExt}. Allowed: ${Array.from(ALLOWED_SOLUTION_EXTS).join(", ")}` }, { status: 400 });
+    }
+    if (solution.size > MAX_FILE_SIZE) {
+      return NextResponse.json({ error: `Solution file too large (${(solution.size / 1024 / 1024).toFixed(1)}MB). Max 5MB.` }, { status: 413 });
+    }
+
     const bytes = await solution.arrayBuffer();
     const ext = path.extname(solution.name) || ".py";
     filesToUpload.push({ name: `solution${ext}`, content: Buffer.from(bytes) });

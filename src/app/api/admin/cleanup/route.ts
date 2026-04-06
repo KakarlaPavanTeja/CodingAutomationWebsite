@@ -1,15 +1,25 @@
-import { NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import { NextRequest, NextResponse } from "next/server";
+import { requireAdminApi, createServiceClient } from "@/lib/supabase/server";
 
 const CLEANUP_HOURS = 5;
 
 /**
  * Cleanup soft-deleted problems whose deleted_at is older than 5 hours.
  * Removes storage files and hard-deletes the DB record.
- * Can be called via cron or manually from admin.
+ * Called via pg_cron (with secret) or manually from admin (with auth).
  */
-export async function POST() {
-  const supabase = await createServiceClient();
+export async function POST(request: NextRequest) {
+  // Allow pg_cron calls with a shared secret, or require admin auth
+  const cronSecret = request.headers.get("x-cron-secret");
+  let supabase;
+
+  if (cronSecret && cronSecret === process.env.CRON_SECRET) {
+    supabase = await createServiceClient();
+  } else {
+    const auth = await requireAdminApi();
+    if (auth.error) return auth.error;
+    supabase = auth.supabase;
+  }
   const cutoff = new Date(Date.now() - CLEANUP_HOURS * 60 * 60 * 1000).toISOString();
 
   // Find problems soft-deleted more than 5 hours ago
