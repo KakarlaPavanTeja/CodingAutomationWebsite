@@ -6,7 +6,7 @@ export async function GET() {
 
   const [usersRes, problemsRes, runsRes, usageRes] = await Promise.all([
     supabase.from("profiles").select("id, role, status"),
-    supabase.from("problems").select("id, status, question_type"),
+    supabase.from("problems").select("id, status, question_type").neq("status", "deleted"),
     supabase.from("pipeline_runs").select("id, status"),
     supabase.from("llm_usage").select("cost_usd, model, purpose, user_id, problem_id, total_tokens"),
   ]);
