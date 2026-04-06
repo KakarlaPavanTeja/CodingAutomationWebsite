@@ -605,13 +605,13 @@ export default function AdminCostsPage() {
           </div>
         </div>
 
-        {/* Per-Problem Breakdown — top 2 by cost */}
+        {/* Per-Problem Breakdown */}
         <div className="rounded-lg border bg-card p-5 space-y-3">
           <h3 className="text-sm font-semibold flex items-center gap-2">
-            <FileText className="h-4 w-4" /> Top Problems by Cost
+            <FileText className="h-4 w-4" /> Cost by Problem
           </h3>
-          <div className="space-y-1">
-            {byProblem.slice(0, 2).map((g) => {
+          <div className="space-y-1 max-h-[300px] overflow-y-auto">
+            {byProblem.map((g) => {
               const isActive = filterProblem === g.key;
               const barW = totalCost > 0 ? (g.cost / totalCost) * 100 : 0;
               return (
@@ -695,7 +695,27 @@ export default function AdminCostsPage() {
                 {filteredUsage.length !== usage.length &&
                   `(${filteredUsage.length} of ${usage.length})`}
               </h3>
-              {/* Model & Purpose filter dropdowns */}
+              {/* Filter dropdowns */}
+              <select
+                value={filterUser}
+                onChange={(e) => setFilterUser(e.target.value)}
+                className="text-xs bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                <option value="">All Users</option>
+                {byUser.map((u) => (
+                  <option key={u.key} value={u.key}>{u.label}</option>
+                ))}
+              </select>
+              <select
+                value={filterProblem}
+                onChange={(e) => setFilterProblem(e.target.value)}
+                className="text-xs bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                <option value="">All Problems</option>
+                {byProblem.map((p) => (
+                  <option key={p.key} value={p.key}>{p.label}</option>
+                ))}
+              </select>
               <select
                 value={filterModel}
                 onChange={(e) => setFilterModel(e.target.value)}
@@ -716,6 +736,14 @@ export default function AdminCostsPage() {
                   <option key={p} value={p} className="capitalize">{p}</option>
                 ))}
               </select>
+              {(filterUser || filterProblem || filterModel || filterPurpose) && (
+                <button
+                  onClick={() => { setFilterUser(""); setFilterProblem(""); setFilterModel(""); setFilterPurpose(""); }}
+                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                >
+                  Clear
+                </button>
+              )}
             </div>
             {/* Totals summary on the right when filters are active */}
             {(filterUser || filterProblem || filterModel || filterPurpose) && (
