@@ -17,7 +17,7 @@ Requires: export OPENAI_API_KEY=sk-...
   OPENAI_RETRY_BASE_SEC  — initial backoff seconds (default: 2)
 
   OPENAI_READ_TIMEOUT_SEC — HTTP read timeout for all purposes (seconds), if set
-  OPENAI_TESTCASES_READ_TIMEOUT_SEC — testcase generator only (default: 900)
+  OPENAI_TESTCASES_READ_TIMEOUT_SEC — testcase generator only (default: 1800)
   Other purposes default to 300s when OPENAI_READ_TIMEOUT_SEC is unset.
 """
 
@@ -74,9 +74,11 @@ def _post_with_retries(url: str, headers: dict, payload: dict, timeout: int) -> 
     """POST with exponential backoff on transient OpenAI errors."""
     max_retries = max(1, int(os.environ.get("OPENAI_MAX_RETRIES", "8")))
     base = float(os.environ.get("OPENAI_RETRY_BASE_SEC", "2"))
+    # Use tuple: (connect_timeout, read_timeout) so slow responses are also killed
+    timeout_tuple = (30, timeout)
     last: requests.Response | None = None
     for attempt in range(max_retries):
-        last = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        last = requests.post(url, headers=headers, json=payload, timeout=timeout_tuple)
         if last.status_code == 200:
             return last
         if attempt + 1 >= max_retries or last.status_code not in _RETRYABLE_STATUS:
@@ -234,7 +236,34 @@ def call_llm(
             payload["temperature"] = temperature
 
     timeout_sec = _resolve_read_timeout_sec(purpose)
-    response = _post_with_retries(url, headers, payload, timeout=timeout_sec)
+
+    # Hard wall-clock deadline: even if keep-alive bytes trickle in,
+    # kill the call after timeout_sec total elapsed time.
+    import threading
+
+    response_box: list[requests.Response | None] = [None]
+    error_box: list[Exception | None] = [None]
+
+    def _do_call():
+        try:
+            response_box[0] = _post_with_retries(url, headers, payload, timeout=timeout_sec)
+        except Exception as e:
+            error_box[0] = e
+
+    thread = threading.Thread(target=_do_call, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_sec + 30)  # extra 30s grace for retries
+
+    if thread.is_alive():
+        raise RuntimeError(
+            f"LLM call timed out after {timeout_sec}s wall-clock (purpose={purpose}, model={model})"
+        )
+
+    if error_box[0]:
+        raise error_box[0]
+
+    response = response_box[0]
+    assert response is not None
 
     if response.status_code != 200:
         raise RuntimeError(
