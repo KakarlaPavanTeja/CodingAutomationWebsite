@@ -29,7 +29,7 @@ const MODES = [
 ];
 
 const SOLUTION_LANGUAGES = [
-  { id: "py", label: "Python", ext: ".py" },
+  { id: "py", label: "Python", ext: ".py", recommended: true },
   { id: "cpp", label: "C++", ext: ".cpp" },
   { id: "java", label: "Java", ext: ".java" },
   { id: "js", label: "Node.js", ext: ".js" },
@@ -57,11 +57,12 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
 
+    const validExts = SOLUTION_LANGUAGES.map((l) => l.ext);
     for (const file of Array.from(e.dataTransfer.files)) {
       if (file.name === "problem.md" || file.name.endsWith(".md")) {
         setProblemFile(file);
         setProblemInputMode("file");
-      } else if (/\.(py|cpp|java|js)$/.test(file.name)) {
+      } else if (validExts.some((ext) => file.name.endsWith(ext))) {
         setSolutionFile(file);
         setSolutionInputMode("file");
       }
@@ -324,7 +325,7 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
 
           {solutionInputMode === "paste" ? (
             <div className="space-y-2">
-              <div className="flex gap-1.5">
+              <div className="flex flex-wrap gap-1.5">
                 {SOLUTION_LANGUAGES.map((lang) => (
                   <button
                     key={lang.id}
@@ -338,9 +339,11 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
                     )}
                   >
                     {lang.label}
+                    {lang.recommended && <span className="ml-1 text-[10px] opacity-75">*</span>}
                   </button>
                 ))}
               </div>
+              <p className="text-[11px] text-muted-foreground">* Python is highly recommended — it properly defines input & output format</p>
               <textarea
                 value={solutionText}
                 onChange={(e) => setSolutionText(e.target.value)}

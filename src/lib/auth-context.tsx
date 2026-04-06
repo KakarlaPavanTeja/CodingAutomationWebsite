@@ -11,7 +11,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
 
-type Profile = { role: string; display_name: string | null };
+type Profile = { role: string; display_name: string | null; status: string };
 
 type AuthContextType = {
   user: User | null;
@@ -43,7 +43,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (u) {
         supabase
           .from("profiles")
-          .select("role, display_name")
+          .select("role, display_name, status")
           .eq("id", u.id)
           .single()
           .then(({ data, error }) => {
@@ -75,7 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (u) {
         supabase
           .from("profiles")
-          .select("role, display_name")
+          .select("role, display_name, status")
           .eq("id", u.id)
           .single()
           .then(({ data }) => setProfile(data));

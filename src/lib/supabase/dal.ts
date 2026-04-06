@@ -6,7 +6,7 @@ export type Profile = {
   email: string;
   display_name: string | null;
   role: "admin" | "problem_setter";
-  status: "active" | "left";
+  status: "active" | "left" | "pending_approval" | "deactivated";
   created_at: string;
   updated_at: string;
 };

@@ -10,6 +10,7 @@ export async function proxy(request: NextRequest) {
     request.nextUrl.pathname === "/reset-password" ||
     request.nextUrl.pathname === "/guide" ||
     request.nextUrl.pathname === "/" ||
+    request.nextUrl.pathname === "/pending-approval" ||
     request.nextUrl.pathname.startsWith("/auth/");
 
   const isApiRoute = request.nextUrl.pathname.startsWith("/api");
@@ -50,6 +51,28 @@ export async function proxy(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
+  }
+
+  // Check if user is pending approval — block from protected pages
+  if (user && !isPublicPage) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("status")
+      .eq("id", user.id)
+      .single();
+
+    if (profile?.status === "pending_approval") {
+      const url = request.nextUrl.clone();
+      url.pathname = "/pending-approval";
+      return NextResponse.redirect(url);
+    }
+
+    if (profile?.status === "deactivated") {
+      await supabase.auth.signOut();
+      const url = request.nextUrl.clone();
+      url.pathname = "/login";
+      return NextResponse.redirect(url);
+    }
   }
 
   // Redirect authenticated users away from login/signup

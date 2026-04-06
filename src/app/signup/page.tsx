@@ -182,9 +182,14 @@ export default function SignupPage() {
       return;
     }
 
-    // Update profile role if user created
+    // Update profile role and set approval status
     if (data.user) {
-      await supabase.from("profiles").update({ role }).eq("id", data.user.id);
+      const profileUpdates: Record<string, string> = { role };
+      // Problem setters need admin approval; admins are auto-approved
+      if (role === "problem_setter") {
+        profileUpdates.status = "pending_approval";
+      }
+      await supabase.from("profiles").update(profileUpdates).eq("id", data.user.id);
       logAudit("signup", data.user.id);
     }
 
@@ -194,8 +199,13 @@ export default function SignupPage() {
     } = await supabase.auth.getSession();
 
     if (session) {
-      toast("Account created successfully!", "success");
-      router.push("/");
+      if (role === "problem_setter") {
+        toast("Account created! Waiting for admin approval.", "success");
+        router.push("/pending-approval");
+      } else {
+        toast("Account created successfully!", "success");
+        router.push("/");
+      }
       router.refresh();
     } else {
       setStep("verify");

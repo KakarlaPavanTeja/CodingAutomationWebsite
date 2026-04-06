@@ -53,8 +53,8 @@ _REASONING_EFFORT_ALLOWED = frozenset(
 
 _RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 
-# Testcase script generation can run long (large N, reasoning models); default 15 min.
-_DEFAULT_TESTCASES_TIMEOUT_SEC = 900
+# Testcase script generation can run long (large N, reasoning models); default 30 min.
+_DEFAULT_TESTCASES_TIMEOUT_SEC = 1800
 _DEFAULT_OTHER_TIMEOUT_SEC = 300
 
 

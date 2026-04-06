@@ -108,6 +108,30 @@ export default function LoginPage() {
     }
 
     logAudit("login_success", data.user?.id);
+
+    // Check if user is pending approval
+    if (data.user) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("status")
+        .eq("id", data.user.id)
+        .single();
+
+      if (profile?.status === "pending_approval") {
+        toast("Your account is pending admin approval.", "info");
+        router.push("/pending-approval");
+        router.refresh();
+        return;
+      }
+
+      if (profile?.status === "deactivated") {
+        await supabase.auth.signOut();
+        setFieldErrors({ form: "This account has been deactivated." });
+        setLoading(false);
+        return;
+      }
+    }
+
     toast("Signed in successfully!", "success");
     router.push("/");
     router.refresh();
