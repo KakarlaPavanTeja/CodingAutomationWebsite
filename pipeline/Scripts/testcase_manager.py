@@ -221,7 +221,11 @@ def main():
             python_executable = "python3" # Fallback
 
         import subprocess
-        result = subprocess.run([python_executable, output_script_path], capture_output=True, text=True)
+        try:
+            result = subprocess.run([python_executable, output_script_path], capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            print("Error: Test case generator script timed out after 10 minutes.")
+            sys.exit(1)
 
         if result.returncode != 0:
             first_error = result.stderr.strip()
@@ -270,7 +274,11 @@ def main():
 
                 # Run the fixed script
                 print(f"Running fixed {output_script_path}...")
-                result = subprocess.run([python_executable, output_script_path], capture_output=True, text=True)
+                try:
+                    result = subprocess.run([python_executable, output_script_path], capture_output=True, text=True, timeout=600)
+                except subprocess.TimeoutExpired:
+                    print("Error: Fixed script also timed out after 10 minutes.")
+                    sys.exit(1)
 
                 if result.returncode != 0:
                     print(f"Error: Fixed script also failed:\n{result.stderr}")
