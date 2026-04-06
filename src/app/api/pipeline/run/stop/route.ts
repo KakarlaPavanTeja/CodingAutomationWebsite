@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getProcessPid } from "@/lib/process-registry";
+import { getProcessPidAsync } from "@/lib/process-registry";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 
 export async function POST(request: NextRequest) {
@@ -62,8 +62,8 @@ export async function POST(request: NextRequest) {
       .eq("status", "processing");
   }
 
-  // Kill the process
-  const pid = getProcessPid(runId);
+  // Kill the process (async lookup checks DB if in-memory miss)
+  const pid = await getProcessPidAsync(runId);
   if (pid) {
     try {
       process.kill(-pid, "SIGTERM");

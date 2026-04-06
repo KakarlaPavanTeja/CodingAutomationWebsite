@@ -15,7 +15,7 @@ const ALLOWED_EVENTS = [
 
 export async function POST(request: NextRequest) {
   const ip = getClientIP(request);
-  const { allowed } = authLimiter.check(`audit:${ip}`);
+  const { allowed } = await authLimiter.check(`audit:${ip}`);
 
   if (!allowed) {
     return NextResponse.json({ error: "Rate limited." }, { status: 429 });

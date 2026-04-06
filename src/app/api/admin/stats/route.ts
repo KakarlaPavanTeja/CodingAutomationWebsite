@@ -6,68 +6,78 @@ export async function GET() {
   if (auth.error) return auth.error;
   const supabase = auth.supabase;
 
-  const [usersRes, problemsRes, runsRes, usageRes] = await Promise.all([
-    supabase.from("profiles").select("id, role, status"),
-    supabase.from("problems").select("id, status, question_type").neq("status", "deleted"),
-    supabase.from("pipeline_runs").select("id, status"),
-    supabase.from("llm_usage").select("cost_usd, model, purpose, user_id, problem_id, total_tokens"),
+  // Run all count queries in parallel using Supabase's count feature + RPC
+  const [
+    usersTotal,
+    usersActive,
+    usersAdmin,
+    usersPending,
+    problemsTotal,
+    problemsDraft,
+    problemsProcessing,
+    problemsCompleted,
+    problemsFailed,
+    problemsFunction,
+    problemsNonfunction,
+    runsTotal,
+    runsRunning,
+    runsCompleted,
+    runsFailed,
+    usageRes,
+  ] = await Promise.all([
+    supabase.from("profiles").select("*", { count: "exact", head: true }),
+    supabase.from("profiles").select("*", { count: "exact", head: true }).eq("status", "active"),
+    supabase.from("profiles").select("*", { count: "exact", head: true }).eq("role", "admin"),
+    supabase.from("profiles").select("*", { count: "exact", head: true }).eq("status", "pending_approval"),
+    supabase.from("problems").select("*", { count: "exact", head: true }).neq("status", "deleted"),
+    supabase.from("problems").select("*", { count: "exact", head: true }).eq("status", "draft"),
+    supabase.from("problems").select("*", { count: "exact", head: true }).eq("status", "processing"),
+    supabase.from("problems").select("*", { count: "exact", head: true }).eq("status", "completed"),
+    supabase.from("problems").select("*", { count: "exact", head: true }).eq("status", "failed"),
+    supabase.from("problems").select("*", { count: "exact", head: true }).eq("question_type", "function").neq("status", "deleted"),
+    supabase.from("problems").select("*", { count: "exact", head: true }).eq("question_type", "nonfunction").neq("status", "deleted"),
+    supabase.from("pipeline_runs").select("*", { count: "exact", head: true }),
+    supabase.from("pipeline_runs").select("*", { count: "exact", head: true }).eq("status", "running"),
+    supabase.from("pipeline_runs").select("*", { count: "exact", head: true }).eq("status", "completed"),
+    supabase.from("pipeline_runs").select("*", { count: "exact", head: true }).eq("status", "failed"),
+    // For costs, we still need to fetch values to sum — but only cost_usd and total_tokens (lightweight)
+    supabase.from("llm_usage").select("cost_usd, total_tokens"),
   ]);
 
-  const users = usersRes.data || [];
-  const problems = problemsRes.data || [];
-  const runs = runsRes.data || [];
+  // Calculate cost totals from the lightweight usage query
   const usage = usageRes.data || [];
-
-  const totalCost = usage.reduce(
-    (sum, u) => sum + parseFloat(u.cost_usd || "0"),
-    0
-  );
+  const totalCost = usage.reduce((sum, u) => sum + parseFloat(u.cost_usd || "0"), 0);
   const totalTokens = usage.reduce((sum, u) => sum + (u.total_tokens || 0), 0);
-  const costByModel: Record<string, number> = {};
-  const costByPurpose: Record<string, number> = {};
-  const costByUser: Record<string, number> = {};
-  const costByProblem: Record<string, number> = {};
-  for (const u of usage) {
-    const cost = parseFloat(u.cost_usd || "0");
-    costByModel[u.model] = (costByModel[u.model] || 0) + cost;
-    costByPurpose[u.purpose] = (costByPurpose[u.purpose] || 0) + cost;
-    if (u.user_id) costByUser[u.user_id] = (costByUser[u.user_id] || 0) + cost;
-    if (u.problem_id) costByProblem[u.problem_id] = (costByProblem[u.problem_id] || 0) + cost;
-  }
 
   return NextResponse.json({
     users: {
-      total: users.length,
-      active: users.filter((u) => u.status === "active").length,
-      admins: users.filter((u) => u.role === "admin").length,
+      total: usersTotal.count ?? 0,
+      active: usersActive.count ?? 0,
+      admins: usersAdmin.count ?? 0,
+      pending: usersPending.count ?? 0,
     },
     problems: {
-      total: problems.length,
+      total: problemsTotal.count ?? 0,
       byStatus: {
-        draft: problems.filter((p) => p.status === "draft").length,
-        processing: problems.filter((p) => p.status === "processing").length,
-        completed: problems.filter((p) => p.status === "completed").length,
-        failed: problems.filter((p) => p.status === "failed").length,
+        draft: problemsDraft.count ?? 0,
+        processing: problemsProcessing.count ?? 0,
+        completed: problemsCompleted.count ?? 0,
+        failed: problemsFailed.count ?? 0,
       },
       byType: {
-        function: problems.filter((p) => p.question_type === "function").length,
-        nonfunction: problems.filter((p) => p.question_type === "nonfunction")
-          .length,
+        function: problemsFunction.count ?? 0,
+        nonfunction: problemsNonfunction.count ?? 0,
       },
     },
     runs: {
-      total: runs.length,
-      running: runs.filter((r) => r.status === "running").length,
-      completed: runs.filter((r) => r.status === "completed").length,
-      failed: runs.filter((r) => r.status === "failed").length,
+      total: runsTotal.count ?? 0,
+      running: runsRunning.count ?? 0,
+      completed: runsCompleted.count ?? 0,
+      failed: runsFailed.count ?? 0,
     },
     costs: {
       total: totalCost,
       totalTokens,
-      byModel: costByModel,
-      byPurpose: costByPurpose,
-      byUser: costByUser,
-      byProblem: costByProblem,
       apiCalls: usage.length,
     },
   });

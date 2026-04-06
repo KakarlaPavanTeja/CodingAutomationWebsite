@@ -4,7 +4,7 @@ import { authLimiter, getClientIP } from "@/lib/rate-limit";
 
 export async function POST(request: NextRequest) {
   const ip = getClientIP(request);
-  const { allowed, resetAt } = authLimiter.check(`admin-secret:${ip}`);
+  const { allowed, resetAt } = await authLimiter.check(`admin-secret:${ip}`);
 
   if (!allowed) {
     return NextResponse.json(

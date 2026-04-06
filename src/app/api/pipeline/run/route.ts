@@ -143,6 +143,20 @@ export async function POST(request: NextRequest) {
     registerProcess(runId, proc.pid);
   }
 
+  // Overall timeout — kill process if it runs longer than 45 minutes
+  const PIPELINE_TIMEOUT_MS = 45 * 60 * 1000;
+  const timeoutHandle = setTimeout(() => {
+    try {
+      process.kill(-proc.pid!, "SIGTERM");
+    } catch {
+      try {
+        process.kill(proc.pid!, "SIGTERM");
+      } catch {
+        // Already dead
+      }
+    }
+  }, PIPELINE_TIMEOUT_MS);
+
   // Write logs to file
   const logStream = createWriteStream(logFilePath, { flags: "w" });
   const timestamp = () => new Date().toISOString();
@@ -176,6 +190,9 @@ export async function POST(request: NextRequest) {
   });
 
   proc.on("close", async (code) => {
+    // Clear the safety timeout
+    clearTimeout(timeoutHandle);
+
     // Unregister from process registry
     if (runId) unregisterProcess(runId);
 

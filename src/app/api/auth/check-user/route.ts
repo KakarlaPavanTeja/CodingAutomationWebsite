@@ -4,7 +4,7 @@ import { passwordResetLimiter, getClientIP } from "@/lib/rate-limit";
 
 export async function POST(request: NextRequest) {
   const ip = getClientIP(request);
-  const { allowed, resetAt } = passwordResetLimiter.check(`check-user:${ip}`);
+  const { allowed, resetAt } = await passwordResetLimiter.check(`check-user:${ip}`);
 
   if (!allowed) {
     return NextResponse.json(
