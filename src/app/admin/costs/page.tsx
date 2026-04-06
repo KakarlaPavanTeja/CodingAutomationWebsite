@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { DollarSign, User, FileText, Filter, BarChart3 } from "lucide-react";
 
@@ -210,23 +210,70 @@ export default function AdminCostsPage() {
       };
     }, [usage]);
 
+  // Helper: apply all filters except one (for cross-filtering dropdowns)
+  const applyFilters = useCallback(
+    (data: UsageEntry[], exclude?: "user" | "problem" | "model" | "purpose") => {
+      let result = data;
+      if (filterUser && exclude !== "user")
+        result = result.filter((u) => matchesFilter(u.user_id, filterUser));
+      if (filterProblem && exclude !== "problem")
+        result = result.filter((u) => matchesFilter(u.problem_id, filterProblem));
+      if (filterModel && exclude !== "model")
+        result = result.filter((u) => u.model === filterModel);
+      if (filterPurpose && exclude !== "purpose")
+        result = result.filter((u) => u.purpose === filterPurpose);
+      return result;
+    },
+    [filterUser, filterProblem, filterModel, filterPurpose]
+  );
+
   // Filtered usage for the table
-  const filteredUsage = useMemo(() => {
-    let result = usage;
-    if (filterUser) {
-      result = result.filter((u) => matchesFilter(u.user_id, filterUser));
+  const filteredUsage = useMemo(
+    () => applyFilters(usage),
+    [usage, applyFilters]
+  );
+
+  // Cross-filtered dropdown options: each shows only values available given the other filters
+  const dropdownOptions = useMemo(() => {
+    const forUser = applyFilters(usage, "user");
+    const forProblem = applyFilters(usage, "problem");
+    const forModel = applyFilters(usage, "model");
+    const forPurpose = applyFilters(usage, "purpose");
+
+    // Users available
+    const userMap = new Map<string, string>();
+    for (const u of forUser) {
+      const key = u.user_id ?? "__null__";
+      if (!userMap.has(key))
+        userMap.set(key, u.profiles?.display_name || u.profiles?.email || "Unknown");
     }
-    if (filterProblem) {
-      result = result.filter((u) => matchesFilter(u.problem_id, filterProblem));
+
+    // Problems available
+    const problemMap = new Map<string, string>();
+    for (const u of forProblem) {
+      const key = u.problem_id ?? "__null__";
+      if (!problemMap.has(key))
+        problemMap.set(
+          key,
+          u.problems?.name || u.problem_name?.split("_")[0] || (u.problem_id ? u.problem_id.slice(0, 8) : "Unknown")
+        );
     }
-    if (filterModel) {
-      result = result.filter((u) => u.model === filterModel);
-    }
-    if (filterPurpose) {
-      result = result.filter((u) => u.purpose === filterPurpose);
-    }
-    return result;
-  }, [usage, filterUser, filterProblem, filterModel, filterPurpose]);
+
+    // Models available
+    const modelSet = new Set<string>();
+    for (const u of forModel) modelSet.add(u.model);
+
+    // Purposes available
+    const purposeSet = new Set<string>();
+    for (const u of forPurpose) purposeSet.add(u.purpose);
+
+    return {
+      users: Array.from(userMap.entries()).map(([key, label]) => ({ key, label })),
+      problems: Array.from(problemMap.entries()).map(([key, label]) => ({ key, label })),
+      models: Array.from(modelSet).sort(),
+      purposes: Array.from(purposeSet).sort(),
+    };
+  }, [usage, applyFilters]);
 
   // Build chart bars with filled-in empty days for the selected range
   const chartData = useMemo(() => {
@@ -695,14 +742,14 @@ export default function AdminCostsPage() {
                 {filteredUsage.length !== usage.length &&
                   `(${filteredUsage.length} of ${usage.length})`}
               </h3>
-              {/* Filter dropdowns */}
+              {/* Cross-filtered dropdowns */}
               <select
                 value={filterUser}
                 onChange={(e) => setFilterUser(e.target.value)}
                 className="text-xs bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               >
                 <option value="">All Users</option>
-                {byUser.map((u) => (
+                {dropdownOptions.users.map((u) => (
                   <option key={u.key} value={u.key}>{u.label}</option>
                 ))}
               </select>
@@ -712,7 +759,7 @@ export default function AdminCostsPage() {
                 className="text-xs bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               >
                 <option value="">All Problems</option>
-                {byProblem.map((p) => (
+                {dropdownOptions.problems.map((p) => (
                   <option key={p.key} value={p.key}>{p.label}</option>
                 ))}
               </select>
@@ -722,7 +769,7 @@ export default function AdminCostsPage() {
                 className="text-xs bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               >
                 <option value="">All Models</option>
-                {allModels.map((m) => (
+                {dropdownOptions.models.map((m) => (
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
@@ -732,7 +779,7 @@ export default function AdminCostsPage() {
                 className="text-xs bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               >
                 <option value="">All Purposes</option>
-                {allPurposes.map((p) => (
+                {dropdownOptions.purposes.map((p) => (
                   <option key={p} value={p} className="capitalize">{p}</option>
                 ))}
               </select>
