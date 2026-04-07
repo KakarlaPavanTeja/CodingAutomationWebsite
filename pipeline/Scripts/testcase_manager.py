@@ -140,7 +140,7 @@ def main():
     # 1. Read Description
     if not os.path.exists(description_path):
         print(f"Error: {description_path} not found.")
-        return
+        sys.exit(1)
     
     with open(description_path, "r") as f:
         description = f.read()
@@ -149,14 +149,14 @@ def main():
     python_solution_path = os.path.join("Outputs", "generatedFullCode", "PYTHON.py")
     if not os.path.exists(python_solution_path):
         print(f"Error: {python_solution_path} not found.")
-        return
+        sys.exit(1)
 
     with open(python_solution_path, "r") as f:
         python_solution = f.read()
     
     if not python_solution.strip():
         print("Error: No python_code found in generatedFullCode/PYTHON.py")
-        return
+        sys.exit(1)
 
     # 3. Read Difficulty
     difficulty_path = os.path.join("Outputs", "generated_difficulty.txt")
@@ -310,6 +310,7 @@ def main():
 
     except Exception as e:
         print(f"An error occurred: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     # Change CWD to the project root if running from Scripts

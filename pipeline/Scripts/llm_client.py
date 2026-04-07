@@ -23,6 +23,7 @@ Requires: export OPENAI_API_KEY=sk-...
 
 from __future__ import annotations
 
+import json as _json
 import os
 import re
 import time
@@ -120,6 +121,175 @@ def _post_with_retries(url: str, headers: dict, payload: dict, timeout: int) -> 
         time.sleep(wait)
     assert last is not None
     return last
+
+
+def _stream_responses_api(
+    url: str, headers: dict, payload: dict, timeout: int
+) -> tuple[str, dict, str | None]:
+    """
+    POST to the Responses API with stream=True and accumulate SSE events.
+
+    Rationale: some PaaS providers (Render, etc.) drop long-idle HTTPS
+    connections. When we call the Responses API non-streaming with
+    reasoning effort=high, OpenAI holds the socket silent for many
+    minutes before sending the full body in one shot — long enough for
+    the egress proxy to kill the connection. Streaming keeps bytes
+    flowing continuously (reasoning/progress/delta events), so the
+    connection is never idle.
+
+    Returns (text_content, usage_dict, model_name_or_None).
+    Retries on transient HTTP errors before the stream starts.
+    """
+    streaming_payload = dict(payload)
+    streaming_payload["stream"] = True
+
+    max_retries = max(1, int(os.environ.get("OPENAI_MAX_RETRIES", "8")))
+    base = float(os.environ.get("OPENAI_RETRY_BASE_SEC", "2"))
+    timeout_tuple = (30, timeout)
+
+    last_err_status: int | None = None
+    last_err_body: str = ""
+
+    for attempt in range(max_retries):
+        attempt_started = time.monotonic()
+        print(
+            f"[LLM] streaming POST attempt {attempt + 1}/{max_retries} url={url} "
+            f"connect_timeout=30s read_timeout={timeout}s",
+            flush=True,
+        )
+        try:
+            resp = requests.post(
+                url,
+                headers=headers,
+                json=streaming_payload,
+                timeout=timeout_tuple,
+                stream=True,
+            )
+        except Exception as exc:
+            elapsed = time.monotonic() - attempt_started
+            print(
+                f"[LLM] streaming HTTP exception after {elapsed:.1f}s on attempt "
+                f"{attempt + 1}: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            raise
+
+        if resp.status_code != 200:
+            body_text = ""
+            try:
+                body_text = resp.text
+            except Exception:
+                pass
+            try:
+                resp.close()
+            except Exception:
+                pass
+            elapsed = time.monotonic() - attempt_started
+            print(
+                f"[LLM] streaming attempt {attempt + 1} got status={resp.status_code} "
+                f"after {elapsed:.1f}s body[:300]={body_text[:300]!r}",
+                flush=True,
+            )
+            last_err_status = resp.status_code
+            last_err_body = body_text
+            if (
+                attempt + 1 >= max_retries
+                or resp.status_code not in _RETRYABLE_STATUS
+            ):
+                raise RuntimeError(
+                    f"LLM streaming call failed: {resp.status_code} - {body_text[:500]}"
+                )
+            wait = min(base * (2**attempt), 120.0)
+            if resp.status_code == 429:
+                ra = resp.headers.get("Retry-After")
+                if ra:
+                    try:
+                        wait = max(wait, float(ra))
+                    except ValueError:
+                        pass
+            print(
+                f"[LLM] streaming retrying in {wait:.1f}s "
+                f"(attempt {attempt + 1}/{max_retries})",
+                flush=True,
+            )
+            time.sleep(wait)
+            continue
+
+        # Status 200 — consume the SSE stream.
+        text_parts: list[str] = []
+        final_response_obj: dict | None = None
+        events_seen = 0
+        deltas_seen = 0
+        last_log_at = time.monotonic()
+        try:
+            for raw_line in resp.iter_lines(chunk_size=8192, decode_unicode=True):
+                if raw_line is None or raw_line == "":
+                    continue
+                if not raw_line.startswith("data:"):
+                    # Could be "event: foo" lines — ignore, data carries the JSON.
+                    continue
+                data_str = raw_line[len("data:"):].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    evt = _json.loads(data_str)
+                except Exception:
+                    continue
+                events_seen += 1
+                evt_type = evt.get("type", "")
+                if evt_type == "response.output_text.delta":
+                    delta = evt.get("delta", "")
+                    if isinstance(delta, str) and delta:
+                        text_parts.append(delta)
+                        deltas_seen += 1
+                elif evt_type in ("response.completed", "response.done"):
+                    final_response_obj = evt.get("response") or final_response_obj
+                elif evt_type in (
+                    "response.failed",
+                    "response.error",
+                    "error",
+                ):
+                    err = (
+                        evt.get("error")
+                        or (evt.get("response") or {}).get("error")
+                        or evt
+                    )
+                    raise RuntimeError(f"Responses API stream error: {err}")
+                # Periodic heartbeat log (every ~30s) so we can see progress.
+                now_ts = time.monotonic()
+                if now_ts - last_log_at >= 30.0:
+                    print(
+                        f"[LLM] streaming heartbeat: elapsed="
+                        f"{now_ts - attempt_started:.1f}s events={events_seen} "
+                        f"deltas={deltas_seen} chars="
+                        f"{sum(len(p) for p in text_parts)}",
+                        flush=True,
+                    )
+                    last_log_at = now_ts
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+
+        total_elapsed = time.monotonic() - attempt_started
+        content = "".join(text_parts).strip()
+        usage: dict = {}
+        model_name: str | None = None
+        if final_response_obj:
+            usage = final_response_obj.get("usage") or {}
+            model_name = final_response_obj.get("model")
+        print(
+            f"[LLM] streaming completed in {total_elapsed:.1f}s "
+            f"events={events_seen} deltas={deltas_seen} chars={len(content)}",
+            flush=True,
+        )
+        return content, usage, model_name
+
+    raise RuntimeError(
+        f"LLM streaming call exhausted retries "
+        f"(last_status={last_err_status}, body={last_err_body[:200]!r})"
+    )
 
 
 def _normalize_usage(usage: dict) -> dict:
@@ -284,16 +454,32 @@ def call_llm(
 
     _call_started = time.monotonic()
 
+    # For the Responses API we use streaming so the socket is never idle —
+    # this prevents Render/NAT/proxy from killing long reasoning calls.
+    # Opt out only if OPENAI_DISABLE_STREAMING=1 is set.
+    use_streaming = (
+        url == RESPONSES_URL
+        and os.environ.get("OPENAI_DISABLE_STREAMING", "").strip() not in ("1", "true", "yes")
+    )
+
     # Hard wall-clock deadline: even if keep-alive bytes trickle in,
     # kill the call after timeout_sec total elapsed time.
     import threading
 
     response_box: list[requests.Response | None] = [None]
+    stream_result_box: list[tuple[str, dict, str | None] | None] = [None]
     error_box: list[Exception | None] = [None]
 
     def _do_call():
         try:
-            response_box[0] = _post_with_retries(url, headers, payload, timeout=timeout_sec)
+            if use_streaming:
+                stream_result_box[0] = _stream_responses_api(
+                    url, headers, payload, timeout=timeout_sec
+                )
+            else:
+                response_box[0] = _post_with_retries(
+                    url, headers, payload, timeout=timeout_sec
+                )
         except Exception as e:
             error_box[0] = e
 
@@ -313,21 +499,33 @@ def call_llm(
         )
 
     elapsed = time.monotonic() - _call_started
-    if error_box[0] is None and response_box[0] is not None:
-        print(
-            f"[LLM] returned in {elapsed:.1f}s status={response_box[0].status_code} "
-            f"purpose={purpose} model={model}",
-            flush=True,
-        )
-    elif error_box[0] is not None:
+    if error_box[0] is not None:
         print(
             f"[LLM] raised in {elapsed:.1f}s purpose={purpose} model={model}: "
             f"{type(error_box[0]).__name__}: {error_box[0]}",
             flush=True,
         )
+    elif use_streaming and stream_result_box[0] is not None:
+        print(
+            f"[LLM] returned in {elapsed:.1f}s (streaming) purpose={purpose} model={model}",
+            flush=True,
+        )
+    elif response_box[0] is not None:
+        print(
+            f"[LLM] returned in {elapsed:.1f}s status={response_box[0].status_code} "
+            f"purpose={purpose} model={model}",
+            flush=True,
+        )
 
     if error_box[0]:
         raise error_box[0]
+
+    if use_streaming:
+        assert stream_result_box[0] is not None
+        content, raw_usage, streamed_model = stream_result_box[0]
+        usage = _normalize_usage(raw_usage or {})
+        usage["model"] = streamed_model or model
+        return content, usage
 
     response = response_box[0]
     assert response is not None
