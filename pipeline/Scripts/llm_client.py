@@ -78,7 +78,28 @@ def _post_with_retries(url: str, headers: dict, payload: dict, timeout: int) -> 
     timeout_tuple = (30, timeout)
     last: requests.Response | None = None
     for attempt in range(max_retries):
-        last = requests.post(url, headers=headers, json=payload, timeout=timeout_tuple)
+        attempt_started = time.monotonic()
+        print(
+            f"[LLM] HTTP POST attempt {attempt + 1}/{max_retries} url={url} "
+            f"connect_timeout=30s read_timeout={timeout}s",
+            flush=True,
+        )
+        try:
+            last = requests.post(url, headers=headers, json=payload, timeout=timeout_tuple)
+        except Exception as exc:
+            elapsed = time.monotonic() - attempt_started
+            print(
+                f"[LLM] HTTP exception after {elapsed:.1f}s on attempt {attempt + 1}: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            raise
+        elapsed = time.monotonic() - attempt_started
+        print(
+            f"[LLM] HTTP attempt {attempt + 1} returned status={last.status_code} "
+            f"after {elapsed:.1f}s",
+            flush=True,
+        )
         if last.status_code == 200:
             return last
         if attempt + 1 >= max_retries or last.status_code not in _RETRYABLE_STATUS:
@@ -237,6 +258,32 @@ def call_llm(
 
     timeout_sec = _resolve_read_timeout_sec(purpose)
 
+    # Diagnostic banner so Render logs show exactly what config the call ran with.
+    _key_tail = (api_key or "")[-4:] if api_key else "----"
+    _base_url_env = os.environ.get("OPENAI_BASE_URL", "")
+    _global_to = os.environ.get("OPENAI_READ_TIMEOUT_SEC", "")
+    _tc_to = os.environ.get("OPENAI_TESTCASES_READ_TIMEOUT_SEC", "")
+    _eff_env = os.environ.get(
+        "OPENAI_REASONING_EFFORT_TESTCASES" if purpose == "testcases" else "OPENAI_REASONING_EFFORT",
+        "",
+    )
+    _api_mode = os.environ.get("OPENAI_API_MODE", "")
+    _effort_in_payload = (payload.get("reasoning") or {}).get("effort") if isinstance(payload.get("reasoning"), dict) else None
+    print(
+        f"[LLM] starting call purpose={purpose} model={model} route={route} "
+        f"effort={_effort_in_payload} timeout={timeout_sec}s key=...{_key_tail} "
+        f"sys_chars={len(system_prompt)} user_chars={len(user_prompt)}",
+        flush=True,
+    )
+    print(
+        f"[LLM] env OPENAI_BASE_URL={_base_url_env!r} OPENAI_API_MODE={_api_mode!r} "
+        f"OPENAI_READ_TIMEOUT_SEC={_global_to!r} OPENAI_TESTCASES_READ_TIMEOUT_SEC={_tc_to!r} "
+        f"OPENAI_REASONING_EFFORT(_TESTCASES)={_eff_env!r}",
+        flush=True,
+    )
+
+    _call_started = time.monotonic()
+
     # Hard wall-clock deadline: even if keep-alive bytes trickle in,
     # kill the call after timeout_sec total elapsed time.
     import threading
@@ -255,8 +302,28 @@ def call_llm(
     thread.join(timeout=timeout_sec + 30)  # extra 30s grace for retries
 
     if thread.is_alive():
+        elapsed = time.monotonic() - _call_started
+        print(
+            f"[LLM] WALL-CLOCK TIMEOUT after {elapsed:.1f}s "
+            f"(purpose={purpose}, model={model}, budget={timeout_sec}s)",
+            flush=True,
+        )
         raise RuntimeError(
             f"LLM call timed out after {timeout_sec}s wall-clock (purpose={purpose}, model={model})"
+        )
+
+    elapsed = time.monotonic() - _call_started
+    if error_box[0] is None and response_box[0] is not None:
+        print(
+            f"[LLM] returned in {elapsed:.1f}s status={response_box[0].status_code} "
+            f"purpose={purpose} model={model}",
+            flush=True,
+        )
+    elif error_box[0] is not None:
+        print(
+            f"[LLM] raised in {elapsed:.1f}s purpose={purpose} model={model}: "
+            f"{type(error_box[0]).__name__}: {error_box[0]}",
+            flush=True,
         )
 
     if error_box[0]:
