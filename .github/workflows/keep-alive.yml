@@ -1,0 +1,48 @@
+name: Keep Render service warm
+
+# Render free tier spins containers down after ~15 min of inactivity.
+# This workflow pings the site every 5 minutes so it never spins down.
+#
+# Notes:
+# - GitHub Actions scheduled workflows can be delayed 5-15 min on free tier
+#   when the runners are busy, so we schedule every 5 min to stay safely
+#   under Render's 15 min idle threshold.
+# - The ping uses a short timeout so a cold-start doesn't waste runner minutes.
+# - You can also trigger manually from the Actions tab ("Run workflow").
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping Render service
+        run: |
+          URL="https://coding-automation.onrender.com/"
+          echo "Pinging $URL ..."
+          # -sS: silent but show errors; -o /dev/null: discard body;
+          # -w: print status code; --max-time 90: allow cold-start up to 90s;
+          # --retry 3 --retry-delay 10: retry transient 5xx / connection errors.
+          HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
+            --max-time 90 \
+            --retry 3 \
+            --retry-delay 10 \
+            --retry-connrefused \
+            "$URL") || HTTP_CODE="000"
+          echo "HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "301" ] || [ "$HTTP_CODE" = "302" ] || [ "$HTTP_CODE" = "307" ] || [ "$HTTP_CODE" = "308" ]; then
+            echo "Service is awake."
+            exit 0
+          fi
+          echo "Service returned non-success status: $HTTP_CODE"
+          # Don't fail the workflow on transient Cloudflare 5xx during cold-start —
+          # the next scheduled run will retry. Only warn.
+          exit 0
