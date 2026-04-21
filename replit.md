@@ -27,7 +27,7 @@ New auth tables (added for Auth.js):
 
 - [x] Phase 1: Schema dumped from Supabase (`migrations/0001_supabase_schema.sql`)
 - [x] Phase 2: Drizzle schema + tables created in Replit Postgres
-- [ ] Phase 3: Refactor `src/lib/supabase/*` → `src/lib/db/*` queries (~30 files)
+- [x] Phase 3: All `supabase.from(...)` DB queries refactored to Drizzle (lib helpers, all API routes, client pages now use API endpoints). Supabase auth (`supabase.auth.*`) still in use — Phase 5 swaps it. Service client retained only for Storage operations until Phase 4.
 - [ ] Phase 4: Replace Supabase Storage → Replit App Storage
 - [ ] Phase 5: Build Auth.js (login, signup, sessions, reset, admin approval)
 - [ ] Phase 6: Migrate data rows from Supabase to Replit

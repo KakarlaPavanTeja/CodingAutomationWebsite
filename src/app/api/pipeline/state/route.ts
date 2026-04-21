@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { eq } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import { pipelineStates } from "@/lib/db/schema";
 
 export async function GET(request: NextRequest) {
   const problemId = request.nextUrl.searchParams.get("problemId");
@@ -13,17 +16,32 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { data, error } = await supabase
-    .from("pipeline_states")
-    .select("*")
-    .eq("problem_id", problemId)
-    .single();
+  const rows = await db
+    .select()
+    .from(pipelineStates)
+    .where(eq(pipelineStates.problemId, problemId))
+    .limit(1);
+  const row = rows[0];
 
-  if (error || !data) {
+  if (!row) {
     return NextResponse.json({ state: null });
   }
 
-  return NextResponse.json({ state: data });
+  return NextResponse.json({
+    state: {
+      id: row.id,
+      problem_id: row.problemId,
+      user_id: row.userId,
+      question_type: row.questionType,
+      mode: row.mode,
+      enabled_languages: row.enabledLanguages,
+      testcase_count: row.testcaseCount,
+      step_configs: row.stepConfigs,
+      step_statuses: row.stepStatuses,
+      created_at: row.createdAt,
+      updated_at: row.updatedAt,
+    },
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -48,27 +66,33 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "problemId required" }, { status: 400 });
   }
 
-  // Upsert: create or update
-  const { error } = await supabase
-    .from("pipeline_states")
-    .upsert(
-      {
-        problem_id: problemId,
-        user_id: user.id,
-        question_type: questionType || "function",
-        mode: mode || "practice",
-        enabled_languages: enabledLanguages || ["Python", "C++", "Java", "Node.js"],
-        testcase_count: testcaseCount || 48,
-        step_configs: stepConfigs || {},
-        step_statuses: stepStatuses || {},
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "problem_id" }
-    );
+  const values = {
+    problemId,
+    userId: user.id,
+    questionType: questionType || "function",
+    mode: mode || "practice",
+    enabledLanguages: enabledLanguages || ["Python", "C++", "Java", "Node.js"],
+    testcaseCount: testcaseCount ?? 48,
+    stepConfigs: stepConfigs || {},
+    stepStatuses: stepStatuses || {},
+    updatedAt: new Date(),
+  };
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  await db
+    .insert(pipelineStates)
+    .values(values)
+    .onConflictDoUpdate({
+      target: pipelineStates.problemId,
+      set: {
+        questionType: values.questionType,
+        mode: values.mode,
+        enabledLanguages: values.enabledLanguages,
+        testcaseCount: values.testcaseCount,
+        stepConfigs: values.stepConfigs,
+        stepStatuses: values.stepStatuses,
+        updatedAt: values.updatedAt,
+      },
+    });
 
   return NextResponse.json({ success: true });
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { DollarSign, User, FileText, Filter, BarChart3 } from "lucide-react";
 
 type UsageEntry = {
@@ -106,20 +105,21 @@ export default function AdminCostsPage() {
   const [filterPurpose, setFilterPurpose] = useState("");
   const [barMode, setBarMode] = useState<"cost" | "tokens" | "calls">("cost");
   const [timeRange, setTimeRange] = useState<TimeRange>("1m");
-  const supabase = createClient();
 
   useEffect(() => {
     const fetchUsage = async () => {
-      const { data } = await supabase
-        .from("llm_usage")
-        .select("*, profiles:user_id(email, display_name), problems:problem_id(name)")
-        .order("created_at", { ascending: false })
-        .limit(1000);
-      setUsage((data as UsageEntry[]) || []);
-      setLoading(false);
+      try {
+        const res = await fetch("/api/admin/usage");
+        const data = await res.json();
+        setUsage((data.usage as UsageEntry[]) || []);
+      } catch {
+        setUsage([]);
+      } finally {
+        setLoading(false);
+      }
     };
     fetchUsage();
-  }, [supabase]);
+  }, []);
 
   // ---- Derived data ----
   const { totalCost, totalTokens, byUser, byProblem, dailyBars, allModels, allPurposes } =

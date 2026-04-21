@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { desc, eq } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import { problems, pipelineRuns } from "@/lib/db/schema";
+import { getProfileRoleById } from "@/lib/db/queries";
 
 export async function GET(
   request: NextRequest,
@@ -13,34 +17,54 @@ export async function GET(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Fetch problem
-  const { data: problem, error: problemError } = await supabase
-    .from("problems")
-    .select("*")
-    .eq("id", id)
-    .single();
+  const problemRows = await db.select().from(problems).where(eq(problems.id, id)).limit(1);
+  const problem = problemRows[0];
 
-  if (problemError || !problem) {
+  if (!problem) {
     return NextResponse.json({ error: "Problem not found" }, { status: 404 });
   }
 
-  // Check ownership (unless admin)
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .single();
+  const profile = await getProfileRoleById(user.id);
 
-  if (problem.created_by !== user.id && profile?.role !== "admin") {
+  if (problem.createdBy !== user.id && profile?.role !== "admin") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Fetch pipeline runs for this problem
-  const { data: runs } = await supabase
-    .from("pipeline_runs")
-    .select("*")
-    .eq("problem_id", id)
-    .order("started_at", { ascending: false });
+  const runs = await db
+    .select()
+    .from(pipelineRuns)
+    .where(eq(pipelineRuns.problemId, id))
+    .orderBy(desc(pipelineRuns.startedAt));
 
-  return NextResponse.json({ problem, runs: runs || [] });
+  // Snake-case for legacy frontend
+  const problemOut = {
+    id: problem.id,
+    created_by: problem.createdBy,
+    name: problem.name,
+    question_type: problem.questionType,
+    mode: problem.mode,
+    scenario_level: problem.scenarioLevel,
+    languages: problem.languages,
+    status: problem.status,
+    storage_path: problem.storagePath,
+    created_at: problem.createdAt,
+    updated_at: problem.updatedAt,
+    deletion_reason: problem.deletionReason,
+    deleted_at: problem.deletedAt,
+  };
+
+  const runsOut = runs.map((r) => ({
+    id: r.id,
+    problem_id: r.problemId,
+    user_id: r.userId,
+    step_id: r.stepId,
+    status: r.status,
+    exit_code: r.exitCode,
+    started_at: r.startedAt,
+    finished_at: r.finishedAt,
+    logs_summary: r.logsSummary,
+    pid: r.pid,
+  }));
+
+  return NextResponse.json({ problem: problemOut, runs: runsOut });
 }

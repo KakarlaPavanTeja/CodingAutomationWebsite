@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { and, eq, lt } from "drizzle-orm";
 import { requireAdminApi, createServiceClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import { problems } from "@/lib/db/schema";
 
 const CLEANUP_HOURS = 5;
 
@@ -9,35 +12,32 @@ const CLEANUP_HOURS = 5;
  * Called via pg_cron (with secret) or manually from admin (with auth).
  */
 export async function POST(request: NextRequest) {
-  // Allow pg_cron calls with a shared secret, or require admin auth
   const cronSecret = request.headers.get("x-cron-secret");
-  let supabase;
+  let storageClient;
 
   if (cronSecret && cronSecret === process.env.CRON_SECRET) {
-    supabase = await createServiceClient();
+    storageClient = await createServiceClient();
   } else {
     const auth = await requireAdminApi();
     if (auth.error) return auth.error;
-    supabase = auth.supabase;
+    storageClient = auth.supabase;
   }
-  const cutoff = new Date(Date.now() - CLEANUP_HOURS * 60 * 60 * 1000).toISOString();
 
-  // Find problems soft-deleted more than 5 hours ago
-  const { data: problems } = await supabase
-    .from("problems")
-    .select("id")
-    .eq("status", "deleted")
-    .lt("deleted_at", cutoff);
+  const cutoff = new Date(Date.now() - CLEANUP_HOURS * 60 * 60 * 1000);
 
-  if (!problems || problems.length === 0) {
+  const stale = await db
+    .select({ id: problems.id })
+    .from(problems)
+    .where(and(eq(problems.status, "deleted"), lt(problems.deletedAt, cutoff)));
+
+  if (stale.length === 0) {
     return NextResponse.json({ cleaned: 0 });
   }
 
-  const storage = supabase.storage.from(process.env.STORAGE_BUCKET || "pipeline-files");
+  const storage = storageClient.storage.from(process.env.STORAGE_BUCKET || "pipeline-files");
   let cleaned = 0;
 
-  for (const problem of problems) {
-    // Remove storage files
+  for (const problem of stale) {
     try {
       for (const subfolder of ["inputs", "outputs", "logs"]) {
         const { data: files } = await storage.list(`${problem.id}/${subfolder}`, { limit: 1000 });
@@ -50,8 +50,7 @@ export async function POST(request: NextRequest) {
       // Continue even if storage cleanup fails
     }
 
-    // Hard delete from DB
-    await supabase.from("problems").delete().eq("id", problem.id);
+    await db.delete(problems).where(eq(problems.id, problem.id));
     cleaned++;
   }
 

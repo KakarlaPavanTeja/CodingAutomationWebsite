@@ -1,5 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
+import { desc, eq } from "drizzle-orm";
 import { createClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import { pipelineRuns } from "@/lib/db/schema";
+
+function toLegacyRun(r: typeof pipelineRuns.$inferSelect) {
+  return {
+    id: r.id,
+    problem_id: r.problemId,
+    user_id: r.userId,
+    step_id: r.stepId,
+    status: r.status,
+    exit_code: r.exitCode,
+    started_at: r.startedAt,
+    finished_at: r.finishedAt,
+    logs_summary: r.logsSummary,
+    pid: r.pid,
+  };
+}
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -12,31 +30,20 @@ export async function GET(request: NextRequest) {
   const problemId = request.nextUrl.searchParams.get("problemId");
 
   if (runId) {
-    const { data, error } = await supabase
-      .from("pipeline_runs")
-      .select("*")
-      .eq("id", runId)
-      .single();
-
-    if (error || !data) {
+    const rows = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, runId)).limit(1);
+    if (!rows[0]) {
       return NextResponse.json({ error: "Run not found" }, { status: 404 });
     }
-
-    return NextResponse.json({ run: data });
+    return NextResponse.json({ run: toLegacyRun(rows[0]) });
   }
 
   if (problemId) {
-    const { data, error } = await supabase
-      .from("pipeline_runs")
-      .select("*")
-      .eq("problem_id", problemId)
-      .order("started_at", { ascending: false });
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-
-    return NextResponse.json({ runs: data || [] });
+    const rows = await db
+      .select()
+      .from(pipelineRuns)
+      .where(eq(pipelineRuns.problemId, problemId))
+      .orderBy(desc(pipelineRuns.startedAt));
+    return NextResponse.json({ runs: rows.map(toLegacyRun) });
   }
 
   return NextResponse.json({ error: "runId or problemId required" }, { status: 400 });

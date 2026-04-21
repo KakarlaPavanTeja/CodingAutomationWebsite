@@ -16,6 +16,9 @@ import { mkdir, writeFile, readFile, readdir, stat, rm, cp } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 import os from "os";
+import { and, desc, eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { pipelineLogs } from "@/lib/db/schema";
 import type { OutputFile } from "@/types/pipeline";
 
 const BUCKET = process.env.STORAGE_BUCKET || "pipeline-files";
@@ -159,21 +162,22 @@ export async function uploadLog(
   runId: string,
   content: string
 ): Promise<void> {
-  const { supabase } = await getStorage();
-
   // Upload to storage as backup
   await uploadFile(`${problemId}/logs/${stepId}.log`, content);
 
   // Upsert into pipeline_logs table for fast retrieval
-  await supabase.from("pipeline_logs").upsert(
-    {
-      problem_id: problemId,
-      step_id: stepId,
-      run_id: runId,
+  await db
+    .insert(pipelineLogs)
+    .values({
+      problemId,
+      stepId,
+      runId,
       content,
-    },
-    { onConflict: "run_id" }
-  );
+    })
+    .onConflictDoUpdate({
+      target: pipelineLogs.runId,
+      set: { content, createdAt: new Date() },
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -293,26 +297,22 @@ export async function getLogContent(
   stepId: string,
   runId?: string
 ): Promise<string | null> {
-  const { supabase } = await getStorage();
-
-  let query = supabase
-    .from("pipeline_logs")
-    .select("content")
-    .eq("problem_id", problemId)
-    .eq("step_id", stepId)
-    .order("created_at", { ascending: false })
-    .limit(1);
-
   if (runId) {
-    query = supabase
-      .from("pipeline_logs")
-      .select("content")
-      .eq("run_id", runId)
+    const rows = await db
+      .select({ content: pipelineLogs.content })
+      .from(pipelineLogs)
+      .where(eq(pipelineLogs.runId, runId))
       .limit(1);
+    return rows[0]?.content ?? null;
   }
 
-  const { data } = await query.single();
-  return data?.content || null;
+  const rows = await db
+    .select({ content: pipelineLogs.content })
+    .from(pipelineLogs)
+    .where(and(eq(pipelineLogs.problemId, problemId), eq(pipelineLogs.stepId, stepId)))
+    .orderBy(desc(pipelineLogs.createdAt))
+    .limit(1);
+  return rows[0]?.content ?? null;
 }
 
 // ---------------------------------------------------------------------------

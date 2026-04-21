@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import { authAuditLog } from "@/lib/db/schema";
 import { authLimiter, getClientIP } from "@/lib/rate-limit";
 
 const ALLOWED_EVENTS = [
@@ -41,14 +42,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid event type." }, { status: 400 });
   }
 
-  const supabase = await createServiceClient();
   const userAgent = request.headers.get("user-agent") || "";
 
-  await supabase.from("auth_audit_log").insert({
-    event_type,
-    user_id: user_id || null,
-    ip_address: ip,
-    user_agent: userAgent,
+  await db.insert(authAuditLog).values({
+    eventType: event_type,
+    userId: user_id || null,
+    ipAddress: ip,
+    userAgent,
     metadata: metadata || {},
   });
 

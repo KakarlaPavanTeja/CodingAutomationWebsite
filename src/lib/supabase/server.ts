@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { getProfileRoleById } from "@/lib/db/queries";
 
 export async function createClient() {
   const cookieStore = await cookies();
@@ -19,7 +20,6 @@ export async function createClient() {
             );
           } catch {
             // Called from Server Component — ignore.
-            // Middleware will refresh the session.
           }
         },
       },
@@ -39,14 +39,13 @@ export async function createServiceClient() {
 
 /**
  * Verify the current caller is an authenticated admin.
- * Use in API routes: const { error } = await requireAdminApi();
- * Returns the service client + caller profile on success, or an error Response.
+ * Returns the service client (still needed for Storage operations until Phase 4)
+ * + caller profile on success, or an error Response.
  */
 export async function requireAdminApi(): Promise<
   | { supabase: Awaited<ReturnType<typeof createServiceClient>>; profile: { id: string; role: string }; error?: never }
   | { error: Response; supabase?: never; profile?: never }
 > {
-  // Use the anon client (reads caller's session cookie)
   const anonClient = await createClient();
   const { data: { user } } = await anonClient.auth.getUser();
 
@@ -54,17 +53,12 @@ export async function requireAdminApi(): Promise<
     return { error: new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } }) };
   }
 
-  const { data: profile } = await anonClient
-    .from("profiles")
-    .select("id, role")
-    .eq("id", user.id)
-    .single();
+  const profile = await getProfileRoleById(user.id);
 
   if (!profile || profile.role !== "admin") {
     return { error: new Response(JSON.stringify({ error: "Forbidden" }), { status: 403, headers: { "Content-Type": "application/json" } }) };
   }
 
-  // Return service client for admin operations
   const supabase = await createServiceClient();
   return { supabase, profile };
 }

@@ -1,5 +1,7 @@
 import { cache } from "react";
 import { createClient } from "./server";
+import { getProfileById } from "@/lib/db/queries";
+import type { Profile as DbProfile } from "@/lib/db/schema";
 
 export type Profile = {
   id: string;
@@ -10,6 +12,18 @@ export type Profile = {
   created_at: string;
   updated_at: string;
 };
+
+function toLegacyProfile(p: DbProfile): Profile {
+  return {
+    id: p.id,
+    email: p.email,
+    display_name: p.displayName,
+    role: p.role as Profile["role"],
+    status: p.status as Profile["status"],
+    created_at: (p.createdAt ?? new Date()).toISOString(),
+    updated_at: (p.updatedAt ?? new Date()).toISOString(),
+  };
+}
 
 export const getSession = cache(async () => {
   const supabase = await createClient();
@@ -30,15 +44,8 @@ export const getUser = cache(async () => {
 export const getProfile = cache(async (): Promise<Profile | null> => {
   const user = await getUser();
   if (!user) return null;
-
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .single();
-
-  return data as Profile | null;
+  const profile = await getProfileById(user.id);
+  return profile ? toLegacyProfile(profile) : null;
 });
 
 export async function requireAuth() {

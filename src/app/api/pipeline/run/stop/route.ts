@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { and, eq } from "drizzle-orm";
 import { getProcessPidAsync } from "@/lib/process-registry";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import { pipelineRuns, pipelineStates, problems } from "@/lib/db/schema";
 
 export async function POST(request: NextRequest) {
   const { runId } = await request.json();
@@ -9,60 +12,54 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "runId is required" }, { status: 400 });
   }
 
-  // Auth check
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Immediately mark the run as failed in the DB so page reloads don't resume it
-  const serviceClient = await createServiceClient();
-  const { data: run } = await serviceClient
-    .from("pipeline_runs")
-    .select("problem_id, step_id")
-    .eq("id", runId)
-    .single();
+  const runRows = await db
+    .select({ problemId: pipelineRuns.problemId, stepId: pipelineRuns.stepId })
+    .from(pipelineRuns)
+    .where(eq(pipelineRuns.id, runId))
+    .limit(1);
+  const run = runRows[0];
 
-  await serviceClient
-    .from("pipeline_runs")
-    .update({
+  await db
+    .update(pipelineRuns)
+    .set({
       status: "failed",
-      exit_code: -1,
-      finished_at: new Date().toISOString(),
+      exitCode: -1,
+      finishedAt: new Date(),
     })
-    .eq("id", runId);
+    .where(eq(pipelineRuns.id, runId));
 
-  // Update pipeline_states so the step shows as failed
   if (run) {
-    const { data: stateData } = await serviceClient
-      .from("pipeline_states")
-      .select("step_statuses")
-      .eq("problem_id", run.problem_id)
-      .single();
+    const stateRows = await db
+      .select({ stepStatuses: pipelineStates.stepStatuses })
+      .from(pipelineStates)
+      .where(eq(pipelineStates.problemId, run.problemId))
+      .limit(1);
 
-    if (stateData) {
-      const stepStatuses = stateData.step_statuses || {};
-      stepStatuses[run.step_id] = {
+    if (stateRows[0]) {
+      const stepStatuses = (stateRows[0].stepStatuses as Record<string, unknown>) || {};
+      stepStatuses[run.stepId] = {
         status: "failed",
         exitCode: -1,
         endTime: Date.now(),
       };
-      await serviceClient
-        .from("pipeline_states")
-        .update({ step_statuses: stepStatuses, updated_at: new Date().toISOString() })
-        .eq("problem_id", run.problem_id);
+      await db
+        .update(pipelineStates)
+        .set({ stepStatuses, updatedAt: new Date() })
+        .where(eq(pipelineStates.problemId, run.problemId));
     }
 
-    // Reset problem status from "processing" back to "draft"
-    await serviceClient
-      .from("problems")
-      .update({ status: "draft", updated_at: new Date().toISOString() })
-      .eq("id", run.problem_id)
-      .eq("status", "processing");
+    await db
+      .update(problems)
+      .set({ status: "draft", updatedAt: new Date() })
+      .where(and(eq(problems.id, run.problemId), eq(problems.status, "processing")));
   }
 
-  // Kill the process (async lookup checks DB if in-memory miss)
   const pid = await getProcessPidAsync(runId);
   if (pid) {
     try {

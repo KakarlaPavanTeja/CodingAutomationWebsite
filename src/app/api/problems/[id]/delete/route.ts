@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { eq } from "drizzle-orm";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import { problems } from "@/lib/db/schema";
+import { getProfileRoleById } from "@/lib/db/queries";
 
-// Problem setter requests deletion
+// Problem setter requests deletion (or admin soft-deletes)
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -24,29 +28,22 @@ export async function POST(
     );
   }
 
-  const serviceClient = await createServiceClient();
-  const { data: problem } = await serviceClient
-    .from("problems")
-    .select("created_by, status")
-    .eq("id", id)
-    .single();
+  const problemRows = await db
+    .select({ createdBy: problems.createdBy, status: problems.status })
+    .from(problems)
+    .where(eq(problems.id, id))
+    .limit(1);
+  const problem = problemRows[0];
 
   if (!problem) {
     return NextResponse.json({ error: "Problem not found" }, { status: 404 });
   }
 
-  // Check if admin
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .single();
-
+  const profile = await getProfileRoleById(user.id);
   const isAdmin = profile?.role === "admin";
 
-  // Problem setter: can only request deletion for their own non-completed problems
   if (!isAdmin) {
-    if (problem.created_by !== user.id) {
+    if (problem.createdBy !== user.id) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     if (problem.status === "completed") {
@@ -62,37 +59,28 @@ export async function POST(
       );
     }
 
-    // Request deletion (pending admin approval)
-    const { error } = await serviceClient
-      .from("problems")
-      .update({
+    await db
+      .update(problems)
+      .set({
         status: "deletion_pending",
-        deletion_reason: reason.trim(),
-        updated_at: new Date().toISOString(),
+        deletionReason: reason.trim(),
+        updatedAt: new Date(),
       })
-      .eq("id", id);
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+      .where(eq(problems.id, id));
 
     return NextResponse.json({ success: true });
   }
 
-  // Admin: soft-delete immediately (any status)
-  const { error } = await serviceClient
-    .from("problems")
-    .update({
+  // Admin: soft-delete immediately
+  await db
+    .update(problems)
+    .set({
       status: "deleted",
-      deletion_reason: reason.trim(),
-      deleted_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      deletionReason: reason.trim(),
+      deletedAt: new Date(),
+      updatedAt: new Date(),
     })
-    .eq("id", id);
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+    .where(eq(problems.id, id));
 
   return NextResponse.json({ success: true, deletedAt: new Date().toISOString() });
 }
@@ -110,19 +98,14 @@ export async function DELETE(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .single();
-
+  const profile = await getProfileRoleById(user.id);
   if (profile?.role !== "admin") {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
   const serviceClient = await createServiceClient();
 
-  // Clean up storage files
+  // Storage cleanup (Supabase Storage — Phase 4 will replace)
   try {
     const storage = serviceClient.storage.from(process.env.STORAGE_BUCKET || "pipeline-files");
     for (const subfolder of ["inputs", "outputs", "logs"]) {
@@ -133,18 +116,11 @@ export async function DELETE(
       }
     }
   } catch {
-    // Storage cleanup failed — continue with DB delete
+    // Continue even if storage cleanup fails
   }
 
-  // Hard delete from DB (cascades to pipeline_runs, pipeline_logs)
-  const { error } = await serviceClient
-    .from("problems")
-    .delete()
-    .eq("id", id);
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  // Hard delete (cascades to pipeline_runs, pipeline_logs)
+  await db.delete(problems).where(eq(problems.id, id));
 
   return NextResponse.json({ success: true });
 }

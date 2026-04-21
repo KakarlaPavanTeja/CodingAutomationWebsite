@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
 
 type Problem = {
   id: string;
@@ -35,17 +34,17 @@ export default function AdminProblemsPage() {
   const [filterType, setFilterType] = useState("all");
   const [filterMode, setFilterMode] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const supabase = createClient();
 
   const fetchProblems = async () => {
-    const { data } = await supabase
-      .from("problems")
-      .select("*, profiles:created_by(email, display_name)")
-      .neq("status", "deleted")
-      .order("created_at", { ascending: false });
-
-    setProblems((data as Problem[]) || []);
-    setLoading(false);
+    try {
+      const res = await fetch("/api/problems");
+      const data = await res.json();
+      setProblems((data.problems as Problem[]) || []);
+    } catch {
+      setProblems([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {

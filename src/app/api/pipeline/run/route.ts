@@ -3,8 +3,11 @@ import { spawn } from "child_process";
 import path from "path";
 import { mkdirSync, createWriteStream } from "fs";
 import { readFile } from "fs/promises";
+import { eq } from "drizzle-orm";
 import { buildCommand } from "@/lib/pipeline-config";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import { problems, pipelineRuns, pipelineStates } from "@/lib/db/schema";
 import {
   createTempWorkspace,
   uploadOutputsFromDir,
@@ -25,7 +28,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "problemId is required" }, { status: 400 });
   }
 
-  // Determine pipeline scripts location
   const pipelineRoot = process.env.PIPELINE_ROOT;
   const scriptsDir = process.env.PIPELINE_SCRIPTS_DIR ||
     (pipelineRoot ? path.join(pipelineRoot, "Scripts") : null);
@@ -39,12 +41,9 @@ export async function POST(request: NextRequest) {
 
   const { script, args } = buildCommand(stepId, mode, subSteps, languages, testcaseCount);
 
-  // The script path is relative like "Scripts/generate_full_question.py"
-  // We need the absolute path to the script
   const scriptBasename = path.basename(script);
   const scriptPath = path.join(scriptsDir, scriptBasename);
 
-  // Create pipeline_run record
   let runId: string | null = null;
   let userId: string | null = null;
   let previousStatus: string | null = null;
@@ -56,39 +55,34 @@ export async function POST(request: NextRequest) {
     if (user) {
       userId = user.id;
 
-      // Capture previous status before updating
-      const { data: problemData } = await supabase
-        .from("problems")
-        .select("status")
-        .eq("id", problemId)
-        .single();
-      previousStatus = problemData?.status || null;
+      const probRows = await db
+        .select({ status: problems.status })
+        .from(problems)
+        .where(eq(problems.id, problemId))
+        .limit(1);
+      previousStatus = probRows[0]?.status ?? null;
 
-      // Update problem status
-      await supabase
-        .from("problems")
-        .update({ status: "processing", updated_at: new Date().toISOString() })
-        .eq("id", problemId);
+      await db
+        .update(problems)
+        .set({ status: "processing", updatedAt: new Date() })
+        .where(eq(problems.id, problemId));
 
-      // Insert pipeline run record
-      const { data: run } = await supabase
-        .from("pipeline_runs")
-        .insert({
-          problem_id: problemId,
-          user_id: user.id,
-          step_id: stepId,
+      const runRows = await db
+        .insert(pipelineRuns)
+        .values({
+          problemId,
+          userId: user.id,
+          stepId,
           status: "running",
         })
-        .select("id")
-        .single();
+        .returning({ id: pipelineRuns.id });
 
-      runId = run?.id || null;
+      runId = runRows[0]?.id ?? null;
     }
   } catch {
     // Don't block execution
   }
 
-  // Create temporary workspace — downloads inputs + outputs from Supabase Storage
   let tmpDir: string;
   try {
     tmpDir = await createTempWorkspace(problemId);
@@ -99,16 +93,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Create log file
   const logsDir = path.join(tmpDir, "logs");
   mkdirSync(logsDir, { recursive: true });
   const logFilePath = path.join(logsDir, `${stepId}.log`);
 
-  // Start periodic sync — uploads new outputs every 5s during execution
   const outputsDir = path.join(tmpDir, "Outputs");
   const periodicSync = startPeriodicSync(problemId, outputsDir, 5000);
 
-  // Start periodic log sync — uploads log content to DB every 3s for live tailing
   let logSyncInterval: ReturnType<typeof setInterval> | null = null;
   if (runId) {
     logSyncInterval = setInterval(async () => {
@@ -123,7 +114,6 @@ export async function POST(request: NextRequest) {
     }, 3000);
   }
 
-  // Spawn Python process
   const proc = spawn(pythonPath, [scriptPath, ...args], {
     cwd: tmpDir,
     env: {
@@ -138,12 +128,10 @@ export async function POST(request: NextRequest) {
     stdio: ["ignore", "pipe", "pipe"],
   });
 
-  // Register PID so the stop endpoint can kill it
   if (runId && proc.pid) {
     registerProcess(runId, proc.pid);
   }
 
-  // Overall timeout — kill process if it runs longer than 45 minutes
   const PIPELINE_TIMEOUT_MS = 45 * 60 * 1000;
   const timeoutHandle = setTimeout(() => {
     try {
@@ -157,7 +145,6 @@ export async function POST(request: NextRequest) {
     }
   }, PIPELINE_TIMEOUT_MS);
 
-  // Write logs to file
   const logStream = createWriteStream(logFilePath, { flags: "w" });
   const timestamp = () => new Date().toISOString();
 
@@ -190,100 +177,87 @@ export async function POST(request: NextRequest) {
   });
 
   proc.on("close", async (code) => {
-    // Clear the safety timeout
     clearTimeout(timeoutHandle);
 
-    // Unregister from process registry
     if (runId) unregisterProcess(runId);
 
     logStream.write(`\n[${timestamp()}] Process exited with code ${code ?? 1}\n`);
     logStream.end();
 
-    // Stop periodic syncs
     if (logSyncInterval) clearInterval(logSyncInterval);
     await periodicSync.stop();
 
-    // Upload final outputs to Supabase Storage
     try {
       await uploadOutputsFromDir(problemId, outputsDir);
     } catch {
-      // Log but don't crash
+      // Non-fatal
     }
 
-    // Upload log to DB + storage
     try {
       const logContent = await readFile(logFilePath, "utf-8");
       if (runId) {
         await uploadLog(problemId, stepId, runId, logContent);
       }
     } catch {
-      // Log upload failed — non-fatal
+      // Non-fatal
     }
 
-    // Update DB records
     if (runId) {
       try {
-        const supabase = await createServiceClient();
-
-        // Update pipeline run
-        await supabase
-          .from("pipeline_runs")
-          .update({
+        await db
+          .update(pipelineRuns)
+          .set({
             status: code === 0 ? "completed" : "failed",
-            exit_code: code ?? 1,
-            finished_at: new Date().toISOString(),
+            exitCode: code ?? 1,
+            finishedAt: new Date(),
           })
-          .eq("id", runId);
+          .where(eq(pipelineRuns.id, runId));
 
-        // Update pipeline state
-        const { data: stateData } = await supabase
-          .from("pipeline_states")
-          .select("step_statuses")
-          .eq("problem_id", problemId)
-          .single();
+        const stateRows = await db
+          .select({ stepStatuses: pipelineStates.stepStatuses })
+          .from(pipelineStates)
+          .where(eq(pipelineStates.problemId, problemId))
+          .limit(1);
 
-        if (stateData) {
-          const stepStatuses = stateData.step_statuses || {};
+        if (stateRows[0]) {
+          const stepStatuses = (stateRows[0].stepStatuses as Record<string, unknown>) || {};
           stepStatuses[stepId] = {
             status: code === 0 ? "completed" : "failed",
             exitCode: code ?? 1,
             endTime: Date.now(),
           };
-          await supabase
-            .from("pipeline_states")
-            .update({ step_statuses: stepStatuses, updated_at: new Date().toISOString() })
-            .eq("problem_id", problemId);
+          await db
+            .update(pipelineStates)
+            .set({ stepStatuses, updatedAt: new Date() })
+            .where(eq(pipelineStates.problemId, problemId));
         }
 
-        // Update problem status (skip if manually stopped — stop endpoint already set it to draft)
-        const { data: currentRun } = await supabase
-          .from("pipeline_runs")
-          .select("exit_code")
-          .eq("id", runId)
-          .single();
-        const wasStopped = currentRun?.exit_code === -1;
+        const currRunRows = await db
+          .select({ exitCode: pipelineRuns.exitCode })
+          .from(pipelineRuns)
+          .where(eq(pipelineRuns.id, runId))
+          .limit(1);
+        const wasStopped = currRunRows[0]?.exitCode === -1;
 
         if (code !== 0 && !wasStopped) {
-          await supabase
-            .from("problems")
-            .update({ status: "failed", updated_at: new Date().toISOString() })
-            .eq("id", problemId);
+          await db
+            .update(problems)
+            .set({ status: "failed", updatedAt: new Date() })
+            .where(eq(problems.id, problemId));
         } else if (stepId === "package_platform" || previousStatus === "completed") {
-          await supabase
-            .from("problems")
-            .update({ status: "completed", updated_at: new Date().toISOString() })
-            .eq("id", problemId);
+          await db
+            .update(problems)
+            .set({ status: "completed", updatedAt: new Date() })
+            .where(eq(problems.id, problemId));
         }
       } catch {
         // Background DB update failed
       }
     }
 
-    // Clean up temp workspace
     await cleanupTempDir(tmpDir);
   });
 
-  // Unref so Node.js doesn't wait for the child process
   proc.unref();
 
   return NextResponse.json({

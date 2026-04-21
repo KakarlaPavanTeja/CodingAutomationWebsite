@@ -1,7 +1,9 @@
-import { createServiceClient } from "@/lib/supabase/server";
+import { eq, sql } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { rateLimits } from "@/lib/db/schema";
 
 /**
- * Database-backed rate limiter using Supabase.
+ * Database-backed rate limiter using Replit Postgres via Drizzle.
  * Survives restarts and works across multiple server instances.
  * Falls back to in-memory if DB call fails (graceful degradation).
  */
@@ -11,7 +13,6 @@ type RateLimitEntry = {
   resetAt: number;
 };
 
-// In-memory fallback for when DB is unreachable
 const memoryFallback = new Map<string, RateLimitEntry>();
 
 class RateLimiter {
@@ -30,7 +31,6 @@ class RateLimiter {
     remaining: number;
     resetAt: number;
   }> {
-    // Skip rate limiting in development
     if (process.env.NODE_ENV === "development") {
       return { allowed: true, remaining: this.maxRequests, resetAt: Date.now() + this.windowMs };
     }
@@ -38,7 +38,6 @@ class RateLimiter {
     try {
       return await this.checkDb(key);
     } catch {
-      // Fallback to in-memory if DB fails
       return this.checkMemory(key);
     }
   }
@@ -48,45 +47,42 @@ class RateLimiter {
     remaining: number;
     resetAt: number;
   }> {
-    const supabase = await createServiceClient();
     const compositeKey = `${this.name}:${key}`;
     const now = Date.now();
+    const newResetAt = new Date(now + this.windowMs);
 
-    // Try to get existing entry
-    const { data } = await supabase
-      .from("rate_limits")
-      .select("attempt_count, reset_at")
-      .eq("key", compositeKey)
-      .single();
+    // Atomic upsert: if key doesn't exist or window expired -> reset to 1
+    // Otherwise -> increment count
+    const result = await db
+      .insert(rateLimits)
+      .values({
+        key: compositeKey,
+        attemptCount: 1,
+        resetAt: newResetAt,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: rateLimits.key,
+        set: {
+          attemptCount: sql`CASE WHEN ${rateLimits.resetAt} <= now() THEN 1 ELSE ${rateLimits.attemptCount} + 1 END`,
+          resetAt: sql`CASE WHEN ${rateLimits.resetAt} <= now() THEN ${newResetAt.toISOString()}::timestamptz ELSE ${rateLimits.resetAt} END`,
+          updatedAt: sql`now()`,
+        },
+      })
+      .returning({ count: rateLimits.attemptCount, resetAt: rateLimits.resetAt });
 
-    if (!data || now > new Date(data.reset_at).getTime()) {
-      // No entry or window expired — upsert fresh
-      const resetAt = new Date(now + this.windowMs).toISOString();
-      await supabase
-        .from("rate_limits")
-        .upsert(
-          { key: compositeKey, attempt_count: 1, reset_at: resetAt, updated_at: new Date().toISOString() },
-          { onConflict: "key" }
-        );
+    const row = result[0];
+    if (!row) {
       return { allowed: true, remaining: this.maxRequests - 1, resetAt: now + this.windowMs };
     }
 
-    // Within window — increment
-    const newCount = data.attempt_count + 1;
-    await supabase
-      .from("rate_limits")
-      .update({ attempt_count: newCount, updated_at: new Date().toISOString() })
-      .eq("key", compositeKey);
-
-    const resetAtMs = new Date(data.reset_at).getTime();
-
-    if (newCount > this.maxRequests) {
+    const resetAtMs = new Date(row.resetAt).getTime();
+    if (row.count > this.maxRequests) {
       return { allowed: false, remaining: 0, resetAt: resetAtMs };
     }
-
     return {
       allowed: true,
-      remaining: this.maxRequests - newCount,
+      remaining: this.maxRequests - row.count,
       resetAt: resetAtMs,
     };
   }
@@ -119,6 +115,9 @@ class RateLimiter {
     };
   }
 }
+
+// Reference to silence unused-import warning if eq is not used elsewhere
+void eq;
 
 // 20 auth attempts per 15 minutes per IP
 export const authLimiter = new RateLimiter("auth", 15 * 60 * 1000, 20);

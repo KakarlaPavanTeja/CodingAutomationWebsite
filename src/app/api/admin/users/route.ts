@@ -1,28 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
+import { desc, eq } from "drizzle-orm";
 import { requireAdminApi } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import { profiles } from "@/lib/db/schema";
 import { createClient as createAdminAuth } from "@supabase/supabase-js";
 
 export async function GET() {
   const auth = await requireAdminApi();
   if (auth.error) return auth.error;
-  const supabase = auth.supabase;
 
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("*")
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  return NextResponse.json({ users: data });
+  const rows = await db.select().from(profiles).orderBy(desc(profiles.createdAt));
+  // Snake-case keys for frontend compat
+  const users = rows.map((r) => ({
+    id: r.id,
+    email: r.email,
+    display_name: r.displayName,
+    role: r.role,
+    status: r.status,
+    created_at: r.createdAt,
+    updated_at: r.updatedAt,
+  }));
+  return NextResponse.json({ users });
 }
 
 export async function PATCH(request: NextRequest) {
   const auth = await requireAdminApi();
   if (auth.error) return auth.error;
-  const supabase = auth.supabase;
   const body = await request.json();
   const { userId, status, role } = body;
 
@@ -30,18 +33,13 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "userId required" }, { status: 400 });
   }
 
-  const updates: Record<string, string> = { updated_at: new Date().toISOString() };
+  const updates: Partial<typeof profiles.$inferInsert> & { updatedAt: Date } = {
+    updatedAt: new Date(),
+  };
   if (status) updates.status = status;
   if (role) updates.role = role;
 
-  const { error } = await supabase
-    .from("profiles")
-    .update(updates)
-    .eq("id", userId);
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  await db.update(profiles).set(updates).where(eq(profiles.id, userId));
 
   return NextResponse.json({ success: true });
 }
@@ -50,7 +48,6 @@ export async function PATCH(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const auth = await requireAdminApi();
   if (auth.error) return auth.error;
-  const supabase = auth.supabase;
   const body = await request.json();
   const { userId } = body;
 
@@ -58,23 +55,18 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "userId required" }, { status: 400 });
   }
 
-  // Wipe personal data from profile but keep record for FK references
-  const { error: profileError } = await supabase
-    .from("profiles")
-    .update({
-      display_name: "[deactivated]",
+  await db
+    .update(profiles)
+    .set({
+      displayName: "[deactivated]",
       email: `deactivated_${userId.slice(0, 8)}@removed`,
       status: "deactivated",
       role: "problem_setter",
-      updated_at: new Date().toISOString(),
+      updatedAt: new Date(),
     })
-    .eq("id", userId);
+    .where(eq(profiles.id, userId));
 
-  if (profileError) {
-    return NextResponse.json({ error: profileError.message }, { status: 500 });
-  }
-
-  // Delete the auth user (removes email, password, sessions)
+  // Delete the auth user via Supabase admin API (Phase 5 will replace this)
   try {
     const adminAuth = createAdminAuth(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -82,7 +74,7 @@ export async function DELETE(request: NextRequest) {
     );
     await adminAuth.auth.admin.deleteUser(userId);
   } catch {
-    // Auth user deletion is best-effort — profile is already wiped
+    // Best-effort
   }
 
   return NextResponse.json({ success: true });
