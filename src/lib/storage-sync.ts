@@ -1,17 +1,16 @@
 /**
- * Supabase Storage sync module.
+ * Pipeline file sync module.
  *
- * All pipeline files live in Supabase Storage bucket "pipeline-files".
+ * All pipeline files live in Replit App Storage (object storage).
  * Python scripts still need local files, so we:
  *   - Download inputs to a temp dir before spawning Python
  *   - Periodically upload outputs during execution
  *   - Upload final outputs + logs on completion
  *   - Clean up the temp dir afterward
  *
- * The UI (read, save, list, download) reads exclusively from Supabase Storage.
+ * The UI (read, save, list, download) reads exclusively from App Storage.
  */
 
-import { createServiceClient } from "@/lib/supabase/server";
 import { mkdir, writeFile, readFile, readdir, stat, rm, cp } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
@@ -19,18 +18,17 @@ import os from "os";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { pipelineLogs } from "@/lib/db/schema";
+import {
+  putObject,
+  getObjectBuffer,
+  getObjectString,
+  listObjects,
+} from "@/lib/object-storage";
 import type { OutputFile } from "@/types/pipeline";
-
-const BUCKET = process.env.STORAGE_BUCKET || "pipeline-files";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-async function getStorage() {
-  const supabase = await createServiceClient();
-  return { supabase, storage: supabase.storage.from(BUCKET) };
-}
 
 /** Walk a local directory recursively, returning relative paths. */
 async function walkDir(dir: string, base = ""): Promise<string[]> {
@@ -51,37 +49,6 @@ async function walkDir(dir: string, base = ""): Promise<string[]> {
   return results;
 }
 
-/**
- * Supabase Storage list() is not recursive — it returns items at one level.
- * This helper walks prefixes to build a full recursive listing.
- */
-async function listRecursiveImpl(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  storage: any,
-  prefix: string
-): Promise<{ name: string; size: number; updated_at: string }[]> {
-  const results: { name: string; size: number; updated_at: string }[] = [];
-  const { data, error } = await storage.list(prefix, { limit: 1000 });
-  if (error || !data) return results;
-
-  for (const item of data) {
-    if (item.id === null || item.id === undefined) {
-      const subPrefix = `${prefix}/${item.name}`;
-      const children = await listRecursiveImpl(storage, subPrefix);
-      results.push(...children);
-    } else {
-      const fullPath = `${prefix}/${item.name}`;
-      results.push({
-        name: fullPath,
-        size: (item.metadata as Record<string, unknown>)?.size as number || 0,
-        updated_at: item.updated_at || "",
-      });
-    }
-  }
-
-  return results;
-}
-
 // ---------------------------------------------------------------------------
 // Upload operations
 // ---------------------------------------------------------------------------
@@ -89,18 +56,15 @@ async function listRecursiveImpl(
 /** Upload a single file to storage. Overwrites if exists. */
 export async function uploadFile(
   storagePath: string,
-  content: Buffer | string
+  content: Buffer | string,
 ): Promise<void> {
-  const { storage } = await getStorage();
-  const buf = typeof content === "string" ? Buffer.from(content, "utf-8") : content;
-  const { error } = await storage.upload(storagePath, buf, { upsert: true });
-  if (error) throw new Error(`Storage upload failed (${storagePath}): ${error.message}`);
+  await putObject(storagePath, content);
 }
 
 /** Upload problem input files (problem.md, solution, etc.) to storage. */
 export async function uploadInputFiles(
   problemId: string,
-  files: { name: string; content: Buffer }[]
+  files: { name: string; content: Buffer }[],
 ): Promise<void> {
   for (const file of files) {
     await uploadFile(`${problemId}/inputs/${file.name}`, file.content);
@@ -110,12 +74,11 @@ export async function uploadInputFiles(
 /** Upload shared inputs (topics_list.txt) for a problem. */
 export async function uploadSharedInputs(
   problemId: string,
-  sharedInputsDir: string
+  sharedInputsDir: string,
 ): Promise<void> {
   try {
     const entries = await readdir(sharedInputsDir);
     for (const entry of entries) {
-      // Skip problem.md and solution files — those are uploaded separately
       if (entry === "problem.md" || entry.startsWith("solution.") || entry === ".DS_Store") continue;
       const filePath = path.join(sharedInputsDir, entry);
       const s = await stat(filePath);
@@ -132,12 +95,11 @@ export async function uploadSharedInputs(
 /** Walk a local directory and upload all files to storage under a prefix. */
 export async function uploadDirToStorage(
   localDir: string,
-  storagePrefix: string
+  storagePrefix: string,
 ): Promise<number> {
   const files = await walkDir(localDir);
   let count = 0;
   for (const relPath of files) {
-    // Skip .DS_Store and __pycache__
     if (relPath.includes(".DS_Store") || relPath.includes("__pycache__")) continue;
     const localPath = path.join(localDir, relPath);
     const content = await readFile(localPath);
@@ -150,7 +112,7 @@ export async function uploadDirToStorage(
 /** Upload outputs from a local Outputs/ directory to storage. */
 export async function uploadOutputsFromDir(
   problemId: string,
-  localOutputsDir: string
+  localOutputsDir: string,
 ): Promise<number> {
   return uploadDirToStorage(localOutputsDir, `${problemId}/outputs`);
 }
@@ -160,7 +122,7 @@ export async function uploadLog(
   problemId: string,
   stepId: string,
   runId: string,
-  content: string
+  content: string,
 ): Promise<void> {
   // Upload to storage as backup
   await uploadFile(`${problemId}/logs/${stepId}.log`, content);
@@ -188,27 +150,18 @@ export async function uploadLog(
 export async function readStorageFile(
   problemId: string,
   filePath: string,
-  subfolder = "outputs"
+  subfolder = "outputs",
 ): Promise<string> {
-  const { storage } = await getStorage();
-  const storagePath = `${problemId}/${subfolder}/${filePath}`;
-  const { data, error } = await storage.download(storagePath);
-  if (error || !data) throw new Error(`File not found: ${storagePath}`);
-  return await data.text();
+  return getObjectString(`${problemId}/${subfolder}/${filePath}`);
 }
 
 /** Read a single file from storage as Buffer. */
 export async function readStorageFileBuffer(
   problemId: string,
   filePath: string,
-  subfolder = "outputs"
+  subfolder = "outputs",
 ): Promise<Buffer> {
-  const { storage } = await getStorage();
-  const storagePath = `${problemId}/${subfolder}/${filePath}`;
-  const { data, error } = await storage.download(storagePath);
-  if (error || !data) throw new Error(`File not found: ${storagePath}`);
-  const arrayBuffer = await data.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+  return getObjectBuffer(`${problemId}/${subfolder}/${filePath}`);
 }
 
 /** Write/overwrite a single output file in storage. */
@@ -216,30 +169,24 @@ export async function writeStorageFile(
   problemId: string,
   filePath: string,
   content: string,
-  subfolder = "outputs"
+  subfolder = "outputs",
 ): Promise<void> {
   await uploadFile(`${problemId}/${subfolder}/${filePath}`, content);
 }
 
 /** List all output files for a problem (recursive). Returns OutputFile[]. */
-export async function listOutputFiles(
-  problemId: string
-): Promise<OutputFile[]> {
-  const { storage } = await getStorage();
-  const prefix = `${problemId}/outputs`;
-  const items = await listRecursiveImpl(storage, prefix);
+export async function listOutputFiles(problemId: string): Promise<OutputFile[]> {
+  const prefix = `${problemId}/outputs/`;
+  const items = await listObjects(prefix);
 
-  // Track directories we've seen
   const dirs = new Set<string>();
   const results: OutputFile[] = [];
 
   for (const item of items) {
     // item.name is like "{problemId}/outputs/generatedFullCode/PYTHON.py"
-    // Strip the prefix to get relative path
-    const relativePath = item.name.slice(prefix.length + 1); // +1 for the /
+    const relativePath = item.name.slice(prefix.length);
     if (!relativePath) continue;
 
-    // Add parent directories
     const parts = relativePath.split("/");
     for (let i = 1; i < parts.length; i++) {
       const dirPath = parts.slice(0, i).join("/");
@@ -255,12 +202,11 @@ export async function listOutputFiles(
       }
     }
 
-    // Add the file
     results.push({
       path: relativePath,
       name: parts[parts.length - 1],
       size: item.size,
-      modifiedAt: item.updated_at,
+      modifiedAt: item.updated,
       isDirectory: false,
     });
   }
@@ -270,22 +216,21 @@ export async function listOutputFiles(
 
 /** Download all output files for a problem. Returns array of {path, buffer}. */
 export async function downloadAllOutputs(
-  problemId: string
+  problemId: string,
 ): Promise<{ path: string; buffer: Buffer }[]> {
-  const { storage } = await getStorage();
-  const prefix = `${problemId}/outputs`;
-  const items = await listRecursiveImpl(storage, prefix);
+  const prefix = `${problemId}/outputs/`;
+  const items = await listObjects(prefix);
 
   const results: { path: string; buffer: Buffer }[] = [];
   for (const item of items) {
-    const relativePath = item.name.slice(prefix.length + 1);
+    const relativePath = item.name.slice(prefix.length);
     if (!relativePath) continue;
-
-    const { data, error } = await storage.download(item.name);
-    if (error || !data) continue;
-
-    const arrayBuffer = await data.arrayBuffer();
-    results.push({ path: relativePath, buffer: Buffer.from(arrayBuffer) });
+    try {
+      const buffer = await getObjectBuffer(item.name);
+      results.push({ path: relativePath, buffer });
+    } catch {
+      // skip unreadable files
+    }
   }
 
   return results;
@@ -295,7 +240,7 @@ export async function downloadAllOutputs(
 export async function getLogContent(
   problemId: string,
   stepId: string,
-  runId?: string
+  runId?: string,
 ): Promise<string | null> {
   if (runId) {
     const rows = await db
@@ -321,7 +266,7 @@ export async function getLogContent(
 
 /**
  * Create a temporary workspace for a pipeline step execution.
- * Downloads inputs from Supabase Storage, copies Scripts and reference files
+ * Downloads inputs from App Storage, copies Scripts and reference files
  * from the Docker image (or local path).
  */
 export async function createTempWorkspace(problemId: string): Promise<string> {
@@ -334,31 +279,35 @@ export async function createTempWorkspace(problemId: string): Promise<string> {
   await mkdir(outputsDir, { recursive: true });
   await mkdir(logsDir, { recursive: true });
 
-  // Download input files from Supabase Storage
-  const { storage } = await getStorage();
-  const { data: inputFiles } = await storage.list(`${problemId}/inputs`, { limit: 100 });
-
-  if (inputFiles) {
-    for (const file of inputFiles) {
-      if (file.id === null || file.id === undefined) continue; // skip folders
-      const { data, error } = await storage.download(`${problemId}/inputs/${file.name}`);
-      if (error || !data) continue;
-      const arrayBuffer = await data.arrayBuffer();
-      await writeFile(path.join(inputsDir, file.name), Buffer.from(arrayBuffer));
+  // Download input files from App Storage
+  const inputPrefix = `${problemId}/inputs/`;
+  const inputItems = await listObjects(inputPrefix);
+  for (const item of inputItems) {
+    const relativePath = item.name.slice(inputPrefix.length);
+    if (!relativePath) continue;
+    try {
+      const buf = await getObjectBuffer(item.name);
+      const localPath = path.join(inputsDir, relativePath);
+      await mkdir(path.dirname(localPath), { recursive: true });
+      await writeFile(localPath, buf);
+    } catch {
+      // skip
     }
   }
 
   // Download any previously generated outputs (for re-running later steps)
-  const outputItems = await listRecursiveImpl(storage, `${problemId}/outputs`);
+  const outputPrefix = `${problemId}/outputs/`;
+  const outputItems = await listObjects(outputPrefix);
   for (const item of outputItems) {
-    const relativePath = item.name.slice(`${problemId}/outputs/`.length);
+    const relativePath = item.name.slice(outputPrefix.length);
     if (!relativePath) continue;
     const localPath = path.join(outputsDir, relativePath);
     await mkdir(path.dirname(localPath), { recursive: true });
-    const { data } = await storage.download(item.name);
-    if (data) {
-      const arrayBuffer = await data.arrayBuffer();
-      await writeFile(localPath, Buffer.from(arrayBuffer));
+    try {
+      const buf = await getObjectBuffer(item.name);
+      await writeFile(localPath, buf);
+    } catch {
+      // skip
     }
   }
 
@@ -419,13 +368,12 @@ export async function cleanupTempDir(tmpDir: string): Promise<void> {
 export function startPeriodicSync(
   problemId: string,
   localOutputsDir: string,
-  intervalMs = 5000
+  intervalMs = 5000,
 ): { stop: () => Promise<void> } {
   const knownFiles = new Map<string, number>(); // path → last modified time
-  let running = true;
+  let stopped = false;
 
   const sync = async () => {
-    if (!running) return;
     try {
       const files = await walkDir(localOutputsDir);
       for (const relPath of files) {
@@ -434,7 +382,6 @@ export function startPeriodicSync(
         const s = await stat(localPath);
         const mtime = s.mtimeMs;
 
-        // Only upload if new or modified
         if (!knownFiles.has(relPath) || knownFiles.get(relPath)! < mtime) {
           const content = await readFile(localPath);
           await uploadFile(`${problemId}/outputs/${relPath}`, content);
@@ -446,14 +393,19 @@ export function startPeriodicSync(
     }
   };
 
-  const interval = setInterval(sync, intervalMs);
+  const tick = async () => {
+    if (stopped) return;
+    await sync();
+  };
+
+  const interval = setInterval(tick, intervalMs);
 
   return {
     stop: async () => {
-      running = false;
       clearInterval(interval);
       // Final sync to catch anything written in the last interval
       await sync();
+      stopped = true;
     },
   };
 }

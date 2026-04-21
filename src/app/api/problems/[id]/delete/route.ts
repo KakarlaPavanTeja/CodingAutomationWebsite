@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
 import { problems } from "@/lib/db/schema";
 import { getProfileRoleById } from "@/lib/db/queries";
+import { deletePrefix } from "@/lib/object-storage";
 
 // Problem setter requests deletion (or admin soft-deletes)
 export async function POST(
@@ -103,17 +104,10 @@ export async function DELETE(
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
-  const serviceClient = await createServiceClient();
-
-  // Storage cleanup (Supabase Storage — Phase 4 will replace)
+  // Storage cleanup (Replit App Storage)
   try {
-    const storage = serviceClient.storage.from(process.env.STORAGE_BUCKET || "pipeline-files");
     for (const subfolder of ["inputs", "outputs", "logs"]) {
-      const { data: files } = await storage.list(`${id}/${subfolder}`, { limit: 1000 });
-      if (files && files.length > 0) {
-        const paths = files.map((f) => `${id}/${subfolder}/${f.name}`);
-        await storage.remove(paths);
-      }
+      await deletePrefix(`${id}/${subfolder}/`);
     }
   } catch {
     // Continue even if storage cleanup fails

@@ -9,7 +9,7 @@ Next.js 16 application being migrated off Supabase to Replit-hosted infrastructu
 - **Database** (in progress): migrating from Supabase Postgres → Replit Postgres (`DATABASE_URL`)
 - **ORM**: Drizzle ORM (`src/lib/db/schema.ts`, `src/lib/db/index.ts`); use `npm run db:push` to sync schema
 - **Auth** (planned): migrating from Supabase Auth → custom Auth.js v5 with Credentials provider (bcrypt) and DB-backed sessions
-- **File Storage** (planned): migrating from Supabase Storage → Replit App Storage
+- **File Storage**: Replit App Storage (GCS-backed) via `src/lib/object-storage.ts` (`DEFAULT_OBJECT_STORAGE_BUCKET_ID`). All pipeline file I/O goes through `src/lib/storage-sync.ts`.
 
 ## Database Tables (Replit Postgres)
 
@@ -27,8 +27,8 @@ New auth tables (added for Auth.js):
 
 - [x] Phase 1: Schema dumped from Supabase (`migrations/0001_supabase_schema.sql`)
 - [x] Phase 2: Drizzle schema + tables created in Replit Postgres
-- [x] Phase 3: All `supabase.from(...)` DB queries refactored to Drizzle (lib helpers, all API routes, client pages now use API endpoints). Supabase auth (`supabase.auth.*`) still in use — Phase 5 swaps it. Service client retained only for Storage operations until Phase 4.
-- [ ] Phase 4: Replace Supabase Storage → Replit App Storage
+- [x] Phase 3: All `supabase.from(...)` DB queries refactored to Drizzle (lib helpers, all API routes, client pages now use API endpoints). Supabase auth (`supabase.auth.*`) still in use — Phase 5 swaps it.
+- [x] Phase 4: Replit App Storage adopted. New `src/lib/object-storage.ts` wraps `@google-cloud/storage` with the Replit sidecar credentials. `storage-sync.ts`, `problems/[id]/delete`, and `admin/cleanup` migrated. Existing `/api/files/*` endpoints and `FileUploader` component unchanged (server-side multipart upload). Existing files in Supabase Storage will be migrated in Phase 7.
 - [ ] Phase 5: Build Auth.js (login, signup, sessions, reset, admin approval)
 - [ ] Phase 6: Migrate data rows from Supabase to Replit
 - [ ] Phase 7: Migrate uploaded files

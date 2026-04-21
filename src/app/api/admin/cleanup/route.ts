@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq, lt } from "drizzle-orm";
-import { requireAdminApi, createServiceClient } from "@/lib/supabase/server";
+import { requireAdminApi } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
 import { problems } from "@/lib/db/schema";
+import { deletePrefix } from "@/lib/object-storage";
 
 const CLEANUP_HOURS = 5;
 
@@ -13,14 +14,10 @@ const CLEANUP_HOURS = 5;
  */
 export async function POST(request: NextRequest) {
   const cronSecret = request.headers.get("x-cron-secret");
-  let storageClient;
 
-  if (cronSecret && cronSecret === process.env.CRON_SECRET) {
-    storageClient = await createServiceClient();
-  } else {
+  if (!(cronSecret && cronSecret === process.env.CRON_SECRET)) {
     const auth = await requireAdminApi();
     if (auth.error) return auth.error;
-    storageClient = auth.supabase;
   }
 
   const cutoff = new Date(Date.now() - CLEANUP_HOURS * 60 * 60 * 1000);
@@ -34,17 +31,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ cleaned: 0 });
   }
 
-  const storage = storageClient.storage.from(process.env.STORAGE_BUCKET || "pipeline-files");
   let cleaned = 0;
 
   for (const problem of stale) {
     try {
       for (const subfolder of ["inputs", "outputs", "logs"]) {
-        const { data: files } = await storage.list(`${problem.id}/${subfolder}`, { limit: 1000 });
-        if (files && files.length > 0) {
-          const paths = files.map((f) => `${problem.id}/${subfolder}/${f.name}`);
-          await storage.remove(paths);
-        }
+        await deletePrefix(`${problem.id}/${subfolder}/`);
       }
     } catch {
       // Continue even if storage cleanup fails
