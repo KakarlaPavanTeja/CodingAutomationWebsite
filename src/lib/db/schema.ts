@@ -1,0 +1,235 @@
+import { sql } from "drizzle-orm";
+import {
+  pgTable,
+  uuid,
+  text,
+  integer,
+  jsonb,
+  timestamp,
+  numeric,
+  boolean,
+  index,
+  uniqueIndex,
+  check,
+} from "drizzle-orm/pg-core";
+
+export const users = pgTable(
+  "users",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    email: text("email").notNull(),
+    passwordHash: text("password_hash"),
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+    passwordResetRequired: boolean("password_reset_required").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    emailIdx: uniqueIndex("users_email_lower_idx").on(sql`lower(${t.email})`),
+  }),
+);
+
+export const passwordResetTokens = pgTable(
+  "password_reset_tokens",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    userIdx: index("password_reset_tokens_user_idx").on(t.userId),
+  }),
+);
+
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    userIdx: index("sessions_user_idx").on(t.userId),
+    expIdx: index("sessions_expires_idx").on(t.expiresAt),
+  }),
+);
+
+export const profiles = pgTable(
+  "profiles",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    displayName: text("display_name"),
+    role: text("role").notNull().default("problem_setter"),
+    status: text("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    roleCheck: check("profiles_role_check", sql`${t.role} IN ('admin','problem_setter')`),
+    statusCheck: check(
+      "profiles_status_check",
+      sql`${t.status} IN ('active','left','pending_approval','deactivated')`,
+    ),
+  }),
+);
+
+export const problems = pgTable(
+  "problems",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    createdBy: uuid("created_by").notNull().references(() => profiles.id),
+    name: text("name").notNull(),
+    questionType: text("question_type").notNull(),
+    mode: text("mode").notNull(),
+    scenarioLevel: text("scenario_level").notNull().default("none"),
+    languages: text("languages").array().notNull().default(sql`'{}'::text[]`),
+    status: text("status").notNull().default("draft"),
+    storagePath: text("storage_path"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+    deletionReason: text("deletion_reason"),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  },
+  (t) => ({
+    modeCheck: check("problems_mode_check", sql`${t.mode} IN ('practice','exam')`),
+    questionTypeCheck: check(
+      "problems_question_type_check",
+      sql`${t.questionType} IN ('function','nonfunction')`,
+    ),
+    scenarioCheck: check(
+      "problems_scenario_level_check",
+      sql`${t.scenarioLevel} IN ('none','light','moderate','heavy')`,
+    ),
+    statusCheck: check(
+      "problems_status_check",
+      sql`${t.status} IN ('draft','processing','completed','failed','deletion_pending','deleted')`,
+    ),
+  }),
+);
+
+export const pipelineRuns = pgTable(
+  "pipeline_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    problemId: uuid("problem_id")
+      .notNull()
+      .references(() => problems.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => profiles.id),
+    stepId: text("step_id").notNull(),
+    status: text("status").notNull().default("running"),
+    exitCode: integer("exit_code"),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    logsSummary: text("logs_summary"),
+    pid: integer("pid"),
+  },
+  (t) => ({
+    statusCheck: check(
+      "pipeline_runs_status_check",
+      sql`${t.status} IN ('running','completed','failed')`,
+    ),
+  }),
+);
+
+export const pipelineStates = pgTable("pipeline_states", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  problemId: uuid("problem_id")
+    .notNull()
+    .unique()
+    .references(() => problems.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => profiles.id),
+  questionType: text("question_type").notNull().default("function"),
+  mode: text("mode").notNull().default("practice"),
+  enabledLanguages: text("enabled_languages")
+    .array()
+    .default(sql`'{Python,C++,Java,Node.js}'::text[]`),
+  testcaseCount: integer("testcase_count").default(48),
+  stepConfigs: jsonb("step_configs").default(sql`'{}'::jsonb`),
+  stepStatuses: jsonb("step_statuses").default(sql`'{}'::jsonb`),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+export const pipelineLogs = pgTable("pipeline_logs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  problemId: uuid("problem_id").references(() => problems.id, { onDelete: "cascade" }),
+  stepId: text("step_id").notNull(),
+  runId: uuid("run_id")
+    .unique()
+    .references(() => pipelineRuns.id, { onDelete: "cascade" }),
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
+export const llmUsage = pgTable(
+  "llm_usage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    problemId: uuid("problem_id").references(() => problems.id, { onDelete: "set null" }),
+    userId: uuid("user_id").references(() => profiles.id),
+    model: text("model").notNull(),
+    purpose: text("purpose").notNull(),
+    promptTokens: integer("prompt_tokens").notNull().default(0),
+    completionTokens: integer("completion_tokens").notNull().default(0),
+    totalTokens: integer("total_tokens").notNull().default(0),
+    costUsd: numeric("cost_usd", { precision: 10, scale: 6 }).notNull().default("0"),
+    problemName: text("problem_name"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    stepId: text("step_id"),
+  },
+  (t) => ({
+    createdAtIdx: index("idx_llm_usage_created_at").on(sql`${t.createdAt} DESC`),
+    modelIdx: index("idx_llm_usage_model").on(t.model),
+    problemIdx: index("idx_llm_usage_problem_id").on(t.problemId),
+    userIdx: index("idx_llm_usage_user_id").on(t.userId),
+  }),
+);
+
+export const authAuditLog = pgTable(
+  "auth_audit_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    eventType: text("event_type").notNull(),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    metadata: jsonb("metadata").default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    eventIdx: index("idx_audit_event").on(t.eventType, sql`${t.createdAt} DESC`),
+    userIdx: index("idx_audit_user").on(t.userId, sql`${t.createdAt} DESC`),
+  }),
+);
+
+export const rateLimits = pgTable(
+  "rate_limits",
+  {
+    key: text("key").primaryKey(),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    resetAt: timestamp("reset_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    resetAtIdx: index("idx_rate_limits_reset_at").on(t.resetAt),
+  }),
+);
+
+export type User = typeof users.$inferSelect;
+export type NewUser = typeof users.$inferInsert;
+export type Profile = typeof profiles.$inferSelect;
+export type NewProfile = typeof profiles.$inferInsert;
+export type Problem = typeof problems.$inferSelect;
+export type NewProblem = typeof problems.$inferInsert;
+export type PipelineRun = typeof pipelineRuns.$inferSelect;
+export type PipelineState = typeof pipelineStates.$inferSelect;
+export type PipelineLog = typeof pipelineLogs.$inferSelect;
+export type LlmUsage = typeof llmUsage.$inferSelect;
+export type AuthAuditLog = typeof authAuditLog.$inferSelect;
+export type RateLimit = typeof rateLimits.$inferSelect;
