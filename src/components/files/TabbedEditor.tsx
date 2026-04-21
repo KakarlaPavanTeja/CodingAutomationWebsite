@@ -29,20 +29,6 @@ export function TabbedEditor({
 
   const activeTab = tabs.find((t) => t.path === activeTabPath);
 
-  // Keyboard shortcut: Ctrl/Cmd+S to save
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-        if (activeTabPath && activeTab && activeTab.content !== activeTab.originalContent) {
-          handleSave(activeTabPath);
-        }
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  });
-
   const handleSave = useCallback(async (path: string) => {
     setSaveStatus((prev) => ({ ...prev, [path]: "saving" }));
     const ok = await onSaveTab(path);
@@ -55,6 +41,20 @@ export function TabbedEditor({
       });
     }, 2000);
   }, [onSaveTab]);
+
+  // Keyboard shortcut: Ctrl/Cmd+S to save the active tab
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        if (activeTabPath && activeTab && activeTab.content !== activeTab.originalContent) {
+          handleSave(activeTabPath);
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [activeTabPath, activeTab, handleSave]);
 
   const handleCopy = useCallback((path: string) => {
     const tab = tabs.find((t) => t.path === path);

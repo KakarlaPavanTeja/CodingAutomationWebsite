@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Project-specific ignores: skill templates, generated pipeline output, scripts
+    ".local/**",
+    "pipeline/**",
+    "scripts/**",
+    "supabase/**",
   ]),
 ]);
 

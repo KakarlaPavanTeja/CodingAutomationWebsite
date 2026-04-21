@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type { OutputFile } from "@/types/pipeline";
 
@@ -115,7 +115,7 @@ export function OutputBrowser({ selectedPath, openPaths, onSelectFile, problemId
   const [loading, setLoading] = useState(true);
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
 
-  const fetchFiles = async () => {
+  const fetchFiles = useCallback(async () => {
     setLoading(true);
     try {
       const url = problemId
@@ -124,7 +124,6 @@ export function OutputBrowser({ selectedPath, openPaths, onSelectFile, problemId
       const res = await fetch(url);
       const data = await res.json();
       setFiles(data.files || []);
-      // Auto-expand all directories
       const dirs = (data.files || []).filter((f: OutputFile) => f.isDirectory).map((f: OutputFile) => f.path);
       setExpandedDirs(new Set(dirs));
     } catch {
@@ -132,9 +131,11 @@ export function OutputBrowser({ selectedPath, openPaths, onSelectFile, problemId
     } finally {
       setLoading(false);
     }
-  };
+  }, [problemId]);
 
-  useEffect(() => { fetchFiles(); }, [problemId]);
+  useEffect(() => {
+    fetchFiles();
+  }, [fetchFiles]);
 
   const tree = useMemo(() => buildTree(files), [files]);
 

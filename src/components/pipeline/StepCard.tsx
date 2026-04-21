@@ -46,8 +46,8 @@ export function StepCard({
   const canRun = !isAnyRunning && previousCompleted;
   const isExecution = stepState.id === "execute_tests_function" || stepState.id === "execute_tests_nonfunction";
 
-  // Live elapsed timer
-  const [now, setNow] = useState(Date.now());
+  // Live elapsed timer (lazy init avoids impure call during render)
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (stepState.status !== "running" || !stepState.startTime) return;
     const interval = setInterval(() => setNow(Date.now()), 3000);
