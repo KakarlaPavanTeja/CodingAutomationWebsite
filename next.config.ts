@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ["*.replit.dev", "*.repl.co", "*.replit.app"],
+  allowedDevOrigins: [
+    process.env.REPLIT_DEV_DOMAIN,
+    ...(process.env.REPLIT_DOMAINS?.split(",") ?? []),
+  ].filter((d): d is string => Boolean(d)),
   experimental: {
     authInterrupts: true,
   },
