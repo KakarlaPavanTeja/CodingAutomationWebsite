@@ -1,25 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
-import { getSession } from "@/lib/auth/server";
 import { db } from "@/lib/db";
 import { pipelineStates } from "@/lib/db/schema";
+import { requireProblemAccess } from "@/lib/auth/ownership";
+import { assertSafeProblemId } from "@/lib/storage-path";
 
 export async function GET(request: NextRequest) {
   const problemId = request.nextUrl.searchParams.get("problemId");
-  if (!problemId) {
-    return NextResponse.json({ error: "problemId required" }, { status: 400 });
+
+  let safeProblemId: string;
+  try {
+    safeProblemId = assertSafeProblemId(problemId);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }
 
-  const session = await getSession();
-  const user = session ? { id: session.userId, email: session.email } : null;
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const auth = await requireProblemAccess(safeProblemId);
+  if (auth.error) return auth.error;
 
   const rows = await db
     .select()
     .from(pipelineStates)
-    .where(eq(pipelineStates.problemId, problemId))
+    .where(eq(pipelineStates.problemId, safeProblemId))
     .limit(1);
   const row = rows[0];
 
@@ -45,12 +47,6 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getSession();
-  const user = session ? { id: session.userId, email: session.email } : null;
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const body = await request.json();
   const {
     problemId,
@@ -62,13 +58,19 @@ export async function POST(request: NextRequest) {
     stepStatuses,
   } = body;
 
-  if (!problemId) {
-    return NextResponse.json({ error: "problemId required" }, { status: 400 });
+  let safeProblemId: string;
+  try {
+    safeProblemId = assertSafeProblemId(problemId);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }
 
+  const auth = await requireProblemAccess(safeProblemId);
+  if (auth.error) return auth.error;
+
   const values = {
-    problemId,
-    userId: user.id,
+    problemId: safeProblemId,
+    userId: auth.session.userId,
     questionType: questionType || "function",
     mode: mode || "practice",
     enabledLanguages: enabledLanguages || ["Python", "C++", "Java", "Node.js"],

@@ -243,10 +243,19 @@ export async function getLogContent(
   runId?: string,
 ): Promise<string | null> {
   if (runId) {
+    // Bind the runId lookup to the caller-validated problemId/stepId so a
+    // user with access to one problem can't fetch another problem's logs by
+    // guessing/leaking a runId. (IDOR fix.)
     const rows = await db
       .select({ content: pipelineLogs.content })
       .from(pipelineLogs)
-      .where(eq(pipelineLogs.runId, runId))
+      .where(
+        and(
+          eq(pipelineLogs.runId, runId),
+          eq(pipelineLogs.problemId, problemId),
+          eq(pipelineLogs.stepId, stepId),
+        ),
+      )
       .limit(1);
     return rows[0]?.content ?? null;
   }

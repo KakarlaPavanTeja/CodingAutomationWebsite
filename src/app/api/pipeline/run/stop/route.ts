@@ -1,22 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { getProcessPidAsync } from "@/lib/process-registry";
-import { getSession } from "@/lib/auth/server";
+import { requireAuthApi } from "@/lib/auth/server";
+import { requireProblemAccess } from "@/lib/auth/ownership";
 import { db } from "@/lib/db";
 import { pipelineRuns, pipelineStates, problems } from "@/lib/db/schema";
 
 export async function POST(request: NextRequest) {
   const { runId } = await request.json();
 
-  if (!runId) {
-    return NextResponse.json({ error: "runId is required" }, { status: 400 });
+  if (!runId || typeof runId !== "string" || !/^[0-9a-fA-F-]{36}$/.test(runId)) {
+    return NextResponse.json({ error: "Valid runId is required" }, { status: 400 });
   }
 
-  const session = await getSession();
-  const user = session ? { id: session.userId, email: session.email } : null;
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  // Require auth before any DB lookup.
+  const baseAuth = await requireAuthApi();
+  if (baseAuth.error) return baseAuth.error;
 
   const runRows = await db
     .select({ problemId: pipelineRuns.problemId, stepId: pipelineRuns.stepId })
@@ -24,6 +23,14 @@ export async function POST(request: NextRequest) {
     .where(eq(pipelineRuns.id, runId))
     .limit(1);
   const run = runRows[0];
+  if (!run) {
+    // Generic 404 to avoid leaking run-id existence.
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  // Only the owner of the run's problem (or admin) can stop it.
+  const access = await requireProblemAccess(run.problemId);
+  if (access.error) return access.error;
 
   await db
     .update(pipelineRuns)
@@ -34,31 +41,29 @@ export async function POST(request: NextRequest) {
     })
     .where(eq(pipelineRuns.id, runId));
 
-  if (run) {
-    const stateRows = await db
-      .select({ stepStatuses: pipelineStates.stepStatuses })
-      .from(pipelineStates)
-      .where(eq(pipelineStates.problemId, run.problemId))
-      .limit(1);
+  const stateRows = await db
+    .select({ stepStatuses: pipelineStates.stepStatuses })
+    .from(pipelineStates)
+    .where(eq(pipelineStates.problemId, run.problemId))
+    .limit(1);
 
-    if (stateRows[0]) {
-      const stepStatuses = (stateRows[0].stepStatuses as Record<string, unknown>) || {};
-      stepStatuses[run.stepId] = {
-        status: "failed",
-        exitCode: -1,
-        endTime: Date.now(),
-      };
-      await db
-        .update(pipelineStates)
-        .set({ stepStatuses, updatedAt: new Date() })
-        .where(eq(pipelineStates.problemId, run.problemId));
-    }
-
+  if (stateRows[0]) {
+    const stepStatuses = (stateRows[0].stepStatuses as Record<string, unknown>) || {};
+    stepStatuses[run.stepId] = {
+      status: "failed",
+      exitCode: -1,
+      endTime: Date.now(),
+    };
     await db
-      .update(problems)
-      .set({ status: "draft", updatedAt: new Date() })
-      .where(and(eq(problems.id, run.problemId), eq(problems.status, "processing")));
+      .update(pipelineStates)
+      .set({ stepStatuses, updatedAt: new Date() })
+      .where(eq(pipelineStates.problemId, run.problemId));
   }
+
+  await db
+    .update(problems)
+    .set({ status: "draft", updatedAt: new Date() })
+    .where(and(eq(problems.id, run.problemId), eq(problems.status, "processing")));
 
   const pid = await getProcessPidAsync(runId);
   if (pid) {

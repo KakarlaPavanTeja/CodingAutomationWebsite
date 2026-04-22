@@ -2,25 +2,29 @@ import { NextRequest, NextResponse } from "next/server";
 import archiver from "archiver";
 import { PassThrough } from "stream";
 import { downloadAllOutputs } from "@/lib/storage-sync";
-import { requireAuthApi } from "@/lib/auth/server";
+import { requireProblemAccess } from "@/lib/auth/ownership";
+import { assertSafeProblemId } from "@/lib/storage-path";
 
 export async function GET(request: NextRequest) {
-  const auth = await requireAuthApi();
-  if (auth.error) return auth.error;
-
   const problemId = request.nextUrl.searchParams.get("problemId");
-  if (!problemId) {
-    return NextResponse.json({ error: "problemId parameter required" }, { status: 400 });
+
+  let safeProblemId: string;
+  try {
+    safeProblemId = assertSafeProblemId(problemId);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }
 
-  // Download all output files from Supabase Storage
+  const auth = await requireProblemAccess(safeProblemId);
+  if (auth.error) return auth.error;
+
   let outputFiles: { path: string; buffer: Buffer }[];
   try {
-    outputFiles = await downloadAllOutputs(problemId);
+    outputFiles = await downloadAllOutputs(safeProblemId);
   } catch (err) {
     return NextResponse.json(
       { error: `Failed to fetch outputs: ${err instanceof Error ? err.message : "Unknown"}` },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
@@ -28,7 +32,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "No output files found" }, { status: 404 });
   }
 
-  // Create ZIP archive in memory
   const passthrough = new PassThrough();
   const archive = archiver("zip", { zlib: { level: 5 } });
 
@@ -62,7 +65,7 @@ export async function GET(request: NextRequest) {
     },
   });
 
-  const filename = `outputs-${problemId.slice(0, 8)}-${Date.now()}.zip`;
+  const filename = `outputs-${safeProblemId.slice(0, 8)}-${Date.now()}.zip`;
 
   return new Response(readable, {
     headers: {

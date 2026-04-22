@@ -1,18 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listOutputFiles } from "@/lib/storage-sync";
-import { requireAuthApi } from "@/lib/auth/server";
+import { requireProblemAccess } from "@/lib/auth/ownership";
+import { assertSafeProblemId } from "@/lib/storage-path";
 
 export async function GET(request: NextRequest) {
-  const auth = await requireAuthApi();
-  if (auth.error) return auth.error;
-
   const problemId = request.nextUrl.searchParams.get("problemId");
-  if (!problemId) {
-    return NextResponse.json({ error: "problemId parameter required" }, { status: 400 });
+
+  let safeProblemId: string;
+  try {
+    safeProblemId = assertSafeProblemId(problemId);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }
 
+  const auth = await requireProblemAccess(safeProblemId);
+  if (auth.error) return auth.error;
+
   try {
-    const files = await listOutputFiles(problemId);
+    const files = await listOutputFiles(safeProblemId);
     return NextResponse.json({ files });
   } catch {
     return NextResponse.json({ files: [] });

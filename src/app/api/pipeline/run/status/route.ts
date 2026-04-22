@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
-import { getSession } from "@/lib/auth/server";
 import { db } from "@/lib/db";
 import { pipelineRuns } from "@/lib/db/schema";
+import { requireProblemAccess } from "@/lib/auth/ownership";
+import { assertSafeProblemId } from "@/lib/storage-path";
+import { requireAuthApi } from "@/lib/auth/server";
 
 function toLegacyRun(r: typeof pipelineRuns.$inferSelect) {
   return {
@@ -20,28 +22,41 @@ function toLegacyRun(r: typeof pipelineRuns.$inferSelect) {
 }
 
 export async function GET(request: NextRequest) {
-  const session = await getSession();
-  const user = session ? { id: session.userId, email: session.email } : null;
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const runId = request.nextUrl.searchParams.get("runId");
   const problemId = request.nextUrl.searchParams.get("problemId");
 
   if (runId) {
+    if (!/^[0-9a-fA-F-]{36}$/.test(runId)) {
+      return NextResponse.json({ error: "Invalid runId" }, { status: 400 });
+    }
+    // First require auth, then look up the run, then verify access to its problem.
+    const baseAuth = await requireAuthApi();
+    if (baseAuth.error) return baseAuth.error;
+
     const rows = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, runId)).limit(1);
     if (!rows[0]) {
-      return NextResponse.json({ error: "Run not found" }, { status: 404 });
+      // Generic 404 to avoid leaking run-id existence to non-owners.
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
+    const access = await requireProblemAccess(rows[0].problemId);
+    if (access.error) return access.error;
     return NextResponse.json({ run: toLegacyRun(rows[0]) });
   }
 
   if (problemId) {
+    let safeProblemId: string;
+    try {
+      safeProblemId = assertSafeProblemId(problemId);
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+    }
+    const access = await requireProblemAccess(safeProblemId);
+    if (access.error) return access.error;
+
     const rows = await db
       .select()
       .from(pipelineRuns)
-      .where(eq(pipelineRuns.problemId, problemId))
+      .where(eq(pipelineRuns.problemId, safeProblemId))
       .orderBy(desc(pipelineRuns.startedAt));
     return NextResponse.json({ runs: rows.map(toLegacyRun) });
   }

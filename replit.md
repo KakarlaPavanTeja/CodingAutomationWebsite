@@ -51,6 +51,17 @@ The Python pipeline scripts (`pipeline/Scripts/*.py`) record token usage by POST
 - Optionally pause / delete the Supabase project once you've confirmed the Replit copy is the system of record.
 - `migrations/0001_supabase_schema.sql` is kept in the repo as a historical reference; safe to delete if you don't need it.
 
+## Security Hardening (post-migration)
+
+- Per-route ownership enforcement: `src/lib/auth/ownership.ts` (`requireProblemAccess`) checks the session and verifies the caller is `problems.created_by` or an admin; returns generic 404 on mismatch to avoid existence leaks. Applied to: `files/read`, `files/save`, `files/outputs`, `files/download`, `pipeline/run` (POST), `pipeline/run/logs`, `pipeline/run/status`, `pipeline/run/stop`, `pipeline/state` (GET + POST).
+- Path / id validators: `src/lib/storage-path.ts` (`assertSafeProblemId` UUID-only, `assertSafeRelativePath` rejects abs / `..` / null bytes / >512 chars). Used at every problem-scoped endpoint.
+- Pipeline run input allowlist: `stepId`, `mode` (`practice|exam`), `languages`, `subSteps` (`/^[a-z0-9_]{1,32}$/`), `testcaseCount` (1–1000) all validated before reaching the spawned Python.
+- Logs IDOR closed: `getLogContent`'s runId branch now binds the lookup to `(runId AND problemId AND stepId)`.
+- Email template: `passwordResetEmail` HTML-escapes `recipientName` and the URL; control chars stripped, name clamped to 80 chars.
+- Reset URLs are built from trusted `APP_URL` (`src/lib/app-url.ts`), not from the request `Origin` header.
+- Removed unused scripts that contained a hardcoded NxtWave gateway API key (`pipeline/Scripts/llm_client_niat.py`, `llm_client_GPT4o.py`). **The leaked key is still in git history — please rotate it via NxtWave IT.**
+- Bumped `next` 16.2.2 → 16.2.3 (GHSA-q4gf-8mx6-v5v3 high-severity DoS).
+
 ## One-off Scripts
 
 - `scripts/migrate-data.mts` — copy DB rows from Supabase to Replit. Idempotent. Supports `--dry-run`.

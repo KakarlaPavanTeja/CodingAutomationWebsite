@@ -4,10 +4,11 @@ import path from "path";
 import { mkdirSync, createWriteStream } from "fs";
 import { readFile } from "fs/promises";
 import { eq } from "drizzle-orm";
-import { buildCommand } from "@/lib/pipeline-config";
-import { getSession } from "@/lib/auth/server";
+import { buildCommand, STEP_CONFIGS, LANGUAGES } from "@/lib/pipeline-config";
+import { requireProblemAccess } from "@/lib/auth/ownership";
 import { db } from "@/lib/db";
 import { problems, pipelineRuns, pipelineStates } from "@/lib/db/schema";
+import { assertSafeProblemId } from "@/lib/storage-path";
 import {
   createTempWorkspace,
   uploadOutputsFromDir,
@@ -19,24 +20,58 @@ import { registerProcess, unregisterProcess } from "@/lib/process-registry";
 import type { RunRequest } from "@/types/pipeline";
 
 export async function POST(request: NextRequest) {
-  // Auth first — never leak any info / do any work before authentication.
-  const session = await getSession();
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  if (session.profile.status !== "active") {
-    return NextResponse.json({ error: "Account not active." }, { status: 403 });
-  }
-  const user = { id: session.userId, email: session.email };
-
   const body: RunRequest = await request.json();
   const { stepId, mode, subSteps, languages, testcaseCount, problemId } = body;
 
-  const pythonPath = process.env.PYTHON_PATH || "python3";
-
-  if (!problemId) {
-    return NextResponse.json({ error: "problemId is required" }, { status: 400 });
+  // Validate problemId shape before any DB work.
+  let safeProblemId: string;
+  try {
+    safeProblemId = assertSafeProblemId(problemId);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }
+
+  // Allowlist every value that ends up as a CLI argument to the python script.
+  // We pass via spawn() argv (no shell), but constraining inputs prevents
+  // surprise behavior and confines the attack surface.
+  const allowedStepIds = new Set(STEP_CONFIGS.map((s) => s.id));
+  if (typeof stepId !== "string" || !allowedStepIds.has(stepId as never)) {
+    return NextResponse.json({ error: "Invalid stepId" }, { status: 400 });
+  }
+  if (mode !== undefined && mode !== "practice" && mode !== "exam") {
+    return NextResponse.json({ error: "Invalid mode" }, { status: 400 });
+  }
+  const allowedLangLabels = new Set(LANGUAGES.map((l) => l.label));
+  if (languages !== undefined) {
+    if (!Array.isArray(languages) || languages.some((l) => typeof l !== "string" || !allowedLangLabels.has(l))) {
+      return NextResponse.json({ error: "Invalid languages" }, { status: 400 });
+    }
+  }
+  if (subSteps !== undefined) {
+    if (
+      !Array.isArray(subSteps) ||
+      subSteps.some((s) => typeof s !== "string" || !/^[a-z0-9_]{1,32}$/.test(s))
+    ) {
+      return NextResponse.json({ error: "Invalid subSteps" }, { status: 400 });
+    }
+  }
+  if (
+    testcaseCount !== undefined &&
+    testcaseCount !== null &&
+    (typeof testcaseCount !== "number" ||
+      !Number.isInteger(testcaseCount) ||
+      testcaseCount < 1 ||
+      testcaseCount > 1000)
+  ) {
+    return NextResponse.json({ error: "Invalid testcaseCount" }, { status: 400 });
+  }
+
+  // Auth + ownership/admin gate.
+  const auth = await requireProblemAccess(safeProblemId);
+  if (auth.error) return auth.error;
+  const user = { id: auth.session.userId, email: auth.session.email };
+
+  const pythonPath = process.env.PYTHON_PATH || "python3";
 
   const pipelineRoot = process.env.PIPELINE_ROOT;
   const scriptsDir = process.env.PIPELINE_SCRIPTS_DIR ||
@@ -65,19 +100,19 @@ export async function POST(request: NextRequest) {
       const probRows = await db
         .select({ status: problems.status })
         .from(problems)
-        .where(eq(problems.id, problemId))
+        .where(eq(problems.id, safeProblemId))
         .limit(1);
       previousStatus = probRows[0]?.status ?? null;
 
       await db
         .update(problems)
         .set({ status: "processing", updatedAt: new Date() })
-        .where(eq(problems.id, problemId));
+        .where(eq(problems.id, safeProblemId));
 
       const runRows = await db
         .insert(pipelineRuns)
         .values({
-          problemId,
+          problemId: safeProblemId,
           userId: user.id,
           stepId,
           status: "running",
@@ -92,7 +127,7 @@ export async function POST(request: NextRequest) {
 
   let tmpDir: string;
   try {
-    tmpDir = await createTempWorkspace(problemId);
+    tmpDir = await createTempWorkspace(safeProblemId);
   } catch (err) {
     return NextResponse.json(
       { error: `Failed to create workspace: ${err instanceof Error ? err.message : "Unknown"}` },
@@ -105,7 +140,7 @@ export async function POST(request: NextRequest) {
   const logFilePath = path.join(logsDir, `${stepId}.log`);
 
   const outputsDir = path.join(tmpDir, "Outputs");
-  const periodicSync = startPeriodicSync(problemId, outputsDir, 5000);
+  const periodicSync = startPeriodicSync(safeProblemId, outputsDir, 5000);
 
   let logSyncInterval: ReturnType<typeof setInterval> | null = null;
   if (runId) {
@@ -113,7 +148,7 @@ export async function POST(request: NextRequest) {
       try {
         const logContent = await readFile(logFilePath, "utf-8").catch(() => "");
         if (logContent) {
-          await uploadLog(problemId, stepId, runId!, logContent);
+          await uploadLog(safeProblemId, stepId, runId!, logContent);
         }
       } catch {
         // Non-fatal
@@ -128,7 +163,7 @@ export async function POST(request: NextRequest) {
       PYTHONUNBUFFERED: "1",
       PIPELINE_BASE_DIR: tmpDir,
       PIPELINE_USER_ID: userId || "",
-      PIPELINE_PROBLEM_ID: problemId,
+      PIPELINE_PROBLEM_ID: safeProblemId,
       PIPELINE_STEP_ID: stepId || "",
       INTERNAL_API_URL:
         process.env.INTERNAL_API_URL ||
@@ -201,7 +236,7 @@ export async function POST(request: NextRequest) {
     await periodicSync.stop();
 
     try {
-      await uploadOutputsFromDir(problemId, outputsDir);
+      await uploadOutputsFromDir(safeProblemId, outputsDir);
     } catch {
       // Non-fatal
     }
@@ -209,7 +244,7 @@ export async function POST(request: NextRequest) {
     try {
       const logContent = await readFile(logFilePath, "utf-8");
       if (runId) {
-        await uploadLog(problemId, stepId, runId, logContent);
+        await uploadLog(safeProblemId, stepId, runId, logContent);
       }
     } catch {
       // Non-fatal
@@ -229,7 +264,7 @@ export async function POST(request: NextRequest) {
         const stateRows = await db
           .select({ stepStatuses: pipelineStates.stepStatuses })
           .from(pipelineStates)
-          .where(eq(pipelineStates.problemId, problemId))
+          .where(eq(pipelineStates.problemId, safeProblemId))
           .limit(1);
 
         if (stateRows[0]) {
@@ -242,7 +277,7 @@ export async function POST(request: NextRequest) {
           await db
             .update(pipelineStates)
             .set({ stepStatuses, updatedAt: new Date() })
-            .where(eq(pipelineStates.problemId, problemId));
+            .where(eq(pipelineStates.problemId, safeProblemId));
         }
 
         const currRunRows = await db
@@ -256,12 +291,12 @@ export async function POST(request: NextRequest) {
           await db
             .update(problems)
             .set({ status: "failed", updatedAt: new Date() })
-            .where(eq(problems.id, problemId));
+            .where(eq(problems.id, safeProblemId));
         } else if (stepId === "package_platform" || previousStatus === "completed") {
           await db
             .update(problems)
             .set({ status: "completed", updatedAt: new Date() })
-            .where(eq(problems.id, problemId));
+            .where(eq(problems.id, safeProblemId));
         }
       } catch {
         // Background DB update failed

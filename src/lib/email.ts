@@ -54,15 +54,35 @@ export async function sendEmail(opts: {
   }
 }
 
+/** HTML-encode a string so user-controlled values can't inject markup. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** Encode an attribute value (also escapes quotes for href context). */
+function escapeAttr(s: string): string {
+  return escapeHtml(s);
+}
+
 /** Reset-link email body. Plain layout to maximize deliverability. */
 export function passwordResetEmail(opts: { resetUrl: string; recipientName?: string | null }): {
   subject: string;
   html: string;
   text: string;
 } {
-  const greet = opts.recipientName ? `Hi ${opts.recipientName},` : "Hi,";
+  // Strip control chars and clamp length on names; never trust them in HTML.
+  const safeName = (opts.recipientName ?? "").replace(/[\x00-\x1f\x7f]/g, "").slice(0, 80).trim();
+  const greetText = safeName ? `Hi ${safeName},` : "Hi,";
+  const greetHtml = safeName ? `Hi ${escapeHtml(safeName)},` : "Hi,";
+  const safeUrl = escapeAttr(opts.resetUrl);
+
   const subject = "Reset your Coding Automation password";
-  const text = `${greet}
+  const text = `${greetText}
 
 We received a request to reset your password.
 
@@ -77,13 +97,13 @@ If you did not request this, you can safely ignore this email — your password 
   const html = `<!doctype html>
 <html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;color:#111;line-height:1.5;max-width:560px;margin:0 auto;padding:24px;">
   <h2 style="margin:0 0 16px;font-size:18px;">Reset your password</h2>
-  <p style="margin:0 0 12px;">${greet}</p>
+  <p style="margin:0 0 12px;">${greetHtml}</p>
   <p style="margin:0 0 16px;">We received a request to reset your password. Click the button below to choose a new one. This link is valid for 1 hour and can only be used once.</p>
   <p style="margin:24px 0;">
-    <a href="${opts.resetUrl}" style="display:inline-block;background:#111;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;font-weight:600;">Reset password</a>
+    <a href="${safeUrl}" style="display:inline-block;background:#111;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;font-weight:600;">Reset password</a>
   </p>
   <p style="margin:0 0 8px;font-size:13px;color:#555;">Or copy this link into your browser:</p>
-  <p style="margin:0 0 24px;font-size:12px;color:#555;word-break:break-all;">${opts.resetUrl}</p>
+  <p style="margin:0 0 24px;font-size:12px;color:#555;word-break:break-all;">${safeUrl}</p>
   <p style="margin:0;font-size:13px;color:#555;">If you didn't request this, you can safely ignore this email — your password won't change.</p>
 </body></html>`;
 
