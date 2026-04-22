@@ -38,3 +38,9 @@ externalPort = 80
 
 [userenv.shared]
 CRON_SECRET = "0ab3b8b1a3546ca748685a37398c05a407b84a4d880a3b77c35fbbdaa0ff1b8b"
+
+[userenv.development]
+APP_URL = "https://66152dca-4f8c-41b2-b41e-e4bff91b1c17-00-3ooefx2hctsjj.worf.replit.dev"
+
+[userenv.production]
+APP_URL = "https://coding-question-automation.replit.app/"
