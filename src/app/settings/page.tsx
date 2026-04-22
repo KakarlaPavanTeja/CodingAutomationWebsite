@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { LoadingButton } from "@/components/auth/LoadingButton";
 import { Button } from "@/components/ui/button";
 import { User, Mail, Shield, LogOut, Save, KeyRound } from "lucide-react";
-import { validateDisplayName } from "@/lib/auth-validation";
+import { validateDisplayName, validatePassword } from "@/lib/auth-validation";
 
 export default function SettingsPage() {
   const { user, profile, signOut, refresh } = useAuth();
@@ -16,8 +16,12 @@ export default function SettingsPage() {
   const [displayName, setDisplayName] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [resettingPassword, setResettingPassword] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [pwErrors, setPwErrors] = useState<Record<string, string>>({});
+  const [changingPassword, setChangingPassword] = useState(false);
 
   useEffect(() => {
     if (profile?.display_name) {
@@ -52,23 +56,41 @@ export default function SettingsPage() {
     setSaving(false);
   };
 
-  const handlePasswordReset = async () => {
-    if (!user?.email) return;
-    setResettingPassword(true);
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const errs: Record<string, string> = {};
+    if (!currentPassword) errs.currentPassword = "Current password is required.";
+    const strength = validatePassword(newPassword);
+    if (strength.errors.length > 0) {
+      errs.newPassword = strength.errors.join(", ");
+    }
+    if (newPassword !== confirmPassword) {
+      errs.confirmPassword = "Passwords do not match.";
+    }
+    if (currentPassword && newPassword && currentPassword === newPassword) {
+      errs.newPassword = "New password must be different from current password.";
+    }
+    setPwErrors(errs);
+    if (Object.keys(errs).length > 0) return;
 
-    const res = await fetch("/api/auth/reset-password/request", {
+    setChangingPassword(true);
+    const res = await fetch("/api/auth/change-password", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: user.email }),
+      body: JSON.stringify({ currentPassword, newPassword }),
     });
-
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      toast(data.error || "Could not send reset link.", "error");
+      toast(data.error || "Could not change password.", "error");
+      if (res.status === 401) setPwErrors({ currentPassword: data.error });
     } else {
-      toast("Password reset email sent. Check your inbox.", "success");
+      toast("Password updated successfully.", "success");
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPwErrors({});
     }
-    setResettingPassword(false);
+    setChangingPassword(false);
   };
 
   const handleLogout = async () => {
@@ -154,30 +176,86 @@ export default function SettingsPage() {
       </div>
 
       {/* Security Section */}
-      <div className="rounded-lg border bg-card p-6 space-y-4">
+      <div className="rounded-lg border bg-card p-6 space-y-5">
         <h2 className="text-lg font-semibold flex items-center gap-2">
           <KeyRound className="h-5 w-5" />
-          Security
+          Change Password
         </h2>
 
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium">Password</p>
-            <p className="text-sm text-muted-foreground">
-              Send a password reset link to your email
-            </p>
+        <form onSubmit={handleChangePassword} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="currentPassword">Current Password</Label>
+            <Input
+              id="currentPassword"
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={(e) => {
+                setCurrentPassword(e.target.value);
+                setPwErrors((p) => ({ ...p, currentPassword: "" }));
+              }}
+              aria-invalid={!!pwErrors.currentPassword}
+            />
+            {pwErrors.currentPassword && (
+              <p role="alert" className="text-sm text-destructive">
+                {pwErrors.currentPassword}
+              </p>
+            )}
           </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="newPassword">New Password</Label>
+            <Input
+              id="newPassword"
+              type="password"
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(e) => {
+                setNewPassword(e.target.value);
+                setPwErrors((p) => ({ ...p, newPassword: "" }));
+              }}
+              aria-invalid={!!pwErrors.newPassword}
+            />
+            <p className="text-xs text-muted-foreground">
+              At least 8 characters with upper- and lower-case letters, a number, and a special character.
+            </p>
+            {pwErrors.newPassword && (
+              <p role="alert" className="text-sm text-destructive">
+                {pwErrors.newPassword}
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="confirmPassword">Confirm New Password</Label>
+            <Input
+              id="confirmPassword"
+              type="password"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(e) => {
+                setConfirmPassword(e.target.value);
+                setPwErrors((p) => ({ ...p, confirmPassword: "" }));
+              }}
+              aria-invalid={!!pwErrors.confirmPassword}
+            />
+            {pwErrors.confirmPassword && (
+              <p role="alert" className="text-sm text-destructive">
+                {pwErrors.confirmPassword}
+              </p>
+            )}
+          </div>
+
           <LoadingButton
-            variant="outline"
-            loading={resettingPassword}
-            loadingText="Sending..."
+            type="submit"
+            loading={changingPassword}
+            loadingText="Updating..."
             className="w-auto"
-            onClick={handlePasswordReset}
-            type="button"
           >
-            Reset Password
+            <KeyRound className="mr-2 h-4 w-4" />
+            Update Password
           </LoadingButton>
-        </div>
+        </form>
       </div>
 
       {/* Sign Out Section */}
