@@ -8,8 +8,7 @@ import { AuthCard } from "@/components/auth/AuthCard";
 import { FormField } from "@/components/auth/FormField";
 import { PasswordInput } from "@/components/auth/PasswordInput";
 import { LoadingButton } from "@/components/auth/LoadingButton";
-import { Input } from "@/components/ui/input";
-import { validateEmail, validatePassword } from "@/lib/auth-validation";
+import { validatePassword } from "@/lib/auth-validation";
 
 export default function ResetPasswordPage() {
   return (
@@ -27,14 +26,12 @@ export default function ResetPasswordPage() {
 
 function ResetPasswordContent() {
   const [mode, setMode] = useState<"request" | "update">("request");
-  const [email, setEmail] = useState("");
   const [token, setToken] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [emailSent, setEmailSent] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
@@ -42,49 +39,14 @@ function ResetPasswordContent() {
   useEffect(() => {
     const m = searchParams.get("mode");
     const t = searchParams.get("token");
-    const e = searchParams.get("email");
     if (m === "update" && t) {
       setMode("update");
       setToken(t);
     }
-    if (e) setEmail(e);
   }, [searchParams]);
 
   const handleBlur = (field: string) => {
     setTouched((prev) => ({ ...prev, [field]: true }));
-  };
-
-  const handleRequestReset = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFieldErrors({});
-
-    const emailResult = validateEmail(email);
-    if (!emailResult.valid) {
-      setTouched({ email: true });
-      setFieldErrors({ email: emailResult.error! });
-      document.getElementById("email")?.focus();
-      return;
-    }
-
-    setLoading(true);
-
-    const res = await fetch("/api/auth/reset-password/request", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: emailResult.normalized }),
-    });
-
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      const msg = data.error || "Could not send reset link.";
-      setFieldErrors({ form: msg });
-      toast(msg, "error");
-    } else {
-      // Always show generic success — server doesn't reveal whether email exists.
-      toast("If that email is registered, a reset link has been sent.", "success");
-      setEmailSent(true);
-    }
-    setLoading(false);
   };
 
   const handleUpdatePassword = async (e: React.FormEvent) => {
@@ -201,8 +163,8 @@ function ResetPasswordContent() {
 
   return (
     <AuthCard
-      title="Reset password"
-      subtitle="Enter your email to receive a reset link"
+      title="Need to reset your password?"
+      subtitle="Self-serve password reset isn't available right now."
       footer={
         <>
           Remember your password?{" "}
@@ -215,51 +177,15 @@ function ResetPasswordContent() {
         </>
       }
     >
-      <form onSubmit={handleRequestReset} className="space-y-4">
-        {fieldErrors.form && (
-          <div
-            role="alert"
-            aria-live="polite"
-            className="rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive animate-in fade-in slide-in-from-top-2 duration-300"
-          >
-            {fieldErrors.form}
-          </div>
-        )}
-
-        {emailSent && (
-          <div className="rounded-md border border-green-500/50 bg-green-500/10 px-4 py-3 text-sm text-green-700 dark:text-green-400 animate-in fade-in duration-300">
-            If <strong>{email}</strong> is registered, a reset link has been sent.
-          </div>
-        )}
-
-        <FormField label="Email" htmlFor="email" error={fieldErrors.email}>
-          <Input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => {
-              setEmail(e.target.value);
-              if (touched.email) {
-                const r = validateEmail(e.target.value);
-                setFieldErrors((prev) => {
-                  const next = { ...prev };
-                  if (!r.valid) next.email = r.error!;
-                  else delete next.email;
-                  return next;
-                });
-              }
-            }}
-            onBlur={() => handleBlur("email")}
-            placeholder="you@example.com"
-            autoComplete="email"
-            aria-invalid={!!fieldErrors.email}
-          />
-        </FormField>
-
-        <LoadingButton type="submit" loading={loading} loadingText="Sending...">
-          Send Reset Link
-        </LoadingButton>
-      </form>
+      <div className="space-y-4 text-sm text-muted-foreground">
+        <p>
+          Please contact your administrator to request a password reset link.
+          They can generate a single-use link for you from the admin console.
+        </p>
+        <p>
+          Once you receive the link, click it to set a new password.
+        </p>
+      </div>
     </AuthCard>
   );
 }

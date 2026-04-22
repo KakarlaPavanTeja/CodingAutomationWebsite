@@ -160,7 +160,7 @@ export default function LoginPage() {
               href="/reset-password"
               className="text-xs text-muted-foreground hover:text-primary underline-offset-4 hover:underline"
             >
-              Forgot password?
+              Need help signing in?
             </Link>
           }
         >
