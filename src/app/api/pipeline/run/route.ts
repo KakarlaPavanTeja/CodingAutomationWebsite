@@ -130,6 +130,12 @@ export async function POST(request: NextRequest) {
       PIPELINE_USER_ID: userId || "",
       PIPELINE_PROBLEM_ID: problemId,
       PIPELINE_STEP_ID: stepId || "",
+      INTERNAL_API_URL:
+        process.env.INTERNAL_API_URL ||
+        process.env.NEXTAUTH_URL ||
+        (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : "") ||
+        "http://127.0.0.1:5000",
+      INTERNAL_API_SECRET: process.env.CRON_SECRET || "",
     },
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],

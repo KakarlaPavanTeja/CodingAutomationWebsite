@@ -33,8 +33,13 @@ export async function POST(request: NextRequest) {
   if (token) {
     const origin = request.headers.get("origin") || new URL(request.url).origin;
     const url = `${origin}/reset-password?mode=update&token=${token}`;
-    // No email service configured yet — log so an admin can deliver manually.
-    console.log(`[password-reset] ${email} -> ${url}`);
+    // No email service yet. Log the reset link only outside production so we
+    // don't expose live tokens through production log aggregators.
+    if (process.env.NODE_ENV !== "production") {
+      console.log(`[password-reset] ${email} -> ${url}`);
+    } else {
+      console.log(`[password-reset] reset link generated for ${email} (token redacted)`);
+    }
     await db.insert(authAuditLog).values({
       eventType: "password_reset_request",
       userId: null,

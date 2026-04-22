@@ -84,6 +84,11 @@ export default function LoginPage() {
 
     if (!res.ok) {
       const msg = data.error || "Sign in failed.";
+      if (data.code === "password_reset_required") {
+        toast(msg, "info");
+        router.push(`/reset-password?email=${encodeURIComponent(emailResult.normalized)}`);
+        return;
+      }
       setFieldErrors({ form: msg });
       toast(msg, "error");
       setLoading(false);

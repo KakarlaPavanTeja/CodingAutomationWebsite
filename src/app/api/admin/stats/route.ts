@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { and, eq, ne, sql } from "drizzle-orm";
-import { requireAdminApi } from "@/lib/supabase/server";
+import { requireAdminApi } from "@/lib/auth/server";
 import { db } from "@/lib/db";
 import { profiles, problems, pipelineRuns, llmUsage } from "@/lib/db/schema";
 

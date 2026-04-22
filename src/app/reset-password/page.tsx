@@ -42,10 +42,12 @@ function ResetPasswordContent() {
   useEffect(() => {
     const m = searchParams.get("mode");
     const t = searchParams.get("token");
+    const e = searchParams.get("email");
     if (m === "update" && t) {
       setMode("update");
       setToken(t);
     }
+    if (e) setEmail(e);
   }, [searchParams]);
 
   const handleBlur = (field: string) => {

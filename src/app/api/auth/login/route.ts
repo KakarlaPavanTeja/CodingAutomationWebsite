@@ -42,7 +42,10 @@ export async function POST(request: NextRequest) {
       userAgent: ua,
       metadata: { email },
     });
-    return NextResponse.json({ error: result.error }, { status: 401 });
+    return NextResponse.json(
+      { error: result.error, code: result.code },
+      { status: 401 },
+    );
   }
 
   await setSessionCookie(result.sessionToken, result.expiresAt);

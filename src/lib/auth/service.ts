@@ -65,7 +65,7 @@ export async function signup(input: SignupInput): Promise<SignupResult> {
 
 export type LoginResult =
   | { ok: true; userId: string; status: string; sessionToken: string; expiresAt: Date }
-  | { ok: false; error: string };
+  | { ok: false; error: string; code?: "password_reset_required" };
 
 export async function login(emailRaw: string, password: string): Promise<LoginResult> {
   const email = emailRaw.trim().toLowerCase();
@@ -85,10 +85,20 @@ export async function login(emailRaw: string, password: string): Promise<LoginRe
   // Generic error to prevent user enumeration
   const invalidMsg = "Invalid email or password.";
 
-  if (!row || !row.passwordHash) {
+  if (!row) {
     // Still hash a dummy password to roughly equalize timing
     await verifyPassword(password, "$2b$12$abcdefghijklmnopqrstuv");
     return { ok: false, error: invalidMsg };
+  }
+  if (!row.passwordHash) {
+    // Account exists but has no password (e.g. migrated from Supabase). The
+    // user must complete a password reset before they can sign in.
+    await verifyPassword(password, "$2b$12$abcdefghijklmnopqrstuv");
+    return {
+      ok: false,
+      error: "Please reset your password to finish setting up this account.",
+      code: "password_reset_required",
+    };
   }
 
   const ok = await verifyPassword(password, row.passwordHash);

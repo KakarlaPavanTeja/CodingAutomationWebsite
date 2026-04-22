@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Shield, UserX, UserCheck, AlertTriangle, Clock } from "lucide-react";
+import { Shield, UserX, UserCheck, AlertTriangle, Clock, KeyRound, Copy } from "lucide-react";
 
 type UserProfile = {
   id: string;
@@ -18,6 +18,24 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<UserProfile | null>(null);
+  const [resetLink, setResetLink] = useState<{ email: string; url: string } | null>(null);
+  const [resetCopied, setResetCopied] = useState(false);
+
+  const generateResetLink = async (u: UserProfile) => {
+    setActionLoading(u.id);
+    try {
+      const r = await fetch(`/api/admin/users/${u.id}/reset-link`, { method: "POST" });
+      const data = await r.json();
+      if (r.ok && data.url) {
+        setResetLink({ email: data.email ?? u.email, url: data.url });
+        setResetCopied(false);
+      } else {
+        alert(data.error || "Failed to generate reset link.");
+      }
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   const fetchUsers = () => {
     fetch("/api/admin/users")
@@ -224,6 +242,14 @@ export default function AdminUsersPage() {
                             <Shield className="h-3 w-3 line-through" />
                           </button>
                         )}
+                        <button
+                          onClick={() => generateResetLink(u)}
+                          disabled={actionLoading === u.id}
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground hover:bg-muted disabled:opacity-50"
+                          title="Generate password reset link"
+                        >
+                          <KeyRound className="h-3 w-3" />
+                        </button>
                         {u.status === "active" ? (
                           <button
                             onClick={() => setDeactivateTarget(u)}
@@ -252,6 +278,48 @@ export default function AdminUsersPage() {
           </table>
         </div>
       </div>
+
+      {/* Reset Link Dialog */}
+      {resetLink && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-card border rounded-lg p-6 w-full max-w-lg space-y-4 shadow-lg mx-4">
+            <div className="flex items-center gap-2">
+              <KeyRound className="h-5 w-5 text-primary" />
+              <h3 className="font-semibold">Password reset link</h3>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Send this single-use link to <span className="font-medium text-foreground">{resetLink.email}</span>. It expires in 1 hour and can only be used once.
+            </p>
+            <div className="flex items-stretch gap-2">
+              <input
+                readOnly
+                value={resetLink.url}
+                onFocus={(e) => e.currentTarget.select()}
+                className="flex-1 rounded-md border bg-muted/50 px-3 py-2 text-xs font-mono"
+              />
+              <button
+                onClick={async () => {
+                  await navigator.clipboard.writeText(resetLink.url);
+                  setResetCopied(true);
+                  setTimeout(() => setResetCopied(false), 2000);
+                }}
+                className="inline-flex items-center gap-1 rounded-md px-3 py-2 text-xs font-medium border hover:bg-muted transition-colors"
+              >
+                <Copy className="h-3 w-3" />
+                {resetCopied ? "Copied" : "Copy"}
+              </button>
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setResetLink(null)}
+                className="px-3 py-1.5 rounded-md text-sm font-medium border hover:bg-muted transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Deactivate Confirmation Dialog */}
       {deactivateTarget && (

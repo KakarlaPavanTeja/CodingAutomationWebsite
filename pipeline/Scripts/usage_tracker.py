@@ -5,8 +5,8 @@ Pricing is loaded from pipeline/pricing.json (updated daily or manually).
 Falls back to hardcoded defaults if the file is missing.
 
 Environment variables used:
-  SUPABASE_URL            — e.g. https://xxx.supabase.co
-  SUPABASE_SERVICE_ROLE_KEY — service role key (server-side only)
+  INTERNAL_API_URL        — base URL of this Next.js app (set by the run route)
+  INTERNAL_API_SECRET     — shared secret matching CRON_SECRET on the server
   PIPELINE_USER_ID        — set by the API route before spawning the script
   PIPELINE_PROBLEM_ID     — set by the API route before spawning the script
   PIPELINE_STEP_ID        — set by the API route before spawning the script
@@ -116,31 +116,31 @@ def get_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Supabase insert
+# Replit internal API insert (replaces previous Supabase REST call)
 # ---------------------------------------------------------------------------
-_SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")
-_SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+# The pipeline run handler (src/app/api/pipeline/run/route.ts) sets these
+# env vars before spawning python.
+_INTERNAL_API_URL = os.environ.get("INTERNAL_API_URL", "")
+_INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
 
 
-def _insert_supabase(row: dict) -> bool:
-    """Insert a row into llm_usage via Supabase REST API. Returns True on success."""
-    if not _SUPABASE_URL or not _SUPABASE_SERVICE_KEY:
+def _insert_remote(row: dict) -> bool:
+    """POST a usage row to the internal /api/internal/llm-usage endpoint."""
+    if not _INTERNAL_API_URL or not _INTERNAL_API_SECRET:
         return False
-    url = f"{_SUPABASE_URL}/rest/v1/llm_usage"
+    url = f"{_INTERNAL_API_URL.rstrip('/')}/api/internal/llm-usage"
     headers = {
-        "apikey": _SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {_SUPABASE_SERVICE_KEY}",
         "Content-Type": "application/json",
-        "Prefer": "return=minimal",
+        "X-Internal-Secret": _INTERNAL_API_SECRET,
     }
     try:
         resp = _requests.post(url, json=row, headers=headers, timeout=10)
         if resp.status_code in (200, 201):
             return True
-        print(f"[usage_tracker] Supabase insert failed ({resp.status_code}): {resp.text[:200]}", flush=True)
+        print(f"[usage_tracker] internal insert failed ({resp.status_code}): {resp.text[:200]}", flush=True)
         return False
     except Exception as e:
-        print(f"[usage_tracker] Supabase insert error: {e}", flush=True)
+        print(f"[usage_tracker] internal insert error: {e}", flush=True)
         return False
 
 
@@ -239,14 +239,14 @@ def update_usage(
         "created_at": datetime.utcnow().isoformat() + "Z",
     }
 
-    # Try Supabase first
-    success = _insert_supabase(row)
+    # Try Replit internal endpoint first
+    success = _insert_remote(row)
 
     # Always write local too (as backup / for local debugging)
     _append_local(row)
 
     if success:
-        print(f"[usage] {model} | {purpose} | {total_tokens} tokens | ${cost:.6f} → Supabase ✓", flush=True)
+        print(f"[usage] {model} | {purpose} | {total_tokens} tokens | ${cost:.6f} → DB ✓", flush=True)
     else:
         print(f"[usage] {model} | {purpose} | {total_tokens} tokens | ${cost:.6f} → local only", flush=True)
 
