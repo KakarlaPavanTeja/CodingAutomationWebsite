@@ -12,6 +12,7 @@ import { requireAdminApi } from "@/lib/auth/server";
 import { createPasswordResetToken } from "@/lib/auth/service";
 import { db } from "@/lib/db";
 import { users, authAuditLog } from "@/lib/db/schema";
+import { buildResetUrl } from "@/lib/app-url";
 
 export async function POST(
   request: NextRequest,
@@ -40,8 +41,8 @@ export async function POST(
     return NextResponse.json({ error: "Failed to create reset token." }, { status: 500 });
   }
 
-  const origin = request.headers.get("origin") || new URL(request.url).origin;
-  const url = `${origin}/reset-password?mode=update&token=${token}`;
+  // Build link from trusted server config, never from request headers.
+  const url = buildResetUrl(token);
 
   await db.insert(authAuditLog).values({
     eventType: "admin_reset_link_minted",
