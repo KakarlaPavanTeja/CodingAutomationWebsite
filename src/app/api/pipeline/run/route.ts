@@ -5,7 +5,7 @@ import { mkdirSync, createWriteStream } from "fs";
 import { readFile } from "fs/promises";
 import { eq } from "drizzle-orm";
 import { buildCommand } from "@/lib/pipeline-config";
-import { createClient } from "@/lib/supabase/server";
+import { getSession } from "@/lib/auth/server";
 import { db } from "@/lib/db";
 import { problems, pipelineRuns, pipelineStates } from "@/lib/db/schema";
 import {
@@ -19,6 +19,16 @@ import { registerProcess, unregisterProcess } from "@/lib/process-registry";
 import type { RunRequest } from "@/types/pipeline";
 
 export async function POST(request: NextRequest) {
+  // Auth first — never leak any info / do any work before authentication.
+  const session = await getSession();
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (session.profile.status !== "active") {
+    return NextResponse.json({ error: "Account not active." }, { status: 403 });
+  }
+  const user = { id: session.userId, email: session.email };
+
   const body: RunRequest = await request.json();
   const { stepId, mode, subSteps, languages, testcaseCount, problemId } = body;
 
@@ -45,14 +55,11 @@ export async function POST(request: NextRequest) {
   const scriptPath = path.join(scriptsDir, scriptBasename);
 
   let runId: string | null = null;
-  let userId: string | null = null;
+  let userId: string | null = user.id;
   let previousStatus: string | null = null;
 
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (user) {
+    {
       userId = user.id;
 
       const probRows = await db

@@ -2,38 +2,28 @@
 
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/components/ui/toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LoadingButton } from "@/components/auth/LoadingButton";
 import { Button } from "@/components/ui/button";
 import { User, Mail, Shield, LogOut, Save, KeyRound } from "lucide-react";
-import { validateDisplayName, sanitizeErrorMessage } from "@/lib/auth-validation";
+import { validateDisplayName } from "@/lib/auth-validation";
 
 export default function SettingsPage() {
-  const { user, profile, signOut } = useAuth();
+  const { user, profile, signOut, refresh } = useAuth();
   const { toast } = useToast();
   const [displayName, setDisplayName] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
-  const supabase = createClient();
 
   useEffect(() => {
     if (profile?.display_name) {
       setDisplayName(profile.display_name);
     }
   }, [profile]);
-
-  const logAudit = (eventType: string) => {
-    fetch("/api/auth/audit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ event_type: eventType, user_id: user?.id }),
-    }).catch(() => {});
-  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,20 +36,18 @@ export default function SettingsPage() {
     }
 
     setSaving(true);
+    const res = await fetch("/api/profile", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ display_name: result.sanitized }),
+    });
 
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        display_name: result.sanitized,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", user!.id);
-
-    if (error) {
-      toast(sanitizeErrorMessage(error.message), "error");
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error || "Could not update profile.", "error");
     } else {
       toast("Profile updated successfully!", "success");
-      logAudit("profile_update");
+      await refresh();
     }
     setSaving(false);
   };
@@ -68,12 +56,15 @@ export default function SettingsPage() {
     if (!user?.email) return;
     setResettingPassword(true);
 
-    const { error } = await supabase.auth.resetPasswordForEmail(user.email, {
-      redirectTo: `${window.location.origin}/auth/callback?type=recovery`,
+    const res = await fetch("/api/auth/reset-password/request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: user.email }),
     });
 
-    if (error) {
-      toast(sanitizeErrorMessage(error.message), "error");
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error || "Could not send reset link.", "error");
     } else {
       toast("Password reset email sent. Check your inbox.", "success");
     }
@@ -81,7 +72,6 @@ export default function SettingsPage() {
   };
 
   const handleLogout = async () => {
-    logAudit("logout");
     sessionStorage.setItem("toast", "Signed out successfully!");
     await signOut();
   };
@@ -214,10 +204,7 @@ export default function SettingsPage() {
             <Button variant="destructive" onClick={handleLogout}>
               Confirm Sign Out
             </Button>
-            <Button
-              variant="outline"
-              onClick={() => setShowLogoutConfirm(false)}
-            >
+            <Button variant="outline" onClick={() => setShowLogoutConfirm(false)}>
               Cancel
             </Button>
           </div>

@@ -1,9 +1,7 @@
-import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { getSessionByToken, SESSION_COOKIE } from "@/lib/auth/session";
 
 export async function proxy(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request });
-
   const isPublicPage =
     request.nextUrl.pathname === "/login" ||
     request.nextUrl.pathname === "/signup" ||
@@ -15,77 +13,43 @@ export async function proxy(request: NextRequest) {
 
   const isApiRoute = request.nextUrl.pathname.startsWith("/api");
 
-  // Skip auth check entirely for API routes — they handle their own auth
-  if (isApiRoute) {
-    return supabaseResponse;
-  }
+  // API routes handle their own auth.
+  if (isApiRoute) return NextResponse.next();
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          );
-          supabaseResponse = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          );
-        },
-      },
-    }
-  );
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  const session = await getSessionByToken(token);
 
-  // Refresh the session — this keeps the auth cookie alive
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  // Redirect unauthenticated users (except public pages)
-  if (!user && !isPublicPage) {
+  if (!session && !isPublicPage) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
-  // Check if user is pending approval — block from protected pages
-  if (user && !isPublicPage) {
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("status")
-      .eq("id", user.id)
-      .single();
-
-    if (profile?.status === "pending_approval") {
+  if (session && !isPublicPage) {
+    if (session.profile.status === "pending_approval") {
       const url = request.nextUrl.clone();
       url.pathname = "/pending-approval";
       return NextResponse.redirect(url);
     }
-
-    if (profile?.status === "deactivated") {
-      await supabase.auth.signOut();
+    if (session.profile.status === "deactivated") {
       const url = request.nextUrl.clone();
       url.pathname = "/login";
-      return NextResponse.redirect(url);
+      const res = NextResponse.redirect(url);
+      res.cookies.set(SESSION_COOKIE, "", { path: "/", maxAge: 0 });
+      return res;
     }
   }
 
-  // Redirect authenticated users away from login/signup
+  // Logged-in users skip login/signup pages.
   const isLoginSignup =
-    request.nextUrl.pathname === "/login" ||
-    request.nextUrl.pathname === "/signup";
-  if (user && isLoginSignup) {
+    request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/signup";
+  if (session && isLoginSignup) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);
   }
 
-  return supabaseResponse;
+  return NextResponse.next();
 }
 
 export const config = {

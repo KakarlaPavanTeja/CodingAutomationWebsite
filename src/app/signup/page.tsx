@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useToast } from "@/components/ui/toast";
@@ -10,19 +9,13 @@ import { FormField } from "@/components/auth/FormField";
 import { PasswordInput } from "@/components/auth/PasswordInput";
 import { LoadingButton } from "@/components/auth/LoadingButton";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Mail, RotateCcw } from "lucide-react";
 import {
   validateEmail,
   validatePassword,
   validateDisplayName,
-  sanitizeErrorMessage,
 } from "@/lib/auth-validation";
 
-type Step = "form" | "verify";
-
 export default function SignupPage() {
-  const [step, setStep] = useState<Step>("form");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -31,9 +24,7 @@ export default function SignupPage() {
   const [loading, setLoading] = useState(false);
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [resendCooldown, setResendCooldown] = useState(0);
   const router = useRouter();
-  const supabase = createClient();
   const { toast } = useToast();
 
   const validateField = useCallback(
@@ -68,68 +59,27 @@ export default function SignupPage() {
       }
       setFieldErrors(errors);
     },
-    [fieldErrors, touched]
+    [fieldErrors, touched],
   );
 
   const handleBlur = (field: string) => {
     setTouched((prev) => ({ ...prev, [field]: true }));
-    const values: Record<string, string> = {
-      displayName,
-      email,
-      password,
-      adminSecret,
-    };
+    const values: Record<string, string> = { displayName, email, password, adminSecret };
     validateField(field, values[field]);
-  };
-
-  const logAudit = (eventType: string, userId?: string) => {
-    fetch("/api/auth/audit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ event_type: eventType, user_id: userId }),
-    }).catch(() => {});
-  };
-
-  const startResendCooldown = () => {
-    setResendCooldown(60);
-    const interval = setInterval(() => {
-      setResendCooldown((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-  };
-
-  const handleResendVerification = async () => {
-    const { error } = await supabase.auth.resend({
-      type: "signup",
-      email,
-    });
-    if (error) {
-      toast(sanitizeErrorMessage(error.message), "error");
-    } else {
-      toast("Verification email resent!", "success");
-      startResendCooldown();
-    }
   };
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Validate all fields
     const nameResult = validateDisplayName(displayName);
     const emailResult = validateEmail(email);
     const passwordResult = validatePassword(password);
-    const allTouched = {
+    setTouched({
       displayName: true,
       email: true,
       password: true,
       adminSecret: true,
-    };
-    setTouched(allTouched);
+    });
 
     const errors: Record<string, string> = {};
     if (!nameResult.valid) errors.displayName = nameResult.error!;
@@ -149,109 +99,38 @@ export default function SignupPage() {
     setFieldErrors({});
     setLoading(true);
 
-    // Validate admin secret server-side
-    if (role === "admin") {
-      const res = await fetch("/api/auth/verify-admin-secret", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ secret: adminSecret }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        const msg = data.error || "Invalid admin secret key.";
-        setFieldErrors({ adminSecret: msg });
-        toast(msg, "error");
-        setLoading(false);
-        return;
-      }
-    }
-
-    const { error, data } = await supabase.auth.signUp({
-      email: emailResult.normalized,
-      password,
-      options: {
-        data: { display_name: nameResult.sanitized, role },
-      },
+    const res = await fetch("/api/auth/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: emailResult.normalized,
+        password,
+        displayName: nameResult.sanitized,
+        role,
+        adminSecret: role === "admin" ? adminSecret : undefined,
+      }),
     });
+    const data = await res.json().catch(() => ({}));
 
-    if (error) {
-      const msg = sanitizeErrorMessage(error.message);
-      setFieldErrors({ form: msg });
+    if (!res.ok) {
+      const msg = data.error || "Signup failed.";
+      const field: string | undefined = data.field;
+      if (field) setFieldErrors({ [field]: msg });
+      else setFieldErrors({ form: msg });
       toast(msg, "error");
       setLoading(false);
       return;
     }
 
-    // Update profile role and set approval status
-    if (data.user) {
-      const profileUpdates: Record<string, string> = { role };
-      // Problem setters need admin approval; admins are auto-approved
-      if (role === "problem_setter") {
-        profileUpdates.status = "pending_approval";
-      }
-      await supabase.from("profiles").update(profileUpdates).eq("id", data.user.id);
-      logAudit("signup", data.user.id);
-    }
-
-    // Check if email confirmation is needed
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (session) {
-      if (role === "problem_setter") {
-        toast("Account created! Waiting for admin approval.", "success");
-        router.push("/pending-approval");
-      } else {
-        toast("Account created successfully!", "success");
-        router.push("/");
-      }
-      router.refresh();
+    if (data.status === "pending_approval") {
+      toast("Account created! Waiting for admin approval.", "success");
+      router.push("/pending-approval");
     } else {
-      setStep("verify");
-      startResendCooldown();
-      setLoading(false);
+      toast("Account created successfully!", "success");
+      router.push("/");
     }
+    router.refresh();
   };
-
-  // Email verification step
-  if (step === "verify") {
-    return (
-      <AuthCard
-        title="Check your email"
-        subtitle={`We sent a verification link to ${email}`}
-        footer={
-          <Link
-            href="/login"
-            className="text-primary font-medium underline-offset-4 hover:underline"
-          >
-            Back to sign in
-          </Link>
-        }
-      >
-        <div className="flex flex-col items-center gap-6 py-4">
-          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-            <Mail className="h-8 w-8 text-primary" />
-          </div>
-          <p className="text-sm text-muted-foreground text-center">
-            Click the link in the email to verify your account. If you
-            don&apos;t see it, check your spam folder.
-          </p>
-          <Button
-            variant="outline"
-            onClick={handleResendVerification}
-            disabled={resendCooldown > 0}
-            className="w-full"
-          >
-            <RotateCcw className="mr-2 h-4 w-4" />
-            {resendCooldown > 0
-              ? `Resend in ${resendCooldown}s`
-              : "Resend verification email"}
-          </Button>
-        </div>
-      </AuthCard>
-    );
-  }
 
   return (
     <AuthCard
@@ -291,8 +170,7 @@ export default function SignupPage() {
             value={displayName}
             onChange={(e) => {
               setDisplayName(e.target.value);
-              if (touched.displayName)
-                validateField("displayName", e.target.value);
+              if (touched.displayName) validateField("displayName", e.target.value);
             }}
             onBlur={() => handleBlur("displayName")}
             placeholder="Your name"
@@ -337,7 +215,6 @@ export default function SignupPage() {
           />
         </FormField>
 
-        {/* Role Selection */}
         <div className="space-y-2">
           <label className="text-sm font-medium">Role</label>
           <div className="grid grid-cols-2 gap-2">

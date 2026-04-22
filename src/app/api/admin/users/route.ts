@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
-import { requireAdminApi } from "@/lib/supabase/server";
+import { requireAdminApi } from "@/lib/auth/server";
 import { db } from "@/lib/db";
-import { profiles } from "@/lib/db/schema";
-import { createClient as createAdminAuth } from "@supabase/supabase-js";
+import { profiles, users, sessions } from "@/lib/db/schema";
 
 export async function GET() {
   const auth = await requireAdminApi();
@@ -66,16 +65,16 @@ export async function DELETE(request: NextRequest) {
     })
     .where(eq(profiles.id, userId));
 
-  // Delete the auth user via Supabase admin API (Phase 5 will replace this)
-  try {
-    const adminAuth = createAdminAuth(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
-    await adminAuth.auth.admin.deleteUser(userId);
-  } catch {
-    // Best-effort
-  }
+  // Wipe credentials and revoke sessions so the user can't sign in again.
+  await db
+    .update(users)
+    .set({
+      email: `deactivated_${userId.slice(0, 8)}@removed`,
+      passwordHash: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, userId));
+  await db.delete(sessions).where(eq(sessions.userId, userId));
 
   return NextResponse.json({ success: true });
 }

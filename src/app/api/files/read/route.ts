@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readStorageFile } from "@/lib/storage-sync";
+import { requireAuthApi } from "@/lib/auth/server";
 
 export async function GET(request: NextRequest) {
+  const auth = await requireAuthApi();
+  if (auth.error) return auth.error;
+
   const filePath = request.nextUrl.searchParams.get("path");
   if (!filePath) {
     return NextResponse.json({ error: "path parameter required" }, { status: 400 });

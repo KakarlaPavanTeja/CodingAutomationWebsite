@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { desc, eq, ne, and } from "drizzle-orm";
-import { createClient } from "@/lib/supabase/server";
+import { getSession } from "@/lib/auth/server";
 import { db } from "@/lib/db";
 import { problems, profiles } from "@/lib/db/schema";
 import { getProfileRoleById } from "@/lib/db/queries";
 
 export async function GET() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const session = await getSession();
+  const user = session ? { id: session.userId, email: session.email } : null;
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
-import { createClient } from "@/lib/supabase/server";
+import { getSession } from "@/lib/auth/server";
 import { db } from "@/lib/db";
 import { pipelineStates } from "@/lib/db/schema";
 
@@ -10,8 +10,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "problemId required" }, { status: 400 });
   }
 
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const session = await getSession();
+  const user = session ? { id: session.userId, email: session.email } : null;
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -45,8 +45,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const session = await getSession();
+  const user = session ? { id: session.userId, email: session.email } : null;
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

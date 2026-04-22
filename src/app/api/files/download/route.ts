@@ -2,8 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import archiver from "archiver";
 import { PassThrough } from "stream";
 import { downloadAllOutputs } from "@/lib/storage-sync";
+import { requireAuthApi } from "@/lib/auth/server";
 
 export async function GET(request: NextRequest) {
+  const auth = await requireAuthApi();
+  if (auth.error) return auth.error;
+
   const problemId = request.nextUrl.searchParams.get("problemId");
   if (!problemId) {
     return NextResponse.json({ error: "problemId parameter required" }, { status: 400 });

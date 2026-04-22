@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { writeStorageFile } from "@/lib/storage-sync";
+import { requireAuthApi } from "@/lib/auth/server";
 
 export async function POST(request: NextRequest) {
+  const auth = await requireAuthApi();
+  if (auth.error) return auth.error;
+
   const body = await request.json();
   const { path: filePath, content, problemId } = body;
 
@@ -19,7 +23,7 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     return NextResponse.json(
       { error: `Failed to save: ${err instanceof Error ? err.message : "Unknown error"}` },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

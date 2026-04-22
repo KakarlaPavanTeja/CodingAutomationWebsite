@@ -16,7 +16,6 @@
     "@supabase/ssr": "^0.10.0",
     "@supabase/supabase-js": "^2.101.1",
     "@types/archiver": "^7.0.0",
-    "@types/bcryptjs": "^2.4.6",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@uppy/aws-s3": "^5.1.0",
     "@uppy/core": "^5.2.0",
@@ -42,6 +41,7 @@
     "tsx": "^4.21.0"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

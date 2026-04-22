@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useToast } from "@/components/ui/toast";
@@ -10,7 +9,7 @@ import { FormField } from "@/components/auth/FormField";
 import { PasswordInput } from "@/components/auth/PasswordInput";
 import { LoadingButton } from "@/components/auth/LoadingButton";
 import { Input } from "@/components/ui/input";
-import { validateEmail, sanitizeErrorMessage } from "@/lib/auth-validation";
+import { validateEmail } from "@/lib/auth-validation";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -19,10 +18,8 @@ export default function LoginPage() {
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const router = useRouter();
-  const supabase = createClient();
   const { toast } = useToast();
 
-  // Show toast from redirect (sign out, session expired)
   useEffect(() => {
     const msg = sessionStorage.getItem("toast");
     if (msg) {
@@ -41,22 +38,16 @@ export default function LoginPage() {
       const errors = { ...fieldErrors };
       if (field === "email") {
         const result = validateEmail(value);
-        if (!result.valid && touched.email) {
-          errors.email = result.error!;
-        } else {
-          delete errors.email;
-        }
+        if (!result.valid && touched.email) errors.email = result.error!;
+        else delete errors.email;
       }
       if (field === "password") {
-        if (!value && touched.password) {
-          errors.password = "Password is required.";
-        } else {
-          delete errors.password;
-        }
+        if (!value && touched.password) errors.password = "Password is required.";
+        else delete errors.password;
       }
       setFieldErrors(errors);
     },
-    [fieldErrors, touched]
+    [fieldErrors, touched],
   );
 
   const handleBlur = (field: string) => {
@@ -64,18 +55,9 @@ export default function LoginPage() {
     validateField(field, field === "email" ? email : password);
   };
 
-  const logAudit = (eventType: string, userId?: string, metadata?: Record<string, unknown>) => {
-    fetch("/api/auth/audit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ event_type: eventType, user_id: userId, metadata }),
-    }).catch(() => {});
-  };
-
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Validate all fields
     const emailResult = validateEmail(email);
     if (!emailResult.valid) {
       setTouched({ email: true, password: true });
@@ -93,43 +75,26 @@ export default function LoginPage() {
     setFieldErrors({});
     setLoading(true);
 
-    const { error, data } = await supabase.auth.signInWithPassword({
-      email: emailResult.normalized,
-      password,
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: emailResult.normalized, password }),
     });
+    const data = await res.json().catch(() => ({}));
 
-    if (error) {
-      const msg = sanitizeErrorMessage(error.message);
+    if (!res.ok) {
+      const msg = data.error || "Sign in failed.";
       setFieldErrors({ form: msg });
       toast(msg, "error");
-      logAudit("login_failure", undefined, { email: emailResult.normalized });
       setLoading(false);
       return;
     }
 
-    logAudit("login_success", data.user?.id);
-
-    // Check if user is pending approval
-    if (data.user) {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("status")
-        .eq("id", data.user.id)
-        .single();
-
-      if (profile?.status === "pending_approval") {
-        toast("Your account is pending admin approval.", "info");
-        router.push("/pending-approval");
-        router.refresh();
-        return;
-      }
-
-      if (profile?.status === "deactivated") {
-        await supabase.auth.signOut();
-        setFieldErrors({ form: "This account has been deactivated." });
-        setLoading(false);
-        return;
-      }
+    if (data.status === "pending_approval") {
+      toast("Your account is pending admin approval.", "info");
+      router.push("/pending-approval");
+      router.refresh();
+      return;
     }
 
     toast("Signed in successfully!", "success");

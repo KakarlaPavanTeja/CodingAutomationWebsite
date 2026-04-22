@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
-import { createClient } from "@/lib/supabase/server";
+import { getSession } from "@/lib/auth/server";
 import { db } from "@/lib/db";
 import { pipelineRuns } from "@/lib/db/schema";
 
@@ -20,8 +20,8 @@ function toLegacyRun(r: typeof pipelineRuns.$inferSelect) {
 }
 
 export async function GET(request: NextRequest) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const session = await getSession();
+  const user = session ? { id: session.userId, email: session.email } : null;
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

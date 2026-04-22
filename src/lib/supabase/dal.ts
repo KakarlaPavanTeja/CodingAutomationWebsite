@@ -1,5 +1,6 @@
+// Backwards-compatibility shim. New code should import from "@/lib/auth/server".
 import { cache } from "react";
-import { createClient } from "./server";
+import { getSession } from "@/lib/auth/server";
 import { getProfileById } from "@/lib/db/queries";
 import type { Profile as DbProfile } from "@/lib/db/schema";
 
@@ -25,36 +26,26 @@ function toLegacyProfile(p: DbProfile): Profile {
   };
 }
 
-export const getSession = cache(async () => {
-  const supabase = await createClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  return session;
-});
-
 export const getUser = cache(async () => {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  return user;
+  const s = await getSession();
+  if (!s) return null;
+  return { id: s.userId, email: s.email };
 });
 
 export const getProfile = cache(async (): Promise<Profile | null> => {
-  const user = await getUser();
-  if (!user) return null;
-  const profile = await getProfileById(user.id);
+  const u = await getUser();
+  if (!u) return null;
+  const profile = await getProfileById(u.id);
   return profile ? toLegacyProfile(profile) : null;
 });
 
 export async function requireAuth() {
-  const user = await getUser();
-  if (!user) {
+  const u = await getUser();
+  if (!u) {
     const { unauthorized } = await import("next/navigation");
     unauthorized();
   }
-  return user!;
+  return u!;
 }
 
 export async function requireAdmin() {
