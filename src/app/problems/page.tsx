@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -18,19 +18,7 @@ import { FileUploader } from "@/components/files/FileUploader";
 import { usePipeline } from "@/lib/pipeline-context";
 import { useToast } from "@/components/ui/toast";
 import { useAuth } from "@/lib/auth-context";
-
-type Problem = {
-  id: string;
-  name: string;
-  question_type: string;
-  mode: string;
-  scenario_level: string;
-  status: string;
-  languages: string[];
-  created_at: string;
-  updated_at: string;
-  profiles?: { display_name: string | null; email: string } | null;
-};
+import { useProblems } from "@/lib/problems-context";
 
 const STATUS_CONFIG: Record<
   string,
@@ -64,8 +52,7 @@ const STATUS_CONFIG: Record<
 };
 
 export default function ProblemsPage() {
-  const [problems, setProblems] = useState<Problem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { problems, loading, refresh } = useProblems();
   const [showUpload, setShowUpload] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const { setCurrentProblemId } = usePipeline();
@@ -74,35 +61,18 @@ export default function ProblemsPage() {
   const { toast } = useToast();
   const isAdmin = profile?.role === "admin";
 
-  const fetchProblems = useCallback(() => {
-    setLoading(true);
-    fetch("/api/problems")
-      .then((r) => r.json())
-      .then((data) => {
-        setProblems(data.problems || []);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    fetchProblems();
-  }, [fetchProblems]);
-
-  // Poll every 5s while any problem is processing
+  // Poll every 5s while any problem is processing — uses the shared cache.
   useEffect(() => {
     const hasProcessing = problems.some((p) => p.status === "processing");
     if (!hasProcessing) return;
     const id = setInterval(() => {
-      fetch("/api/problems")
-        .then((r) => r.json())
-        .then((data) => setProblems(data.problems || []))
-        .catch(() => {});
+      refresh();
     }, 5000);
     return () => clearInterval(id);
-  }, [problems]);
+  }, [problems, refresh]);
 
-  if (loading) {
+  // Only show the full-page spinner if we don't have any cached data yet.
+  if (loading && problems.length === 0) {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="flex items-center justify-center min-h-[40vh]">

@@ -66,3 +66,12 @@ The Python pipeline scripts (`pipeline/Scripts/*.py`) record token usage by POST
 
 - `scripts/migrate-data.mts` — copy DB rows from Supabase to Replit. Idempotent. Supports `--dry-run`.
 - `scripts/migrate-files.mts` — copy storage objects from Supabase Storage to Replit App Storage. Idempotent (skips by name+size). Supports `--dry-run`, `--problem <uuid>`, `--start N`, `--limit N`.
+
+## Performance Optimizations (post-deployment)
+
+- **PageTransition** (`src/components/layout/PageTransition.tsx`): reduced fade/slide duration 300ms → 120ms (4px slide). Eliminates the dominant perceived-lag on every nav.
+- **ProblemsProvider** (`src/lib/problems-context.tsx`): shared in-memory cache for `/api/problems`, wired into `Providers.tsx` between `AuthProvider` and `PipelineProvider`. Consumers use `useProblems()` instead of their own fetch+useState+useEffect blocks. Consumer pages: `src/app/page.tsx` (Dashboard), `src/app/problems/page.tsx`, `src/app/admin/problems/page.tsx`.
+  - Stale-while-revalidate semantics, in-flight dedupe via shared promise.
+  - **Auth-transition safety**: every refresh captures a generation counter and an `AbortController`. On user identity change (`user.id` differs from cached id) the provider bumps the generation, aborts in-flight fetches, and clears the cache before refetching for the new user. This prevents a logged-out user's data from leaking into a subsequent session, and prevents stale responses from overwriting fresh state.
+  - `removeLocally(id)` / `upsertLocally(problem)` mutators let pages update the cache optimistically (used by admin delete flow).
+  - Polling on `/problems` (every 5s while a problem is processing) calls `refresh()` instead of issuing raw fetches, so it benefits from dedupe.

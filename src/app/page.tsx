@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
+import { useProblems } from "@/lib/problems-context";
 import {
   Plus,
   FileText,
@@ -15,16 +16,6 @@ import {
   ArrowRight,
   BarChart3,
 } from "lucide-react";
-
-type Problem = {
-  id: string;
-  name: string;
-  status: string;
-  question_type: string;
-  mode: string;
-  created_at: string;
-  profiles?: { display_name: string | null; email: string } | null;
-};
 
 const STATUS_ICON: Record<string, React.ElementType> = {
   draft: Clock,
@@ -41,31 +32,19 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 export default function Home() {
-  const { user, profile } = useAuth();
-  const [problems, setProblems] = useState<Problem[]>([]);
-  const [stats, setStats] = useState<{
-    total: number;
-    completed: number;
-    processing: number;
-    failed: number;
-  } | null>(null);
+  const { profile } = useAuth();
+  const { problems, loading } = useProblems();
 
-  useEffect(() => {
-    if (!user) return;
-    fetch("/api/problems")
-      .then((r) => r.json())
-      .then((data) => {
-        const p = data.problems || [];
-        setProblems(p);
-        setStats({
-          total: p.length,
-          completed: p.filter((x: Problem) => x.status === "completed").length,
-          processing: p.filter((x: Problem) => x.status === "processing").length,
-          failed: p.filter((x: Problem) => x.status === "failed").length,
-        });
-      })
-      .catch(() => {});
-  }, [user]);
+  // Stats are derived from the cached list — no extra fetch needed.
+  const stats = useMemo(() => {
+    if (loading && problems.length === 0) return null;
+    return {
+      total: problems.length,
+      completed: problems.filter((x) => x.status === "completed").length,
+      processing: problems.filter((x) => x.status === "processing").length,
+      failed: problems.filter((x) => x.status === "failed").length,
+    };
+  }, [problems, loading]);
 
   return (
     <div className="px-6 py-8 space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">

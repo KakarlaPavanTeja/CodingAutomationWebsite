@@ -1,18 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
-type Problem = {
-  id: string;
-  name: string;
-  question_type: string;
-  mode: string;
-  status: string;
-  languages: string[];
-  created_at: string;
-  deletion_reason: string | null;
-  profiles: { email: string; display_name: string | null } | null;
-};
+import { useState } from "react";
+import { useProblems, type Problem } from "@/lib/problems-context";
 
 const STATUS_STYLES: Record<string, string> = {
   completed: "bg-green-500/10 text-green-700 dark:text-green-400",
@@ -24,8 +13,7 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 export default function AdminProblemsPage() {
-  const [problems, setProblems] = useState<Problem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { problems, loading, removeLocally } = useProblems();
   const [showAll, setShowAll] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Problem | null>(null);
   const [deleteReason, setDeleteReason] = useState("");
@@ -34,23 +22,6 @@ export default function AdminProblemsPage() {
   const [filterType, setFilterType] = useState("all");
   const [filterMode, setFilterMode] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
-
-  const fetchProblems = async () => {
-    try {
-      const res = await fetch("/api/problems");
-      const data = await res.json();
-      setProblems((data.problems as Problem[]) || []);
-    } catch {
-      setProblems([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchProblems();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const handleDelete = async () => {
     if (!deleteTarget || deleteReason.trim().length < 5) return;
@@ -65,8 +36,8 @@ export default function AdminProblemsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
-      // Remove from list
-      setProblems((prev) => prev.filter((p) => p.id !== deleteTarget.id));
+      // Optimistically drop from the shared cache.
+      removeLocally(deleteTarget.id);
       setDeleteTarget(null);
       setDeleteReason("");
     } catch {
@@ -76,7 +47,7 @@ export default function AdminProblemsPage() {
     }
   };
 
-  if (loading) {
+  if (loading && problems.length === 0) {
     return <p className="text-muted-foreground">Loading problems...</p>;
   }
 
