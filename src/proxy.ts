@@ -3,6 +3,7 @@ import { getSessionByToken, SESSION_COOKIE } from "@/lib/auth/session";
 
 // Pages that never require a valid session.
 const PUBLIC_PATHS = new Set([
+  "/",
   "/login",
   "/signup",
   "/reset-password",
@@ -26,9 +27,9 @@ export async function proxy(request: NextRequest) {
   // Skip the DB entirely — there is definitely no valid session.
   if (!token) {
     if (isPublicPage) return NextResponse.next();
-    // Protected page with no token → guide (landing page).
+    // Protected page with no token → landing page.
     const url = request.nextUrl.clone();
-    url.pathname = "/guide";
+    url.pathname = "/";
     return NextResponse.redirect(url);
   }
 
@@ -40,7 +41,7 @@ export async function proxy(request: NextRequest) {
     // Token is invalid or expired.
     if (isPublicPage) return NextResponse.next();
     const url = request.nextUrl.clone();
-    url.pathname = "/guide";
+    url.pathname = "/";
     const res = NextResponse.redirect(url);
     // Clear the stale cookie so we don't keep hitting the DB.
     res.cookies.set(SESSION_COOKIE, "", { path: "/", maxAge: 0 });
