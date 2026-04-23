@@ -10,6 +10,7 @@ import { PasswordInput } from "@/components/auth/PasswordInput";
 import { LoadingButton } from "@/components/auth/LoadingButton";
 import { Input } from "@/components/ui/input";
 import { validateEmail } from "@/lib/auth-validation";
+import { useAuth } from "@/lib/auth-context";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -19,6 +20,7 @@ export default function LoginPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const router = useRouter();
   const { toast } = useToast();
+  const { refresh: refreshAuth } = useAuth();
 
   useEffect(() => {
     const msg = sessionStorage.getItem("toast");
@@ -103,8 +105,8 @@ export default function LoginPage() {
     }
 
     toast("Signed in successfully!", "success");
+    await refreshAuth();
     router.push("/");
-    router.refresh();
   };
 
   return (
