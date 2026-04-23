@@ -46,3 +46,6 @@ EMAIL_FROM = "onboarding@resend.dev"
 [userenv.production]
 APP_URL = "https://coding-question-automation.replit.app/"
 EMAIL_FROM = "onboarding@resend.dev"
+
+[deployment]
+deploymentTarget = "cloudrun"
