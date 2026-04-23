@@ -49,3 +49,5 @@ EMAIL_FROM = "onboarding@resend.dev"
 
 [deployment]
 deploymentTarget = "cloudrun"
+build = ["sh", "-c", "npm ci && npm run build"]
+run = ["sh", "-c", "npm start"]
