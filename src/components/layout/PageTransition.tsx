@@ -32,8 +32,8 @@ export function PageTransition({ children }: { children: React.ReactNode }) {
     <div
       style={{
         opacity: phase === "enter" ? 0 : 1,
-        transform: phase === "enter" ? "translateY(8px)" : "translateY(0)",
-        transition: "opacity 300ms ease-out, transform 300ms ease-out",
+        transform: phase === "enter" ? "translateY(4px)" : "translateY(0)",
+        transition: "opacity 120ms ease-out, transform 120ms ease-out",
       }}
     >
       {children}
