@@ -35,16 +35,13 @@ export default function Home() {
   const { profile } = useAuth();
   const { problems, loading } = useProblems();
 
-  // Stats are derived from the cached list — no extra fetch needed.
-  const stats = useMemo(() => {
-    if (loading && problems.length === 0) return null;
-    return {
-      total: problems.length,
-      completed: problems.filter((x) => x.status === "completed").length,
-      processing: problems.filter((x) => x.status === "processing").length,
-      failed: problems.filter((x) => x.status === "failed").length,
-    };
-  }, [problems, loading]);
+  // Always derive stats — show 0s while loading so cards never disappear.
+  const stats = useMemo(() => ({
+    total: problems.length,
+    completed: problems.filter((x) => x.status === "completed").length,
+    processing: problems.filter((x) => x.status === "processing").length,
+    failed: problems.filter((x) => x.status === "failed").length,
+  }), [problems]);
 
   return (
     <div className="px-6 py-8 space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -59,8 +56,7 @@ export default function Home() {
       </div>
 
       {/* Stats Cards */}
-      {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <Card>
             <CardContent className="pt-5 pb-4">
               <div className="flex items-center gap-3">
@@ -68,7 +64,7 @@ export default function Home() {
                   <FileText className="h-5 w-5 text-primary" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">{stats.total}</p>
+                  <p className={`text-2xl font-bold transition-opacity duration-200 ${loading ? "opacity-40" : ""}`}>{stats.total}</p>
                   <p className="text-xs text-muted-foreground">Total Problems</p>
                 </div>
               </div>
@@ -81,7 +77,7 @@ export default function Home() {
                   <CheckCircle2 className="h-5 w-5 text-green-500" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">{stats.completed}</p>
+                  <p className={`text-2xl font-bold transition-opacity duration-200 ${loading ? "opacity-40" : ""}`}>{stats.completed}</p>
                   <p className="text-xs text-muted-foreground">Completed</p>
                 </div>
               </div>
@@ -94,7 +90,7 @@ export default function Home() {
                   <Loader2 className="h-5 w-5 text-yellow-500" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">{stats.processing}</p>
+                  <p className={`text-2xl font-bold transition-opacity duration-200 ${loading ? "opacity-40" : ""}`}>{stats.processing}</p>
                   <p className="text-xs text-muted-foreground">In Progress</p>
                 </div>
               </div>
@@ -107,14 +103,13 @@ export default function Home() {
                   <XCircle className="h-5 w-5 text-red-500" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">{stats.failed}</p>
+                  <p className={`text-2xl font-bold transition-opacity duration-200 ${loading ? "opacity-40" : ""}`}>{stats.failed}</p>
                   <p className="text-xs text-muted-foreground">Failed</p>
                 </div>
               </div>
             </CardContent>
           </Card>
         </div>
-      )}
 
       {/* Quick Actions */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

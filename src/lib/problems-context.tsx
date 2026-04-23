@@ -47,23 +47,25 @@ const ProblemsContext = createContext<Ctx>({
   upsertLocally: () => {},
 });
 
-// How long a fetched list is considered "fresh" — re-mounts within this window
-// reuse the cache instead of hitting the API.
-const STALE_MS = 15_000;
-
 export function ProblemsProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const [problems, setProblems] = useState<Problem[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true); // true until first response
   const [error, setError] = useState<string | null>(null);
-  const lastFetchedRef = useRef(0);
-  const inflightRef = useRef<Promise<void> | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  // Generation counter — bumped on every auth change. Any in-flight fetch
-  // started before the bump will discard its response.
+
+  // Generation counter — bumped any time the cache is intentionally invalidated.
+  // In-flight fetches from a previous generation silently discard their response.
   const generationRef = useRef(0);
-  // Track the user id the cache currently belongs to.
+  const abortRef = useRef<AbortController | null>(null);
+  const inflightRef = useRef<Promise<void> | null>(null);
+
+  // Tracks the user id whose data is currently in the cache so we can detect
+  // session switches (user A → user B) and force a fresh fetch.
   const cachedUserIdRef = useRef<string | null>(null);
+  // Set to true when a fetch has returned a 200 response — used to skip the
+  // redundant re-fetch when the auth identity resolves after the mount fetch
+  // already succeeded (common for pages where the user is already logged in).
+  const hasFreshDataRef = useRef(false);
 
   const refresh = useCallback(async () => {
     if (inflightRef.current) return inflightRef.current;
@@ -79,12 +81,21 @@ export function ProblemsProvider({ children }: { children: React.ReactNode }) {
           signal: controller.signal,
         });
         if (generationRef.current !== startGeneration) return;
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          // 401 means unauthenticated — clear list, no error shown.
+          if (res.status === 401) {
+            setProblems([]);
+            setError(null);
+          } else {
+            throw new Error(`HTTP ${res.status}`);
+          }
+          return;
+        }
         const data = await res.json();
         if (generationRef.current !== startGeneration) return;
         setProblems((data.problems as Problem[]) || []);
         setError(null);
-        lastFetchedRef.current = Date.now();
+        hasFreshDataRef.current = true;
       } catch (e) {
         if (controller.signal.aborted) return;
         if (generationRef.current !== startGeneration) return;
@@ -96,6 +107,7 @@ export function ProblemsProvider({ children }: { children: React.ReactNode }) {
         if (abortRef.current === controller) abortRef.current = null;
       }
     };
+
     const p = run().finally(() => {
       if (inflightRef.current === p) inflightRef.current = null;
     });
@@ -103,34 +115,55 @@ export function ProblemsProvider({ children }: { children: React.ReactNode }) {
     return p;
   }, []);
 
-  // Auth transitions: bump generation, abort in-flight, clear cache when the
-  // user identity changes. Then fetch fresh data for the new user.
+  // Eager fetch on first mount — fires immediately, in parallel with the auth
+  // session check, so data arrives as fast as possible on first load.
+  useEffect(() => {
+    refresh();
+    return () => {
+      // Abort on unmount (e.g. hot-reload)
+      generationRef.current += 1;
+      abortRef.current?.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Handle auth identity changes AFTER the initial mount:
+  // - Logout (user → null): clear cache so the next user starts clean.
+  // - User switch (userA → userB): bump generation to discard stale data and
+  //   re-fetch for the new identity.
+  // - null → user on first load: the eager mount fetch covers this; no action.
   useEffect(() => {
     const currentUserId = user?.id ?? null;
-    if (cachedUserIdRef.current === currentUserId) return;
+    const prevUserId = cachedUserIdRef.current;
 
-    // Identity changed (login, logout, or user swap).
-    generationRef.current += 1;
-    if (abortRef.current) abortRef.current.abort();
-    inflightRef.current = null;
+    if (prevUserId === currentUserId) return; // no real change
     cachedUserIdRef.current = currentUserId;
-    lastFetchedRef.current = 0;
-    setProblems([]);
-    setError(null);
-    setLoading(false);
 
-    if (currentUserId) {
+    if (currentUserId === null) {
+      // Logged out — abort in-flight, clear cache.
+      generationRef.current += 1;
+      abortRef.current?.abort();
+      inflightRef.current = null;
+      hasFreshDataRef.current = false;
+      setProblems([]);
+      setError(null);
+      setLoading(false);
+    } else if (prevUserId !== null) {
+      // Different user logged in (session switch) — discard and re-fetch.
+      generationRef.current += 1;
+      abortRef.current?.abort();
+      inflightRef.current = null;
+      hasFreshDataRef.current = false;
       refresh();
+    } else {
+      // null → user: normal login. The eager mount fetch ran in parallel — if
+      // it already returned data we don't need to fetch again. If it returned
+      // 401 (no cookie yet) or is still in-flight, fire/join a refresh.
+      if (!hasFreshDataRef.current) {
+        refresh();
+      }
     }
   }, [user, refresh]);
-
-  // Abort any in-flight request on unmount.
-  useEffect(() => {
-    return () => {
-      generationRef.current += 1;
-      if (abortRef.current) abortRef.current.abort();
-    };
-  }, []);
 
   const removeLocally = useCallback((id: string) => {
     setProblems((prev) => prev.filter((p) => p.id !== id));
@@ -156,8 +189,3 @@ export function ProblemsProvider({ children }: { children: React.ReactNode }) {
 }
 
 export const useProblems = () => useContext(ProblemsContext);
-
-// Note: STALE_MS is reserved for future use (e.g. focus-revalidation gating)
-// — the current logic always refetches on identity change and on explicit
-// refresh() calls, which is the safe default.
-void STALE_MS;
