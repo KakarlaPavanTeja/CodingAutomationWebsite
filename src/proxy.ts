@@ -7,7 +7,6 @@ export async function proxy(request: NextRequest) {
     request.nextUrl.pathname === "/signup" ||
     request.nextUrl.pathname === "/reset-password" ||
     request.nextUrl.pathname === "/guide" ||
-    request.nextUrl.pathname === "/" ||
     request.nextUrl.pathname === "/pending-approval" ||
     request.nextUrl.pathname.startsWith("/auth/");
 
