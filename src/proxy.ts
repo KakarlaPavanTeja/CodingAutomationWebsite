@@ -1,48 +1,70 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getSessionByToken, SESSION_COOKIE } from "@/lib/auth/session";
 
+// Pages that never require a valid session.
+const PUBLIC_PATHS = new Set([
+  "/login",
+  "/signup",
+  "/reset-password",
+  "/guide",
+  "/pending-approval",
+]);
+
 export async function proxy(request: NextRequest) {
-  const isPublicPage =
-    request.nextUrl.pathname === "/login" ||
-    request.nextUrl.pathname === "/signup" ||
-    request.nextUrl.pathname === "/reset-password" ||
-    request.nextUrl.pathname === "/guide" ||
-    request.nextUrl.pathname === "/pending-approval" ||
-    request.nextUrl.pathname.startsWith("/auth/");
+  const { pathname } = request.nextUrl;
 
-  const isApiRoute = request.nextUrl.pathname.startsWith("/api");
+  // Let API routes handle their own auth (they return 401/403 directly).
+  if (pathname.startsWith("/api")) return NextResponse.next();
 
-  // API routes handle their own auth.
-  if (isApiRoute) return NextResponse.next();
+  // Let Next.js internals through.
+  if (pathname.startsWith("/auth/")) return NextResponse.next();
 
+  const isPublicPage = PUBLIC_PATHS.has(pathname);
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  const session = await getSessionByToken(token);
 
-  if (!session && !isPublicPage) {
+  // ── Fast path: no token ──────────────────────────────────────────────────
+  // Skip the DB entirely — there is definitely no valid session.
+  if (!token) {
+    if (isPublicPage) return NextResponse.next();
+    // Protected page with no token → login.
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
-  if (session && !isPublicPage) {
-    if (session.profile.status === "pending_approval") {
-      const url = request.nextUrl.clone();
-      url.pathname = "/pending-approval";
-      return NextResponse.redirect(url);
-    }
-    if (session.profile.status === "deactivated") {
-      const url = request.nextUrl.clone();
-      url.pathname = "/login";
-      const res = NextResponse.redirect(url);
-      res.cookies.set(SESSION_COOKIE, "", { path: "/", maxAge: 0 });
-      return res;
-    }
+  // ── Token present: validate against DB ───────────────────────────────────
+  // Only reached when the browser sent a session_token cookie.
+  const session = await getSessionByToken(token);
+
+  if (!session) {
+    // Token is invalid or expired.
+    if (isPublicPage) return NextResponse.next();
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    const res = NextResponse.redirect(url);
+    // Clear the stale cookie so we don't keep hitting the DB.
+    res.cookies.set(SESSION_COOKIE, "", { path: "/", maxAge: 0 });
+    return res;
   }
 
-  // Logged-in users skip login/signup pages.
-  const isLoginSignup =
-    request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/signup";
-  if (session && isLoginSignup) {
+  // Valid session — enforce account status.
+  if (session.profile.status === "pending_approval") {
+    if (pathname === "/pending-approval") return NextResponse.next();
+    const url = request.nextUrl.clone();
+    url.pathname = "/pending-approval";
+    return NextResponse.redirect(url);
+  }
+
+  if (session.profile.status === "deactivated") {
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    const res = NextResponse.redirect(url);
+    res.cookies.set(SESSION_COOKIE, "", { path: "/", maxAge: 0 });
+    return res;
+  }
+
+  // Authenticated users don't need to see login/signup pages.
+  if (pathname === "/login" || pathname === "/signup") {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);
