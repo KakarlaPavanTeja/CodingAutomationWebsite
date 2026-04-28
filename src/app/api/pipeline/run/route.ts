@@ -41,9 +41,9 @@ export async function POST(request: NextRequest) {
   if (mode !== undefined && mode !== "practice" && mode !== "exam") {
     return NextResponse.json({ error: "Invalid mode" }, { status: 400 });
   }
-  const allowedLangLabels = new Set(LANGUAGES.map((l) => l.label));
+  const allowedLangIds = new Set(LANGUAGES.map((l) => l.id));
   if (languages !== undefined) {
-    if (!Array.isArray(languages) || languages.some((l) => typeof l !== "string" || !allowedLangLabels.has(l))) {
+    if (!Array.isArray(languages) || languages.some((l) => typeof l !== "string" || !allowedLangIds.has(l))) {
       return NextResponse.json({ error: "Invalid languages" }, { status: 400 });
     }
   }
