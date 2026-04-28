@@ -73,16 +73,8 @@ export async function POST(request: NextRequest) {
 
   const pythonPath = process.env.PYTHON_PATH || "python3";
 
-  const pipelineRoot = process.env.PIPELINE_ROOT;
-  const scriptsDir = process.env.PIPELINE_SCRIPTS_DIR ||
-    (pipelineRoot ? path.join(pipelineRoot, "Scripts") : null);
-
-  if (!scriptsDir) {
-    return NextResponse.json(
-      { error: "PIPELINE_SCRIPTS_DIR or PIPELINE_ROOT not configured" },
-      { status: 500 }
-    );
-  }
+  const pipelineRoot = process.env.PIPELINE_ROOT || path.join(process.cwd(), "pipeline");
+  const scriptsDir = process.env.PIPELINE_SCRIPTS_DIR || path.join(pipelineRoot, "Scripts");
 
   const { script, args } = buildCommand(stepId, mode, subSteps, languages, testcaseCount);
 

@@ -321,20 +321,19 @@ export async function createTempWorkspace(problemId: string): Promise<string> {
   }
 
   // Copy Scripts from Docker image or local path
+  const pipelineRoot = process.env.PIPELINE_ROOT || path.join(process.cwd(), "pipeline");
   const scriptsSource =
-    process.env.PIPELINE_SCRIPTS_DIR ||
-    (process.env.PIPELINE_ROOT ? path.join(process.env.PIPELINE_ROOT, "Scripts") : null);
+    process.env.PIPELINE_SCRIPTS_DIR || path.join(pipelineRoot, "Scripts");
 
-  if (scriptsSource && existsSync(scriptsSource)) {
+  if (existsSync(scriptsSource)) {
     await cp(scriptsSource, path.join(tmpDir, "Scripts"), { recursive: true });
   }
 
   // Copy shared inputs (topics_list.txt etc.) — only if not already downloaded from storage
   const sharedInputsSource =
-    process.env.PIPELINE_SHARED_INPUTS_DIR ||
-    (process.env.PIPELINE_ROOT ? path.join(process.env.PIPELINE_ROOT, "Inputs") : null);
+    process.env.PIPELINE_SHARED_INPUTS_DIR || path.join(pipelineRoot, "Inputs");
 
-  if (sharedInputsSource && existsSync(sharedInputsSource)) {
+  if (existsSync(sharedInputsSource)) {
     const sharedEntries = await readdir(sharedInputsSource);
     for (const entry of sharedEntries) {
       if (entry === "problem.md" || entry.startsWith("solution.") || entry === ".DS_Store") continue;
@@ -347,10 +346,9 @@ export async function createTempWorkspace(problemId: string): Promise<string> {
 
   // Copy reference files
   const refSource =
-    process.env.PIPELINE_REFERENCE_DIR ||
-    (process.env.PIPELINE_ROOT ? path.join(process.env.PIPELINE_ROOT, "zReferenceFiles") : null);
+    process.env.PIPELINE_REFERENCE_DIR || path.join(pipelineRoot, "zReferenceFiles");
 
-  if (refSource && existsSync(refSource)) {
+  if (existsSync(refSource)) {
     await cp(refSource, path.join(tmpDir, "zReferenceFiles"), { recursive: true });
   }
 

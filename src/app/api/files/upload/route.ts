@@ -106,13 +106,11 @@ export async function POST(request: NextRequest) {
   try {
     await uploadInputFiles(problemId, filesToUpload);
 
+    const pipelineRoot = process.env.PIPELINE_ROOT || path.join(process.cwd(), "pipeline");
     const sharedInputsDir =
-      process.env.PIPELINE_SHARED_INPUTS_DIR ||
-      (process.env.PIPELINE_ROOT ? `${process.env.PIPELINE_ROOT}/Inputs` : null);
+      process.env.PIPELINE_SHARED_INPUTS_DIR || path.join(pipelineRoot, "Inputs");
 
-    if (sharedInputsDir) {
-      await uploadSharedInputs(problemId, sharedInputsDir);
-    }
+    await uploadSharedInputs(problemId, sharedInputsDir);
   } catch (err) {
     return NextResponse.json(
       { error: `Failed to upload files: ${err instanceof Error ? err.message : "Unknown error"}` },
