@@ -97,11 +97,6 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 │   ├── pricing.json            # OpenAI model pricing for cost calculation
 │   └── requirements.txt        # Python deps (anthropic, boto3, requests, etc.)
 │
-├── scripts/
-│   ├── migrate-data.mts        # One-off: copy DB rows from Supabase → Replit (historical)
-│   └── migrate-files.mts       # One-off: copy Storage objects from Supabase → Replit
-│
-├── migrations/                 # Drizzle generated SQL (kept for history)
 ├── attached_assets/            # Static assets uploaded by user
 ├── replit.md                   # Replit Agent's working notes (architecture log)
 ├── AGENTS.md                   # Next.js 16 rules for AI coding agents

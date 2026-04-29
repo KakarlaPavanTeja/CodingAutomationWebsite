@@ -29,27 +29,16 @@ The Python pipeline scripts (`pipeline/Scripts/*.py`) record token usage by POST
 
 ## Migration Status — COMPLETE
 
-- [x] **Phase 1** — Schema dumped from Supabase (`migrations/0001_supabase_schema.sql`)
-- [x] **Phase 2** — Drizzle schema + tables created in Replit Postgres
-- [x] **Phase 3** — All `supabase.from(...)` DB queries refactored to Drizzle
-- [x] **Phase 4** — Replit App Storage adopted (`src/lib/object-storage.ts`, `storage-sync.ts`)
-- [x] **Phase 5** — Custom bcrypt + session-cookie auth replacing Supabase Auth
-- [x] **Phase 6** — Data row migration (5 users, 5 profiles, 28 problems, 26 pipeline_states, 141 pipeline_runs, 132 pipeline_logs, 326 llm_usage). See `scripts/migrate-data.mts`.
-- [x] **Phase 7** — File migration: 1058 files / 329 MB across 35 problem folders + `shared/`. See `scripts/migrate-files.mts`. Verified 1:1 with source.
-- [x] **Phase 8** — Cleanup: legacy `src/lib/supabase/` shims removed; nothing in `src/` references Supabase anymore.
+All 8 phases done (schema, queries, storage, auth, data rows, files, cleanup). Project is fully off Supabase. The historical `supabase/`, `migrations/`, and `scripts/migrate-*` folders have been removed since the migration is complete.
 
-## Migration Notes
-
-- Imported users have `password_hash=NULL` and `password_reset_required=true`. Every existing user must complete the password-reset flow on first login. The reset-request endpoint logs the reset URL to the server console (no email service yet).
-- Supabase Storage bucket name is preserved in `STORAGE_BUCKET` env (used only by the migration script). Object paths are identical between source and target so DB rows referencing storage paths still work unchanged.
 - Original Supabase RLS policies are NOT replicated — access control is enforced in app code via `requireAuthApi()` / `requireAdminApi()` guards on every protected route.
+- Imported users have `password_hash=NULL` and `password_reset_required=true`. They must complete the password-reset flow on first login.
 
 ## Outstanding Manual Cleanup (user action)
 
 - Rotate the Supabase database password (since it was exposed via `SUPABASE_DB_URL` during the migration window).
 - Delete these now-unused secrets: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`, `STORAGE_BUCKET`.
 - Optionally pause / delete the Supabase project once you've confirmed the Replit copy is the system of record.
-- `migrations/0001_supabase_schema.sql` is kept in the repo as a historical reference; safe to delete if you don't need it.
 
 ## Security Hardening (post-migration)
 
