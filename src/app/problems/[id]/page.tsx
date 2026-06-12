@@ -137,6 +137,15 @@ export default function ProblemDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  useEffect(() => {
+    if (problem?.name) {
+      document.title = `${problem.name} - Coding Automation`;
+    }
+    return () => {
+      document.title = "Coding Automation";
+    };
+  }, [problem?.name]);
+
   // Poll every 5s while problem is processing or any run is still running
   useEffect(() => {
     const isActive =
