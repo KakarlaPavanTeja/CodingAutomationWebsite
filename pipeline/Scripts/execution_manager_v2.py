@@ -1084,21 +1084,24 @@ def main():
     _print_runtime_config(base_dir)
     _warn_if_upload_env_incomplete()
 
-    if not is_nonfunction:
-        # Health check: ensure S3 upload service is alive before starting execution
-        S3_HEALTH_URL = "https://testcasess3urlcreationproject.onrender.com/health"
-        print(f"\nChecking S3 upload service health: {S3_HEALTH_URL}")
-        try:
-            health_resp = requests.get(S3_HEALTH_URL, timeout=300)
-            health_data = health_resp.json()
-            if health_data.get("ok"):
-                print("S3 upload service is live.")
-            else:
-                print(f"Warning: S3 upload service returned unexpected response: {health_data}")
+    if not is_nonfunction and UPLOAD_MODE == "proxy":
+        # Health check: ensure the proxy upload service is alive before starting execution.
+        # Only relevant in proxy mode — in direct S3 mode (EXEC_V2_UPLOAD_MODE=s3) we upload
+        # straight to S3 via boto3, so there is no proxy service to health-check.
+        S3_HEALTH_URL = f"{UPLOAD_SERVICE_URL.rstrip('/')}/health" if UPLOAD_SERVICE_URL else ""
+        if S3_HEALTH_URL:
+            print(f"\nChecking S3 upload service health: {S3_HEALTH_URL}")
+            try:
+                health_resp = requests.get(S3_HEALTH_URL, timeout=300)
+                health_data = health_resp.json()
+                if health_data.get("ok"):
+                    print("S3 upload service is live.")
+                else:
+                    print(f"Warning: S3 upload service returned unexpected response: {health_data}")
+                    print("Proceeding anyway — large testcases may fall back to inline base64.")
+            except Exception as e:
+                print(f"Warning: S3 upload service health check failed: {e}")
                 print("Proceeding anyway — large testcases may fall back to inline base64.")
-        except Exception as e:
-            print(f"Warning: S3 upload service health check failed: {e}")
-            print("Proceeding anyway — large testcases may fall back to inline base64.")
 
     if is_nonfunction:
         all_passed, all_results, testcases = run_all_tests_nonfunction(base_dir=base_dir, selected_lang=selected_lang)
