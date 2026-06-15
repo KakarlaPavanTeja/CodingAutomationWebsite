@@ -26,3 +26,14 @@ Prefer honoring `SSL_CERT_FILE` first, then the system bundle, then fall back to
 **How to apply:** Any time a repl makes server-side HTTPS calls to another
 Replit-hosted service via the OpenAI SDK / httpx / aiohttp, point TLS verification
 at the system CA bundle, not certifi.
+
+## Transient 403s from the gateway
+
+The `open-router-gateway.replit.app` proxy is itself a hosted service and can
+return a **non-JSON HTML "403 Forbidden"** at its edge during cold-starts or
+momentary blips — distinguishable from a real OpenRouter error, which is JSON
+(e.g. `{"error":{...,"code":400}}`). The OpenAI SDK does NOT retry 403, so a
+single blip kills a long pipeline run. Mitigation: bounded retry-with-backoff on
+`PermissionDeniedError` around `chat.completions.create`. Do not assume 403 means
+a bad key/model — verify with a direct probe first; the model allowlist includes
+gpt-5.4 and gpt-5.3-codex.

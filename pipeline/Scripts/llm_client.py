@@ -43,7 +43,7 @@ import os
 import time
 
 import httpx
-from openai import OpenAI
+from openai import OpenAI, PermissionDeniedError
 
 # Purpose → default OpenRouter model id.
 _PURPOSE_DEFAULTS: dict[str, str] = {
@@ -115,6 +115,33 @@ def _make_client() -> OpenAI:
         max_retries=max_retries,
         http_client=http_client,
     )
+
+
+def _create_with_retry(client: OpenAI, kwargs: dict):
+    """
+    Call chat.completions.create, retrying transient 403s from the gateway.
+
+    The proxy gateway is itself a hosted service and can return a non-JSON HTML
+    "403 Forbidden" at its edge during cold-starts / momentary blips. The OpenAI
+    SDK does not retry 403 (it's normally a permanent auth/permission error), so a
+    single blip would kill a long pipeline run. Retry a bounded number of times
+    with exponential backoff; a genuinely-forbidden request still surfaces after
+    the attempts are exhausted.
+    """
+    attempts = max(1, int(os.environ.get("OPENROUTER_GATEWAY_403_RETRIES", "3")))
+    for i in range(attempts):
+        try:
+            return client.chat.completions.create(**kwargs)
+        except PermissionDeniedError:
+            if i == attempts - 1:
+                raise
+            wait = 2 ** i
+            print(
+                f"[LLM] gateway returned 403 (likely transient), "
+                f"retry {i + 1}/{attempts - 1} in {wait}s",
+                flush=True,
+            )
+            time.sleep(wait)
 
 
 def _canonical_purpose(purpose: str) -> str:
@@ -256,7 +283,7 @@ def call_llm(
         parts: list[str] = []
         usage_obj = None
         resolved_model = model
-        stream = client.chat.completions.create(**kwargs)
+        stream = _create_with_retry(client, kwargs)
         last_log = time.monotonic()
         for chunk in stream:
             if getattr(chunk, "model", None):
@@ -278,7 +305,7 @@ def call_llm(
         content = "".join(parts).strip()
         usage = _extract_usage(usage_obj, resolved_model)
     else:
-        resp = client.chat.completions.create(**kwargs)
+        resp = _create_with_retry(client, kwargs)
         content = (resp.choices[0].message.content or "").strip()
         usage = _extract_usage(resp.usage, resp.model or model)
 
