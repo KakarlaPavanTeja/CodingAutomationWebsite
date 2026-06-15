@@ -1,0 +1,1 @@
+- [Replit egress proxy TLS](replit-egress-proxy-tls.md) — outbound HTTPS to `*.replit.app` is MITM'd by a per-repl Replit proxy CA; certifi fails, must verify against the system CA bundle.

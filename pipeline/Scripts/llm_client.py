@@ -42,6 +42,7 @@ from __future__ import annotations
 import os
 import time
 
+import httpx
 from openai import OpenAI
 
 # Purpose → default OpenRouter model id.
@@ -67,6 +68,27 @@ _DEFAULT_TESTCASES_TIMEOUT_SEC = 1800
 _DEFAULT_OTHER_TIMEOUT_SEC = 300
 
 
+def _ca_bundle() -> str | bool:
+    """
+    CA bundle used to verify TLS to the gateway.
+
+    The gateway host is reached through Replit's internal egress proxy, which
+    presents a leaf signed by a per-repl "Replit internal proxy Root CA". That
+    root is NOT in certifi's bundle (which the OpenAI SDK / httpx use by default),
+    so verification fails unless we point at the system bundle that includes it.
+
+    Honors SSL_CERT_FILE if set, else uses the system bundle, else falls back to
+    httpx's default (certifi) so non-intercepted hosts still work.
+    """
+    for path in (
+        os.environ.get("SSL_CERT_FILE"),
+        "/etc/ssl/certs/ca-certificates.crt",
+    ):
+        if path and os.path.exists(path):
+            return path
+    return True
+
+
 def _make_client() -> OpenAI:
     """
     Build an OpenAI SDK client pointed at the OpenRouter proxy gateway.
@@ -86,7 +108,13 @@ def _make_client() -> OpenAI:
             "API key."
         )
     max_retries = max(0, int(os.environ.get("OPENAI_MAX_RETRIES", "8")))
-    return OpenAI(base_url=base_url, api_key=api_key, max_retries=max_retries)
+    http_client = httpx.Client(verify=_ca_bundle())
+    return OpenAI(
+        base_url=base_url,
+        api_key=api_key,
+        max_retries=max_retries,
+        http_client=http_client,
+    )
 
 
 def _canonical_purpose(purpose: str) -> str:
