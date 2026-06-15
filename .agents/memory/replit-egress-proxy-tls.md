@@ -27,13 +27,31 @@ Prefer honoring `SSL_CERT_FILE` first, then the system bundle, then fall back to
 Replit-hosted service via the OpenAI SDK / httpx / aiohttp, point TLS verification
 at the system CA bundle, not certifi.
 
-## Transient 403s from the gateway
+## Gateway 403s are usually a WAF content block, NOT transient
 
-The `open-router-gateway.replit.app` proxy is itself a hosted service and can
-return a **non-JSON HTML "403 Forbidden"** at its edge during cold-starts or
-momentary blips — distinguishable from a real OpenRouter error, which is JSON
-(e.g. `{"error":{...,"code":400}}`). The OpenAI SDK does NOT retry 403, so a
-single blip kills a long pipeline run. Mitigation: bounded retry-with-backoff on
-`PermissionDeniedError` around `chat.completions.create`. Do not assume 403 means
-a bad key/model — verify with a direct probe first; the model allowlist includes
-gpt-5.4 and gpt-5.3-codex.
+The `open-router-gateway.replit.app` proxy runs an OWASP-CRS-style WAF. It
+returns a **non-JSON HTML "403 Forbidden"** page (vs. real OpenRouter errors,
+which are JSON like `{"error":{...}}`) when the request body contains
+Java-RCE class-name signatures — confirmed blocked: `java.io.*` (File,
+FileWriter, IOException, BufferedReader...) and `java.lang.Runtime`. NOT blocked:
+`java.lang.management.*`, `Runtime.getRuntime().exec(...)`, generic shell/SQL/XSS
+payloads. So it is a specific Java-class allowlist rule (944xxx family), not a
+generic exploit scanner and not size/model/key related.
+
+**Why it bit the pipeline:** the code-splitting system prompt
+(`pipeline/Scripts/Prompts/splittingPrompt.py`) embeds a Java driver template
+with five `java.io.*` imports, sent on EVERY `split_code` call regardless of
+target language — so every call is blocked.
+
+**Do NOT treat these 403s as transient / retryable.** `llm_client._is_waf_block`
+detects the HTML body and fails fast with an actionable error. Bounded retry is
+reserved for JSON 403s only.
+
+**Real fix is gateway-side** (needs the gateway owner): whitelist/disable the
+OWASP-CRS Java RCE rule for this proxy, or allowlist the pipeline's traffic.
+Editing the prompt to dodge the signature is fragile and won't help when a
+user's own Java solution legitimately uses `java.io.*`.
+
+**Bisection method that worked:** send candidate text as a chat message with
+`max_tokens=1` and check HTTP status (403 vs 200); binary-search smallest
+blocking prefix, then test standalone fixed-size chunks to isolate the signature.

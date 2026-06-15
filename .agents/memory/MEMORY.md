@@ -1,1 +1,2 @@
 - [Replit egress proxy TLS](replit-egress-proxy-tls.md) — outbound HTTPS to `*.replit.app` is MITM'd by a per-repl Replit proxy CA; certifi fails, must verify against the system CA bundle.
+- [Gateway WAF 403s](replit-egress-proxy-tls.md) — proxy gateway WAF blocks `java.io.*`/`java.lang.Runtime` in request bodies (HTML 403, permanent, not transient); fix is gateway-side.

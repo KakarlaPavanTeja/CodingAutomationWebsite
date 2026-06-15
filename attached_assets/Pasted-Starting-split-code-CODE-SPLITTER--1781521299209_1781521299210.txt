@@ -1,0 +1,35 @@
+Starting split_code...
+============================================================
+CODE SPLITTER & WRAPPER GENERATOR
+============================================================
+Selected languages: ['python', 'cpp', 'java', 'nodejs']
+Processing Python...
+[LLM] starting call purpose=code model=openai/gpt-5.3-codex effort=None timeout=300s streaming=True sys_chars=18003 user_chars=425
+[LLM] gateway returned 403 (likely transient), retry 1/2 in 1s
+[LLM] gateway returned 403 (likely transient), retry 2/2 in 2s
+Traceback (most recent call last):
+File "/home/runner/workspace/pipeline/Scripts/code_splitter.py", line 215, in <module>
+main()
+File "/home/runner/workspace/pipeline/Scripts/code_splitter.py", line 188, in main
+response, usage = call_llm(system_prompt, user_prompt, purpose="code")
+^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/pipeline/Scripts/llm_client.py", line 286, in call_llm
+stream = _create_with_retry(client, kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/pipeline/Scripts/llm_client.py", line 134, in _create_with_retry
+return client.chat.completions.create(**kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.12/site-packages/openai/_utils/_utils.py", line 298, in wrapper
+return func(*args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.12/site-packages/openai/resources/chat/completions/completions.py", line 1251, in create
+return self._post(
+^^^^^^^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.12/site-packages/openai/_base_client.py", line 1332, in post
+return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.12/site-packages/openai/_base_client.py", line 1105, in request
+raise self._make_status_error_from_response(err.response) from None
+openai.PermissionDeniedError: <!doctype html><meta charset="utf-8"><meta name=viewport content="width=device-width, initial-scale=1"><title>403</title>403 Forbidden
+Process exited with code 1

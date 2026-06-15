@@ -117,27 +117,77 @@ def _make_client() -> OpenAI:
     )
 
 
+def _is_waf_block(exc: PermissionDeniedError) -> bool:
+    """
+    Heuristic: True when a 403 is an HTML page from the gateway's WAF/edge
+    (a permanent, content-based block) rather than a JSON permission error.
+
+    Real OpenRouter/permission errors are JSON (e.g. {"error":{...}}). The
+    gateway's WAF returns a generic HTML "403 Forbidden" page. These are NOT
+    transient — retrying is pointless and only delays the real error.
+    """
+    body = ""
+    content_type = ""
+    try:
+        resp = getattr(exc, "response", None)
+        if resp is not None:
+            body = (resp.text or "")
+            content_type = (resp.headers.get("content-type", "") or "")
+    except Exception:
+        body, content_type = "", ""
+    low = body.lower() if body else (str(exc) or "").lower()
+    # Strong signals: an HTML error page (by content-type or markup markers).
+    if "text/html" in content_type.lower():
+        return True
+    if "<!doctype" in low or "<html" in low:
+        return True
+    # Weak fallback: a bare "403 forbidden" string only counts when it does NOT
+    # look like a structured JSON error (which is a real, possibly-retryable 403).
+    if "403 forbidden" in low and '"error"' not in low and "{" not in low:
+        return True
+    return False
+
+
 def _create_with_retry(client: OpenAI, kwargs: dict):
     """
-    Call chat.completions.create, retrying transient 403s from the gateway.
+    Call chat.completions.create, handling 403s from the proxy gateway.
 
-    The proxy gateway is itself a hosted service and can return a non-JSON HTML
-    "403 Forbidden" at its edge during cold-starts / momentary blips. The OpenAI
-    SDK does not retry 403 (it's normally a permanent auth/permission error), so a
-    single blip would kill a long pipeline run. Retry a bounded number of times
-    with exponential backoff; a genuinely-forbidden request still surfaces after
-    the attempts are exhausted.
+    Two distinct kinds of 403 come back from the gateway:
+
+    1. **WAF/edge block (HTML body, permanent).** The gateway runs an OWASP-CRS
+       style web-application firewall that flags Java-RCE class-name patterns
+       such as ``java.io.*`` and ``java.lang.Runtime``. These appear verbatim in
+       the code-splitting prompt's Java driver template, so the request is
+       rejected *every* time. Retrying cannot help — fail fast with an
+       actionable message so the gateway WAF rule can be whitelisted/disabled.
+
+    2. **JSON 403 (possibly transient).** A genuine permission/edge blip. The
+       OpenAI SDK does not retry 403, so retry a bounded number of times with
+       exponential backoff before surfacing the error.
     """
     attempts = max(1, int(os.environ.get("OPENROUTER_GATEWAY_403_RETRIES", "3")))
     for i in range(attempts):
         try:
             return client.chat.completions.create(**kwargs)
-        except PermissionDeniedError:
+        except PermissionDeniedError as exc:
+            if _is_waf_block(exc):
+                raise RuntimeError(
+                    "OpenRouter proxy gateway returned a 403 WAF/firewall block "
+                    "(HTML '403 Forbidden'). This is a permanent, content-based "
+                    "rejection — not transient — triggered by Java class-name "
+                    "patterns in the request body (e.g. 'java.io.*', "
+                    "'java.lang.Runtime') that an OWASP-CRS Java-RCE rule flags. "
+                    "These strings appear in the code-splitting prompt's Java "
+                    "driver template, so every code-split call is blocked. "
+                    "Fix on the gateway: whitelist/disable the OWASP-CRS Java "
+                    "RCE rule (944xxx family) for this proxy, or allowlist the "
+                    "pipeline's traffic."
+                ) from exc
             if i == attempts - 1:
                 raise
             wait = 2 ** i
             print(
-                f"[LLM] gateway returned 403 (likely transient), "
+                f"[LLM] gateway returned a JSON 403 (possibly transient), "
                 f"retry {i + 1}/{attempts - 1} in {wait}s",
                 flush=True,
             )
