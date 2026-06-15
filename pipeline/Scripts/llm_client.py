@@ -297,6 +297,41 @@ def _resolve_read_timeout_sec(purpose: str) -> int:
     return _DEFAULT_OTHER_TIMEOUT_SEC
 
 
+_DEFAULT_MAX_TOKENS: dict[str, int] = {
+    "testcases": 32000,
+    "chat": 16000,
+    "code": 16000,
+    "enrichment": 16000,
+}
+
+
+def _resolve_max_tokens(purpose: str) -> int:
+    """
+    Cap on output (completion) tokens.
+
+    Critical for reasoning calls: the gateway/model defaults to only 4096
+    completion tokens when `max_tokens` is omitted, and with reasoning effort the
+    model can spend that entire budget on (hidden) reasoning tokens, hitting
+    `finish_reason=length` with ZERO visible content — e.g. the testcase
+    generator script came back empty. Setting a generous cap leaves room for
+    reasoning AND the actual answer. Override with OPENAI_MAX_TOKENS (global) or
+    OPENAI_MAX_TOKENS_{TESTCASES,CHAT,CODE,ENRICHMENT}.
+    """
+    p = _canonical_purpose(purpose)
+    suffix = _ENV_SUFFIX[p]
+    raw = (
+        os.environ.get(f"OPENAI_MAX_TOKENS_{suffix}")
+        or os.environ.get("OPENAI_MAX_TOKENS")
+        or ""
+    ).strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return _DEFAULT_MAX_TOKENS[p]
+
+
 def _resolve_reasoning_effort(purpose: str) -> str | None:
     p = _canonical_purpose(purpose)
     if p not in {"chat", "testcases"}:
@@ -352,6 +387,7 @@ def call_llm(
     model = _resolve_model(purpose)
     timeout_sec = _resolve_read_timeout_sec(purpose)
     effort = _resolve_reasoning_effort(purpose)
+    max_tokens = _resolve_max_tokens(purpose)
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -367,6 +403,7 @@ def call_llm(
         "model": model,
         "messages": messages,
         "timeout": timeout_sec,
+        "max_tokens": max_tokens,
         "extra_body": extra_body,
     }
     if temperature != 1:
@@ -382,7 +419,7 @@ def call_llm(
 
     print(
         f"[LLM] starting call purpose={purpose} model={model} "
-        f"effort={effort} timeout={timeout_sec}s streaming={use_streaming} "
+        f"effort={effort} max_tokens={max_tokens} timeout={timeout_sec}s streaming={use_streaming} "
         f"sys_chars={len(system_prompt)} user_chars={len(user_prompt)}",
         flush=True,
     )
@@ -396,6 +433,7 @@ def call_llm(
         parts: list[str] = []
         usage_obj = None
         resolved_model = model
+        finish_reason = None
         stream = _create_with_retry(client, kwargs)
         last_log = time.monotonic()
         for chunk in stream:
@@ -405,6 +443,8 @@ def call_llm(
                 delta = chunk.choices[0].delta
                 if delta is not None and getattr(delta, "content", None):
                     parts.append(delta.content)
+                if getattr(chunk.choices[0], "finish_reason", None):
+                    finish_reason = chunk.choices[0].finish_reason
             if getattr(chunk, "usage", None):
                 usage_obj = chunk.usage
             now = time.monotonic()
@@ -420,13 +460,35 @@ def call_llm(
     else:
         resp = _create_with_retry(client, kwargs)
         content = (resp.choices[0].message.content or "").strip()
+        finish_reason = getattr(resp.choices[0], "finish_reason", None)
         usage = _extract_usage(resp.usage, resp.model or model)
 
     elapsed = time.monotonic() - started
     print(
         f"[LLM] returned in {elapsed:.1f}s purpose={purpose} model={usage['model']} "
-        f"tokens={usage['total_tokens']} cost=${usage['cost']:.6f} chars={len(content)}",
+        f"tokens={usage['total_tokens']} cost=${usage['cost']:.6f} "
+        f"chars={len(content)} finish={finish_reason}",
         flush=True,
     )
+
+    # Fail loudly on empty output instead of returning "" — a blank response
+    # silently produces an empty generator script / file downstream and the step
+    # would falsely report success. `finish_reason == "length"` with no content
+    # means the (reasoning) token budget was exhausted before any answer; raise
+    # so the caller surfaces a real error and the user can retry / raise the cap.
+    if not content:
+        hint = (
+            " The output token budget was exhausted (likely by reasoning) before "
+            "any content was produced — raise OPENAI_MAX_TOKENS / "
+            f"OPENAI_MAX_TOKENS_{_ENV_SUFFIX[_canonical_purpose(purpose)]} or lower "
+            "the reasoning effort."
+            if finish_reason == "length"
+            else ""
+        )
+        raise RuntimeError(
+            f"LLM returned empty content (purpose={purpose}, model={usage['model']}, "
+            f"finish_reason={finish_reason}, completion_tokens="
+            f"{usage['completion_tokens']}).{hint}"
+        )
 
     return content, usage

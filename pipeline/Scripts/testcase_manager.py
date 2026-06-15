@@ -289,12 +289,20 @@ def main():
                 print(f"LLM retry failed: {retry_err}")
                 sys.exit(1)
 
-        # If we get here, the script succeeded
-        print("Successfully generated testcases.json")
+        # If we get here, the generator script ran (exit 0). Verify it actually
+        # produced testcases.json — an empty/no-op script exits 0 without writing
+        # any output, which must NOT be treated as success.
         out_path = os.path.join("Outputs", "testcases.json")
         if os.path.exists("testcases.json"):
             os.rename("testcases.json", out_path)
             print("Moved testcases.json to Outputs folder.")
+        if not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
+            print(
+                "Error: generator script ran but produced no testcases.json "
+                "(empty or missing output). Aborting."
+            )
+            sys.exit(1)
+        print("Successfully generated testcases.json")
         if os.path.exists(out_path):
             try:
                 with open(out_path, "r", encoding="utf-8") as f:

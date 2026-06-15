@@ -1,4 +1,4 @@
-modules = ["nodejs-20", "python-3.12", "lua-5.2", "java-graalvm22.3"]
+modules = ["nodejs-20", "python-3.12", "lua-5.2", "java-graalvm22.3", "postgresql-16"]
 [agent]
 expertMode = true
 integrations = ["javascript_object_storage:2.0.0"]
