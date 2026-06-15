@@ -68,13 +68,26 @@ _DEFAULT_OTHER_TIMEOUT_SEC = 300
 
 
 def _make_client() -> OpenAI:
-    """Build an OpenAI SDK client pointed at the Replit AI (OpenRouter) gateway."""
+    """
+    Build an OpenAI SDK client for OpenRouter.
+
+    Prefers the Replit AI gateway (managed integration, no own key). If those
+    vars are absent, falls back to a direct OpenRouter connection using your own
+    OPENROUTER_API_KEY (base url defaults to https://openrouter.ai/api/v1).
+    """
     base_url = os.environ.get("AI_INTEGRATIONS_OPENROUTER_BASE_URL")
     api_key = os.environ.get("AI_INTEGRATIONS_OPENROUTER_API_KEY")
+    if not (base_url and api_key):
+        # Direct OpenRouter with the user's own API key.
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        base_url = os.environ.get(
+            "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+        )
     if not base_url or not api_key:
         raise RuntimeError(
-            "AI_INTEGRATIONS_OPENROUTER_BASE_URL / AI_INTEGRATIONS_OPENROUTER_API_KEY "
-            "are not set — enable the OpenRouter Replit AI integration."
+            "No OpenRouter credentials found. Either enable the Replit OpenRouter "
+            "AI integration (sets AI_INTEGRATIONS_OPENROUTER_BASE_URL / "
+            "AI_INTEGRATIONS_OPENROUTER_API_KEY) or set OPENROUTER_API_KEY."
         )
     max_retries = max(0, int(os.environ.get("OPENAI_MAX_RETRIES", "8")))
     return OpenAI(base_url=base_url, api_key=api_key, max_retries=max_retries)
