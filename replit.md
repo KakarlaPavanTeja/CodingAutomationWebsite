@@ -27,9 +27,9 @@ Next.js 16 application, fully migrated off Supabase to Replit-hosted infrastruct
 
 The Python pipeline scripts (`pipeline/Scripts/*.py`) record token usage by POSTing to `/api/internal/llm-usage` with header `X-Internal-Secret: <CRON_SECRET>`. The pipeline run handler (`src/app/api/pipeline/run/route.ts`) sets `INTERNAL_API_URL` and `INTERNAL_API_SECRET` on the spawned Python process. Local JSON (`Outputs/usage_tracker.json`) is still written as a backup.
 
-## LLM Client — OpenRouter via Replit AI Integrations
+## LLM Client — OpenRouter via proxy gateway
 
-- `pipeline/Scripts/llm_client.py` calls **OpenRouter** (Chat Completions only) through the **Replit AI gateway**, using the OpenAI SDK pointed at `AI_INTEGRATIONS_OPENROUTER_BASE_URL` / `AI_INTEGRATIONS_OPENROUTER_API_KEY` (auto-injected by the `python_openrouter_ai_integrations` blueprint — no own API key, billed to Replit credits). Set up via the integrations system; do not edit those env vars by hand.
+- `pipeline/Scripts/llm_client.py` calls **OpenRouter** (Chat Completions only) through the **Replit-hosted OpenRouter proxy gateway** (`https://open-router-gateway.replit.app/api/proxy`) — NOT openrouter.ai directly. It uses the OpenAI SDK with `base_url` set to the gateway and `api_key = OPENROUTER_API_KEY` (the gateway API key, stored as a Replit secret). Override the endpoint with `OPENROUTER_BASE_URL` if it ever changes.
 - Models are OpenRouter ids (provider-prefixed), preserving the previous OpenAI models: chat/testcases/enrichment = `openai/gpt-5.4`, code = `openai/gpt-5.3-codex`. Override per purpose with `OPENROUTER_MODEL_{TESTCASES,CHAT,CODE,ENRICHMENT}` (legacy `OPENAI_MODEL_*` still honored). Bare names without `/` are auto-prefixed `openai/`.
 - `call_llm(...)` returns `(content, usage)`; `usage` includes the **real USD `cost`** returned by OpenRouter (requested via `extra_body={"usage": {"include": True}}`). Streaming is the default (opt out with `OPENAI_DISABLE_STREAMING=1`); reasoning effort applies to chat/testcases; SDK handles retries (`OPENAI_MAX_RETRIES`).
 - `usage_tracker.py` no longer computes cost — there is **no `pricing.json`**. `update_usage(..., cost=...)` writes the cost from the response straight to `llm_usage.cost_usd`.

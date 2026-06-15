@@ -1,14 +1,14 @@
 """
-LLM calls via Replit AI Integrations → OpenRouter (Chat Completions).
+LLM calls via the OpenRouter proxy gateway (Chat Completions).
 
-This uses the OpenAI SDK pointed at the Replit AI gateway. The gateway is
-OpenRouter-compatible and is provisioned by the `python_openrouter_ai_integrations`
-blueprint, which auto-injects (no manual key needed):
+This uses the OpenAI SDK pointed at the Replit-hosted OpenRouter proxy gateway
+(NOT openrouter.ai directly). Configure with:
 
-  AI_INTEGRATIONS_OPENROUTER_BASE_URL
-  AI_INTEGRATIONS_OPENROUTER_API_KEY   (dummy value — auth is handled by the gateway)
+  OPENROUTER_API_KEY    (required — the gateway API key)
+  OPENROUTER_BASE_URL   (optional — defaults to
+                         https://open-router-gateway.replit.app/api/proxy)
 
-Charges are billed to Replit credits. Only the Chat Completions API is supported.
+Only the Chat Completions API is supported.
 
 Models are OpenRouter ids (provider-prefixed). Defaults preserve the previous
 OpenAI models, now routed through OpenRouter. Override per purpose via env:
@@ -69,25 +69,21 @@ _DEFAULT_OTHER_TIMEOUT_SEC = 300
 
 def _make_client() -> OpenAI:
     """
-    Build an OpenAI SDK client for OpenRouter.
+    Build an OpenAI SDK client pointed at the OpenRouter proxy gateway.
 
-    Prefers the Replit AI gateway (managed integration, no own key). If those
-    vars are absent, falls back to a direct OpenRouter connection using your own
-    OPENROUTER_API_KEY (base url defaults to https://openrouter.ai/api/v1).
+    Calls go through the Replit-hosted OpenRouter proxy gateway (NOT openrouter.ai
+    directly). Base url defaults to the shared gateway endpoint and authenticates
+    with OPENROUTER_API_KEY (the gateway API key). Override the endpoint with
+    OPENROUTER_BASE_URL if it ever changes.
     """
-    base_url = os.environ.get("AI_INTEGRATIONS_OPENROUTER_BASE_URL")
-    api_key = os.environ.get("AI_INTEGRATIONS_OPENROUTER_API_KEY")
-    if not (base_url and api_key):
-        # Direct OpenRouter with the user's own API key.
-        api_key = os.environ.get("OPENROUTER_API_KEY")
-        base_url = os.environ.get(
-            "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
-        )
-    if not base_url or not api_key:
+    base_url = os.environ.get(
+        "OPENROUTER_BASE_URL", "https://open-router-gateway.replit.app/api/proxy"
+    )
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
         raise RuntimeError(
-            "No OpenRouter credentials found. Either enable the Replit OpenRouter "
-            "AI integration (sets AI_INTEGRATIONS_OPENROUTER_BASE_URL / "
-            "AI_INTEGRATIONS_OPENROUTER_API_KEY) or set OPENROUTER_API_KEY."
+            "OPENROUTER_API_KEY is not set — provide the OpenRouter proxy gateway "
+            "API key."
         )
     max_retries = max(0, int(os.environ.get("OPENAI_MAX_RETRIES", "8")))
     return OpenAI(base_url=base_url, api_key=api_key, max_retries=max_retries)
@@ -174,7 +170,7 @@ def call_llm(
     purpose: str = "chat",
 ):
     """
-    Make a single Chat Completions call through the Replit AI (OpenRouter) gateway.
+    Make a single Chat Completions call through the OpenRouter proxy gateway.
 
     purpose:
       - "testcases"   — reasoning model for the testcase generator script

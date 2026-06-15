@@ -26,7 +26,7 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 | Auth | Custom — `bcryptjs` + DB-backed session-cookie |
 | File storage | **Replit App Storage** (GCS-backed via sidecar) |
 | Pipeline runtime | Python 3.11+ |
-| LLM | OpenRouter via Replit AI Integrations (auto-injected `AI_INTEGRATIONS_OPENROUTER_*`) |
+| LLM | OpenRouter via proxy gateway (`open-router-gateway.replit.app`, `OPENROUTER_API_KEY`) |
 | Email | Resend (`RESEND_API_KEY`) |
 | Deployment | Replit Autoscale (`.replit` + Publishing UI) |
 
@@ -79,7 +79,7 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 │
 ├── pipeline/
 │   ├── Scripts/                # Python pipeline scripts (see "Pipeline" below)
-│   │   ├── llm_client.py       # OpenRouter (Replit AI gateway) chat-completions wrapper
+│   │   ├── llm_client.py       # OpenRouter (proxy gateway) chat-completions wrapper
 │   │   ├── usage_tracker.py    # Token/cost accounting; reports to /api/internal/llm-usage
 │   │   ├── generate_full_question.py
 │   │   ├── testcase_manager.py
@@ -162,14 +162,14 @@ Modes also include **`practice`** vs **`exam`**:
 1. Validates input (stepId, mode, languages, subSteps, testcaseCount) against allowlists
 2. `requireProblemAccess()` — caller must own the problem or be admin
 3. `storage-sync.ts` pulls the problem's files from GCS into `pipeline/problems/<problem-id>/`
-4. Spawns Python with env: `PROBLEM_ID`, `INTERNAL_API_URL`, `INTERNAL_API_SECRET` (= `CRON_SECRET`), `AI_INTEGRATIONS_OPENROUTER_*`
+4. Spawns Python with env: `PROBLEM_ID`, `INTERNAL_API_URL`, `INTERNAL_API_SECRET` (= `CRON_SECRET`); `OPENROUTER_API_KEY` (and optional `OPENROUTER_BASE_URL`) are inherited from the process env
 5. Streams stdout/stderr to `pipeline_logs` table; tracks PID in `process-registry`
 6. On exit: pushes generated files back to GCS, updates `pipeline_runs.status` + `exit_code`
 7. Stop endpoint sends SIGTERM, then SIGKILL after timeout
 
 ### LLM Usage Tracking
 
-Every Python LLM call goes through `llm_client.py`, which calls OpenRouter (Chat Completions) through the Replit AI gateway and requests `usage.include=true` so the response carries the **real USD cost** of the call. After each call, `usage_tracker.py` POSTs that cost (no local pricing table) to `/api/internal/llm-usage` with `X-Internal-Secret: <CRON_SECRET>`, and it is stored in `llm_usage`. Admins view aggregates at `/admin/costs`.
+Every Python LLM call goes through `llm_client.py`, which calls OpenRouter (Chat Completions) through the proxy gateway (`open-router-gateway.replit.app`) and requests `usage.include=true` so the response carries the **real USD cost** of the call. After each call, `usage_tracker.py` POSTs that cost (no local pricing table) to `/api/internal/llm-usage` with `X-Internal-Secret: <CRON_SECRET>`, and it is stored in `llm_usage`. Admins view aggregates at `/admin/costs`.
 
 ---
 
@@ -248,8 +248,8 @@ Set these in **Replit Secrets** (production) or `.env.local` (Cursor local dev �
 | Variable | Required | Purpose |
 |---|---|---|
 | `DATABASE_URL` | ✅ | Postgres connection string |
-| `AI_INTEGRATIONS_OPENROUTER_BASE_URL` | ✅ | OpenRouter gateway URL — auto-injected by the Replit AI integration |
-| `AI_INTEGRATIONS_OPENROUTER_API_KEY` | ✅ | Gateway key (dummy value) — auto-injected by the Replit AI integration |
+| `OPENROUTER_API_KEY` | ✅ | OpenRouter proxy gateway API key |
+| `OPENROUTER_BASE_URL` | ⬜ | Override gateway endpoint (default `https://open-router-gateway.replit.app/api/proxy`) |
 | `CRON_SECRET` | ✅ | Shared secret: Node ↔ Python (`X-Internal-Secret`) |
 | `ADMIN_SECRET_KEY` | ✅ | Required to sign up as admin |
 | `RESEND_API_KEY` | ✅ | Password reset emails |
