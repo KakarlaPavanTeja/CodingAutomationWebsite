@@ -80,7 +80,7 @@ def generate_enrichment():
         print("\ngenerating real-life examples...")
         rl_user_prompt = f"Problem Description:\n{problem_desc}\n\nSolution Code:\n{solution_code}"
         rl_output, rl_usage = call_llm(REAL_LIFE_PROMPT, rl_user_prompt, purpose="enrichment")
-        track_usage(rl_usage.get('prompt_tokens', 0), rl_usage.get('completion_tokens', 0), "enrichment_reallife", model=rl_usage.get('model', 'unknown'), purpose="enrichment", step_id="generate_enrichment")
+        track_usage(rl_usage.get('prompt_tokens', 0), rl_usage.get('completion_tokens', 0), "enrichment_reallife", model=rl_usage.get('model', 'unknown'), purpose="enrichment", step_id="generate_enrichment", cost=rl_usage.get('cost', 0.0))
         enrichment_data["real_life_examples"] = extract_real_life_insights(rl_output)
         print("✓ Real-life examples generated")
     else:
@@ -91,7 +91,7 @@ def generate_enrichment():
         print("\ngenerating hints...")
         hints_user_prompt = f"Problem Description:\n{problem_desc}\n\nSolution Approach:\n{solution_code}"
         hints_output, hints_usage = call_llm(HINTS_PROMPT, hints_user_prompt, purpose="enrichment")
-        track_usage(hints_usage.get('prompt_tokens', 0), hints_usage.get('completion_tokens', 0), "enrichment_hints", model=hints_usage.get('model', 'unknown'), purpose="enrichment", step_id="generate_enrichment")
+        track_usage(hints_usage.get('prompt_tokens', 0), hints_usage.get('completion_tokens', 0), "enrichment_hints", model=hints_usage.get('model', 'unknown'), purpose="enrichment", step_id="generate_enrichment", cost=hints_usage.get('cost', 0.0))
         enrichment_data["hints"] = parse_json_from_llm(hints_output)
         print("✓ Hints generated")
     else:
@@ -102,7 +102,7 @@ def generate_enrichment():
         print("\ngenerating follow-up questions...")
         followup_user_prompt = f"Problem Description:\n{problem_desc}\n\nProblem Code:\n{solution_code}"
         followup_output, followup_usage = call_llm(FOLLOWUP_PROMPT_NEW, followup_user_prompt, purpose="enrichment")
-        track_usage(followup_usage.get('prompt_tokens', 0), followup_usage.get('completion_tokens', 0), "enrichment_followups", model=followup_usage.get('model', 'unknown'), purpose="enrichment", step_id="generate_enrichment")
+        track_usage(followup_usage.get('prompt_tokens', 0), followup_usage.get('completion_tokens', 0), "enrichment_followups", model=followup_usage.get('model', 'unknown'), purpose="enrichment", step_id="generate_enrichment", cost=followup_usage.get('cost', 0.0))
         enrichment_data["followup_questions"] = parse_json_from_llm(followup_output)
         print("✓ Follow-up questions generated")
     else:

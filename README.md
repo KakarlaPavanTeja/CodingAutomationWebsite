@@ -26,7 +26,7 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 | Auth | Custom — `bcryptjs` + DB-backed session-cookie |
 | File storage | **Replit App Storage** (GCS-backed via sidecar) |
 | Pipeline runtime | Python 3.11+ |
-| LLM | OpenAI API (`OPENAI_API_KEY`) |
+| LLM | OpenRouter via Replit AI Integrations (auto-injected `AI_INTEGRATIONS_OPENROUTER_*`) |
 | Email | Resend (`RESEND_API_KEY`) |
 | Deployment | Replit Autoscale (`.replit` + Publishing UI) |
 
@@ -79,7 +79,7 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 │
 ├── pipeline/
 │   ├── Scripts/                # Python pipeline scripts (see "Pipeline" below)
-│   │   ├── llm_client.py       # OpenAI wrapper with retries, usage tracking
+│   │   ├── llm_client.py       # OpenRouter (Replit AI gateway) chat-completions wrapper
 │   │   ├── usage_tracker.py    # Token/cost accounting; reports to /api/internal/llm-usage
 │   │   ├── generate_full_question.py
 │   │   ├── testcase_manager.py
@@ -94,8 +94,7 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 │   ├── Outputs/                # Working dir for generated artifacts
 │   ├── problems/               # Per-problem persistent workspace (synced to GCS)
 │   ├── zReferenceFiles/        # LUA template + reference files
-│   ├── pricing.json            # OpenAI model pricing for cost calculation
-│   └── requirements.txt        # Python deps (anthropic, boto3, requests, etc.)
+│   └── requirements.txt        # Python deps (openai, boto3, requests, etc.)
 │
 ├── attached_assets/            # Static assets uploaded by user
 ├── replit.md                   # Replit Agent's working notes (architecture log)
@@ -163,14 +162,14 @@ Modes also include **`practice`** vs **`exam`**:
 1. Validates input (stepId, mode, languages, subSteps, testcaseCount) against allowlists
 2. `requireProblemAccess()` — caller must own the problem or be admin
 3. `storage-sync.ts` pulls the problem's files from GCS into `pipeline/problems/<problem-id>/`
-4. Spawns Python with env: `PROBLEM_ID`, `INTERNAL_API_URL`, `INTERNAL_API_SECRET` (= `CRON_SECRET`), `OPENAI_API_KEY`
+4. Spawns Python with env: `PROBLEM_ID`, `INTERNAL_API_URL`, `INTERNAL_API_SECRET` (= `CRON_SECRET`), `AI_INTEGRATIONS_OPENROUTER_*`
 5. Streams stdout/stderr to `pipeline_logs` table; tracks PID in `process-registry`
 6. On exit: pushes generated files back to GCS, updates `pipeline_runs.status` + `exit_code`
 7. Stop endpoint sends SIGTERM, then SIGKILL after timeout
 
 ### LLM Usage Tracking
 
-Every Python LLM call goes through `llm_client.py`. After each call, `usage_tracker.py` POSTs to `/api/internal/llm-usage` with `X-Internal-Secret: <CRON_SECRET>`. Costs are calculated from `pipeline/pricing.json` and stored in `llm_usage`. Admins view aggregates at `/admin/costs`.
+Every Python LLM call goes through `llm_client.py`, which calls OpenRouter (Chat Completions) through the Replit AI gateway and requests `usage.include=true` so the response carries the **real USD cost** of the call. After each call, `usage_tracker.py` POSTs that cost (no local pricing table) to `/api/internal/llm-usage` with `X-Internal-Secret: <CRON_SECRET>`, and it is stored in `llm_usage`. Admins view aggregates at `/admin/costs`.
 
 ---
 
@@ -249,7 +248,8 @@ Set these in **Replit Secrets** (production) or `.env.local` (Cursor local dev �
 | Variable | Required | Purpose |
 |---|---|---|
 | `DATABASE_URL` | ✅ | Postgres connection string |
-| `OPENAI_API_KEY` | ✅ | LLM calls in pipeline |
+| `AI_INTEGRATIONS_OPENROUTER_BASE_URL` | ✅ | OpenRouter gateway URL — auto-injected by the Replit AI integration |
+| `AI_INTEGRATIONS_OPENROUTER_API_KEY` | ✅ | Gateway key (dummy value) — auto-injected by the Replit AI integration |
 | `CRON_SECRET` | ✅ | Shared secret: Node ↔ Python (`X-Internal-Secret`) |
 | `ADMIN_SECRET_KEY` | ✅ | Required to sign up as admin |
 | `RESEND_API_KEY` | ✅ | Password reset emails |
@@ -258,7 +258,7 @@ Set these in **Replit Secrets** (production) or `.env.local` (Cursor local dev �
 | `PRIVATE_OBJECT_DIR` | ✅ | Replit App Storage private dir |
 | `APP_URL` | (prod) | Trusted base URL for emails |
 | `STORAGE_BUCKET` | (legacy) | Old Supabase bucket name — only used by migration scripts |
-| `OPENAI_BASE_URL` | optional | Currently logged but **not** used to override endpoints — `llm_client.py` hits `api.openai.com` directly |
+| `OPENROUTER_MODEL_{TESTCASES,CHAT,CODE,ENRICHMENT}` | optional | Override the OpenRouter model per purpose (default `openai/gpt-5.4`, code = `openai/gpt-5.3-codex`) |
 
 **Legacy / safe to delete** (kept temporarily, no runtime use): `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`.
 

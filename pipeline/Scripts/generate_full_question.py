@@ -119,6 +119,7 @@ def main():
             model=desc_usage.get('model', 'unknown'),
             purpose="chat",
             step_id="generate_question",
+            cost=desc_usage.get('cost', 0.0),
         )
 
         with open(desc_path, 'w') as f:
@@ -143,7 +144,7 @@ def main():
 
         sig_prompt = get_signature_extraction_prompt(desc_response)
         sig_response, sig_usage = call_llm(sig_prompt, "", purpose="chat")
-        update_usage(sig_usage.get('prompt_tokens', 0), sig_usage.get('completion_tokens', 0), f"{problem_name}_signature", model=sig_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question")
+        update_usage(sig_usage.get('prompt_tokens', 0), sig_usage.get('completion_tokens', 0), f"{problem_name}_signature", model=sig_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=sig_usage.get('cost', 0.0))
 
         try:
             clean_sig = sig_response.strip()
@@ -157,7 +158,7 @@ def main():
             print(f"Enforcing function name: {description_signature.get('function_name')}")
             refactor_prompt = get_normalization_prompt(user_code, detected_lang, description_signature, desc_response, question_type)
             renamed_code, refactor_usage = call_llm(refactor_prompt, "", purpose="chat")
-            update_usage(refactor_usage.get('prompt_tokens', 0), refactor_usage.get('completion_tokens', 0), f"{problem_name}_refactor", model=refactor_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question")
+            update_usage(refactor_usage.get('prompt_tokens', 0), refactor_usage.get('completion_tokens', 0), f"{problem_name}_refactor", model=refactor_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=refactor_usage.get('cost', 0.0))
 
             if renamed_code.strip().startswith("```"):
                 renamed_code = renamed_code.strip().split('\n', 1)[1].rsplit('\n', 1)[0].strip()
@@ -209,7 +210,7 @@ def main():
             print(f"  - Converting to {lang}...")
             conv_prompt = get_conversion_prompt(lang, user_code, question_type, description_signature, desc_response)
             conv_response, conv_usage = call_llm(conv_prompt, "", purpose="code")
-            update_usage(conv_usage.get('prompt_tokens', 0), conv_usage.get('completion_tokens', 0), f"{problem_name}_convert_{lang}", model=conv_usage.get('model', 'unknown'), purpose="code", step_id="generate_question")
+            update_usage(conv_usage.get('prompt_tokens', 0), conv_usage.get('completion_tokens', 0), f"{problem_name}_convert_{lang}", model=conv_usage.get('model', 'unknown'), purpose="code", step_id="generate_question", cost=conv_usage.get('cost', 0.0))
 
             clean_code = conv_response.strip()
             if clean_code.startswith("```"):
@@ -251,7 +252,7 @@ def main():
 
         title_prompt = get_title_prompt(desc_response)
         title_response, title_usage = call_llm(title_prompt, "", purpose="chat")
-        update_usage(title_usage.get('prompt_tokens', 0), title_usage.get('completion_tokens', 0), f"{problem_name}_titles", model=title_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question")
+        update_usage(title_usage.get('prompt_tokens', 0), title_usage.get('completion_tokens', 0), f"{problem_name}_titles", model=title_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=title_usage.get('cost', 0.0))
         titles_path = os.path.join(OUTPUT_DIR, 'generated_titles.txt')
         with open(titles_path, 'w') as f:
             f.write(title_response)
@@ -266,7 +267,7 @@ def main():
 
         diff_prompt = get_difficulty_prompt(desc_response)
         diff_response, diff_usage = call_llm(diff_prompt, "", purpose="chat")
-        update_usage(diff_usage.get('prompt_tokens', 0), diff_usage.get('completion_tokens', 0), f"{problem_name}_difficulty", model=diff_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question")
+        update_usage(diff_usage.get('prompt_tokens', 0), diff_usage.get('completion_tokens', 0), f"{problem_name}_difficulty", model=diff_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=diff_usage.get('cost', 0.0))
         diff_path = os.path.join(OUTPUT_DIR, 'generated_difficulty.txt')
         with open(diff_path, 'w') as f:
             f.write(diff_response.strip())
@@ -287,7 +288,7 @@ def main():
 
             topics_prompt = get_topics_prompt(desc_response, user_code, topics_list_content)
             topics_response, topics_usage = call_llm(topics_prompt, "", purpose="chat")
-            update_usage(topics_usage.get('prompt_tokens', 0), topics_usage.get('completion_tokens', 0), f"{problem_name}_topics", model=topics_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question")
+            update_usage(topics_usage.get('prompt_tokens', 0), topics_usage.get('completion_tokens', 0), f"{problem_name}_topics", model=topics_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=topics_usage.get('cost', 0.0))
 
             topics_out_path = os.path.join(OUTPUT_DIR, 'generated_topics.json')
             try:

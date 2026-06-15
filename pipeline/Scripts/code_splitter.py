@@ -195,6 +195,7 @@ def main():
             model=usage.get("model", "unknown"),
             purpose="code",
             step_id="split_code",
+            cost=usage.get("cost", 0.0),
         )
         
         # 3. Parse and Save

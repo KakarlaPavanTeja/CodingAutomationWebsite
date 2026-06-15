@@ -1,8 +1,9 @@
 """
-LLM Usage Tracker — writes every call to Supabase `llm_usage` table.
+LLM Usage Tracker — records every call to the Replit Postgres `llm_usage` table
+via the internal API, with a local JSON backup.
 
-Pricing is loaded from pipeline/pricing.json (updated daily or manually).
-Falls back to hardcoded defaults if the file is missing.
+Cost is taken directly from the LLM response (OpenRouter returns the real USD
+cost of each call — see llm_client.call_llm). There is no local pricing table.
 
 Environment variables used:
   INTERNAL_API_URL        — base URL of this Next.js app (set by the run route)
@@ -27,96 +28,9 @@ _BASE = os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(SCRIPT_DIR)
 OUTPUT_DIR = os.path.join(_BASE, "Outputs")
 USAGE_TRACKER_FILE = os.path.join(OUTPUT_DIR, "usage_tracker.json")
 
-# ---------------------------------------------------------------------------
-# Pricing: per 1M tokens  { model_pattern: (input_per_1M, output_per_1M) }
-# Updated 2026-04-05 from https://platform.openai.com/docs/pricing
-# ---------------------------------------------------------------------------
-PRICING_FILE = os.path.join(os.path.dirname(SCRIPT_DIR), "pricing.json")
-
-_DEFAULT_PRICING: dict[str, tuple[float, float]] = {
-    # GPT-5 family
-    "gpt-5.4":            (1.25, 10.00),
-    "gpt-5.3-codex":      (1.25, 10.00),
-    "gpt-5.2-pro":        (1.25, 10.00),
-    "gpt-5.1-codex":      (1.25, 10.00),
-    "gpt-5":              (1.25, 10.00),
-    # GPT-5 reasoning
-    "gpt-5-reasoning":    (1.25, 10.00),
-    # GPT-4o family
-    "gpt-4o":             (2.50,  10.00),
-    "gpt-4o-mini":        (0.15,   0.60),
-    "gpt-4o-2024-11-20":  (2.50,  10.00),
-    # GPT-4
-    "gpt-4-turbo":        (10.00, 30.00),
-    "gpt-4":              (30.00, 60.00),
-    # o-series reasoning
-    "o4-mini":            (1.10,   4.40),
-    "o3":                 (2.00,   8.00),
-    "o3-mini":            (1.10,   4.40),
-    "o1":                 (15.00, 60.00),
-    "o1-mini":            (1.10,   4.40),
-    "o1-preview":         (15.00, 60.00),
-    # GPT-3.5
-    "gpt-3.5-turbo":      (0.50,   1.50),
-}
-
-_pricing_cache: dict[str, tuple[float, float]] | None = None
-
-
-def _load_pricing() -> dict[str, tuple[float, float]]:
-    """Load pricing from pricing.json, fall back to defaults."""
-    global _pricing_cache
-    if _pricing_cache is not None:
-        return _pricing_cache
-
-    pricing = dict(_DEFAULT_PRICING)
-    if os.path.exists(PRICING_FILE):
-        try:
-            with open(PRICING_FILE, "r") as f:
-                data = json.load(f)
-            models = data if isinstance(data, dict) else data.get("models", {})
-            for model_name, vals in models.items():
-                if isinstance(vals, (list, tuple)) and len(vals) == 2:
-                    pricing[model_name.lower()] = (float(vals[0]), float(vals[1]))
-                elif isinstance(vals, dict):
-                    pricing[model_name.lower()] = (
-                        float(vals.get("input", vals.get("prompt", 0))),
-                        float(vals.get("output", vals.get("completion", 0))),
-                    )
-        except Exception as e:
-            print(f"[usage_tracker] Warning: failed to load {PRICING_FILE}: {e}")
-
-    _pricing_cache = pricing
-    return pricing
-
-
-def get_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    """Calculate cost in USD for given model and token counts."""
-    pricing = _load_pricing()
-    model_lower = model.lower().strip()
-
-    # Exact match first
-    if model_lower in pricing:
-        inp, out = pricing[model_lower]
-    else:
-        # Prefix match (e.g. "gpt-5.4-0125" matches "gpt-5.4")
-        matched = None
-        for key in sorted(pricing.keys(), key=len, reverse=True):
-            if model_lower.startswith(key):
-                matched = key
-                break
-        if matched:
-            inp, out = pricing[matched]
-        else:
-            # Unknown model — use conservative estimate
-            print(f"[usage_tracker] Warning: no pricing for model '{model}', using $1.25/$10.00 per 1M")
-            inp, out = (1.25, 10.00)
-
-    return (prompt_tokens * inp / 1_000_000) + (completion_tokens * out / 1_000_000)
-
 
 # ---------------------------------------------------------------------------
-# Replit internal API insert (replaces previous Supabase REST call)
+# Replit internal API insert
 # ---------------------------------------------------------------------------
 # The pipeline run handler (src/app/api/pipeline/run/route.ts) sets these
 # env vars before spawning python.
@@ -204,20 +118,26 @@ def update_usage(
     model: str = "unknown",
     purpose: str = "unknown",
     step_id: str | None = None,
+    cost: float = 0.0,
 ) -> dict:
     """
-    Track an LLM call. Inserts into Supabase llm_usage, falls back to local JSON.
+    Track an LLM call. Inserts into the `llm_usage` table via the internal API,
+    falls back to local JSON.
 
     Parameters:
       prompt_tokens      - input token count
       completion_tokens  - output token count
       problem_name       - human-readable label (e.g. "two_sum_description")
-      model              - model name from LLM response (e.g. "gpt-5.4")
+      model              - model name from LLM response (e.g. "openai/gpt-5.4")
       purpose            - call purpose (chat, code, testcases, enrichment, etc.)
       step_id            - pipeline step id (e.g. "generate_question", "create_testcases")
+      cost               - real USD cost from the LLM response (OpenRouter usage.cost)
     """
     total_tokens = prompt_tokens + completion_tokens
-    cost = get_cost(model, prompt_tokens, completion_tokens)
+    try:
+        cost = float(cost or 0.0)
+    except (TypeError, ValueError):
+        cost = 0.0
 
     # Resolve IDs from environment (set by the API route)
     user_id = os.environ.get("PIPELINE_USER_ID") or None

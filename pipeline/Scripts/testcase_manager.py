@@ -212,6 +212,7 @@ def main():
             model=usage.get("model", "unknown"),
             purpose="testcases",
             step_id="create_testcases",
+            cost=usage.get("cost", 0.0),
         )
 
         # 6. Run the generated script
@@ -270,6 +271,7 @@ def main():
                     model=retry_usage.get("model", "unknown"),
                     purpose="testcases",
                     step_id="create_testcases",
+                    cost=retry_usage.get("cost", 0.0),
                 )
 
                 # Run the fixed script
