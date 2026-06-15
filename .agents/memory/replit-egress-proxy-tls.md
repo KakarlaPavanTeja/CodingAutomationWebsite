@@ -24,8 +24,12 @@ Prefer honoring `SSL_CERT_FILE` first, then the system bundle, then fall back to
 `True` (certifi) so non-intercepted hosts still work.
 
 **How to apply:** Any time a repl makes server-side HTTPS calls to another
-Replit-hosted service via the OpenAI SDK / httpx / aiohttp, point TLS verification
-at the system CA bundle, not certifi.
+Replit-hosted service via the OpenAI SDK / httpx / aiohttp / **requests
+(urllib3)**, point TLS verification at the system CA bundle, not certifi. For
+`requests`, pass `verify="/etc/ssl/certs/ca-certificates.crt"`. This bit the
+pipeline twice: the gateway call (httpx) AND the internal usage-tracker POST to
+the app's own `*.replit.dev` URL (requests) — both `*.replit.dev`/`*.replit.app`
+hosts are intercepted, so any new outbound call to a Replit host needs this.
 
 ## Gateway 403s are usually a WAF content block, NOT transient
 

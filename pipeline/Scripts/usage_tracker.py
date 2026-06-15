@@ -38,6 +38,25 @@ _INTERNAL_API_URL = os.environ.get("INTERNAL_API_URL", "")
 _INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
 
 
+def _ca_bundle() -> str | bool:
+    """
+    CA bundle for verifying TLS to the internal Next.js app.
+
+    The app is reached over a `*.replit.dev` host that Replit's internal egress
+    proxy intercepts, presenting a leaf signed by a per-repl root that is NOT in
+    `requests`/certifi's default bundle (hence CERTIFICATE_VERIFY_FAILED). The
+    system bundle DOES include that root. Honor SSL_CERT_FILE first, then the
+    system bundle, else fall back to certifi (True) for non-intercepted hosts.
+    """
+    for path in (
+        os.environ.get("SSL_CERT_FILE"),
+        "/etc/ssl/certs/ca-certificates.crt",
+    ):
+        if path and os.path.exists(path):
+            return path
+    return True
+
+
 def _insert_remote(row: dict) -> bool:
     """POST a usage row to the internal /api/internal/llm-usage endpoint."""
     if not _INTERNAL_API_URL or not _INTERNAL_API_SECRET:
@@ -48,7 +67,7 @@ def _insert_remote(row: dict) -> bool:
         "X-Internal-Secret": _INTERNAL_API_SECRET,
     }
     try:
-        resp = _requests.post(url, json=row, headers=headers, timeout=10)
+        resp = _requests.post(url, json=row, headers=headers, timeout=10, verify=_ca_bundle())
         if resp.status_code in (200, 201):
             return True
         print(f"[usage_tracker] internal insert failed ({resp.status_code}): {resp.text[:200]}", flush=True)
