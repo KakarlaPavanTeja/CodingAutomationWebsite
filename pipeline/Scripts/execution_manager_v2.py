@@ -24,12 +24,9 @@ AWS_PROFILE = os.environ.get("AWS_PROFILE")
 UPLOAD_MODE = os.environ.get("EXEC_V2_UPLOAD_MODE", "proxy").strip().lower()  # proxy | s3
 UPLOAD_SERVICE_URL = os.environ.get("EXEC_V2_UPLOAD_SERVICE_URL", "").strip()
 UPLOAD_SERVICE_TOKEN = os.environ.get("EXEC_V2_UPLOAD_SERVICE_TOKEN", "").strip()
-ENABLE_OUTPUT_S3 = os.environ.get("EXEC_V2_ENABLE_OUTPUT_S3", "false").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
+
+# Testcase OUTPUTS are always sent inline as base64 — never uploaded to S3.
+# (Only large INPUTS use S3; see _build_testcase_io_objects.)
 
 LARGE_IO_THRESHOLD_BYTES = 10 * 1024
 
@@ -221,7 +218,7 @@ def _print_runtime_config(base_dir):
     else:
         print(f"  AWS region: {AWS_REGION}")
         print(f"  S3 bucket: {S3_BUCKET}")
-    print(f"  Output S3 enabled: {'yes' if ENABLE_OUTPUT_S3 else 'no'}")
+    print("  Output upload: inline base64 only (S3 disabled for outputs)")
     if found_env_files:
         print(f"  Env files found: {', '.join(found_env_files)}")
     else:
@@ -429,23 +426,7 @@ def _build_testcase_io_objects(base_dir, tc, question_id, question_name, order):
         else:
             s3_errors.append(f"input upload failed: {_short_path(local_path, base_dir)}")
 
-    if output_bytes > LARGE_IO_THRESHOLD_BYTES:
-        if ENABLE_OUTPUT_S3:
-            output_s3_url, local_path, uploaded = _write_blob_and_get_s3_url(
-                base_dir, question_id, question_name, order, "output", output_text
-            )
-            if uploaded:
-                output_s3_used = True
-                output_obj = {
-                    "output_type": "STDOUT",
-                    "base64_encoded": False,
-                    "contents": None,
-                    "output_s3_url": output_s3_url,
-                    "multiple_possible_output": bool(tc.get("multiple_possible_output", False)),
-                    "multiple_output_contents": [],
-                }
-            else:
-                s3_errors.append(f"output upload failed: {_short_path(local_path, base_dir)}")
+    # Outputs are always inline base64 — never uploaded to S3.
 
     if tc.get("multiple_possible_output"):
         outs = tc.get("outputs") or []
