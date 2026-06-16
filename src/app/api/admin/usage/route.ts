@@ -4,6 +4,11 @@ import { requireAdminApi } from "@/lib/auth/server";
 import { db } from "@/lib/db";
 import { llmUsage, profiles, problems } from "@/lib/db/schema";
 
+// Always read fresh from the DB — usage rows are written by the pipeline as it
+// runs, so this endpoint must never be cached (server or browser).
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET() {
   const auth = await requireAdminApi();
   if (auth.error) return auth.error;
@@ -40,5 +45,8 @@ export async function GET() {
     problems: r.problem_name ? { name: r.problem_name } : null,
   }));
 
-  return NextResponse.json({ usage });
+  return NextResponse.json(
+    { usage },
+    { headers: { "Cache-Control": "no-store, max-age=0, must-revalidate" } }
+  );
 }

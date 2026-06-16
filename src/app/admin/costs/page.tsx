@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { DollarSign, User, FileText, Filter, BarChart3 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DollarSign, User, FileText, Filter, BarChart3, RefreshCw } from "lucide-react";
 
 type UsageEntry = {
   id: string;
@@ -105,21 +105,43 @@ export default function AdminCostsPage() {
   const [filterPurpose, setFilterPurpose] = useState("");
   const [barMode, setBarMode] = useState<"cost" | "tokens" | "calls">("cost");
   const [timeRange, setTimeRange] = useState<TimeRange>("1m");
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const inFlight = useRef(false);
 
-  useEffect(() => {
-    const fetchUsage = async () => {
-      try {
-        const res = await fetch("/api/admin/usage");
-        const data = await res.json();
-        setUsage((data.usage as UsageEntry[]) || []);
-      } catch {
-        setUsage([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchUsage();
+  const fetchUsage = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setRefreshing(true);
+    try {
+      const res = await fetch("/api/admin/usage", { cache: "no-store" });
+      const data = await res.json();
+      setUsage((data.usage as UsageEntry[]) || []);
+      setLastUpdated(new Date());
+    } catch {
+      // keep whatever we already have on a transient failure
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+      inFlight.current = false;
+    }
   }, []);
+
+  // Initial load + auto-refresh so new pipeline runs show up without a reload.
+  useEffect(() => {
+    fetchUsage();
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") fetchUsage();
+    }, 15000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") fetchUsage();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [fetchUsage]);
 
   // ---- Derived data ----
   const { totalCost, totalTokens, byUser, byProblem, dailyBars, allModels, allPurposes } =
@@ -315,7 +337,17 @@ export default function AdminCostsPage() {
   if (usage.length === 0) {
     return (
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold">LLM Costs</h2>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h2 className="text-lg font-semibold">LLM Costs</h2>
+          <button
+            onClick={() => fetchUsage()}
+            disabled={refreshing}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border bg-card hover:bg-muted/50 transition-colors disabled:opacity-60"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+        </div>
         <div className="rounded-lg border bg-card p-8 text-center">
           <p className="text-muted-foreground">
             No LLM usage recorded yet. Cost data will appear here after pipeline
@@ -354,7 +386,24 @@ export default function AdminCostsPage() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold">LLM Costs</h2>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <h2 className="text-lg font-semibold">LLM Costs</h2>
+        <div className="flex items-center gap-3">
+          {lastUpdated && (
+            <span className="text-xs text-muted-foreground tabular-nums">
+              Updated {lastUpdated.toLocaleTimeString()}
+            </span>
+          )}
+          <button
+            onClick={() => fetchUsage()}
+            disabled={refreshing}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border bg-card hover:bg-muted/50 transition-colors disabled:opacity-60"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+        </div>
+      </div>
 
       {/* Summary Cards — all-time totals */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
