@@ -2,3 +2,4 @@
 - [Gateway WAF 403s](replit-egress-proxy-tls.md) — gateway WAF is anomaly-scoring (not one signature); bypass by gzipping the request body (Content-Encoding: gzip), WAF skips compressed bodies, OpenRouter decompresses.
 - [Reasoning calls need max_tokens](openrouter-reasoning-max-tokens.md) — gateway defaults completion to 4096; reasoning eats it → empty content (finish_reason=length). Set max_tokens + fail loud on empty.
 - [None scenario = rebuild not verbatim](none-scenario-rebuild.md) — scenario_level "none" must REBUILD prose + normalize LaTeX to plain text, preserving only the 4 pillars (scenario, names, examples, constraints).
+- [Pipeline cost POST URL](pipeline-internal-usage-url.md) — internal usage POST base must be env-aware (deployment→APP_URL, dev→REPLIT_DEV_DOMAIN); wrong base → 404 HTML → rows silently go "local only". Dev/prod DBs are separate.

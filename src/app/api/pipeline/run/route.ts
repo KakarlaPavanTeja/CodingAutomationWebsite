@@ -19,6 +19,37 @@ import {
 import { registerProcess, unregisterProcess } from "@/lib/process-registry";
 import type { RunRequest } from "@/types/pipeline";
 
+/**
+ * Resolve the base URL the spawned Python pipeline uses to POST usage/cost rows
+ * back to *this* app's `/api/internal/llm-usage` endpoint.
+ *
+ * The base MUST point at the instance that owns the current request's database:
+ *  - In the deployment (REPLIT_DEPLOYMENT set) → the deployment's own public
+ *    origin. `127.0.0.1:5000` and the dev domain both fail there: the former
+ *    returns a 404 HTML page, the latter (if even set) targets the *dev*
+ *    workspace, so every cost row silently degrades to "local only" and never
+ *    reaches the production database.
+ *  - In the dev workspace → the dev domain.
+ *
+ * An explicit INTERNAL_API_URL always wins for manual overrides.
+ */
+function resolveInternalApiUrl(): string {
+  const explicit = process.env.INTERNAL_API_URL || process.env.NEXTAUTH_URL;
+  if (explicit) return explicit;
+
+  const isDeployment = Boolean(process.env.REPLIT_DEPLOYMENT);
+  if (isDeployment) {
+    const appUrl = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL;
+    if (appUrl) return appUrl;
+    const firstDomain = process.env.REPLIT_DOMAINS?.split(",")[0]?.trim();
+    if (firstDomain) return `https://${firstDomain}`;
+  } else if (process.env.REPLIT_DEV_DOMAIN) {
+    return `https://${process.env.REPLIT_DEV_DOMAIN}`;
+  }
+
+  return "http://127.0.0.1:5000";
+}
+
 export async function POST(request: NextRequest) {
   const body: RunRequest = await request.json();
   const { stepId, mode, subSteps, languages, testcaseCount, problemId } = body;
@@ -148,6 +179,9 @@ export async function POST(request: NextRequest) {
     }, 3000);
   }
 
+  const internalApiUrl = resolveInternalApiUrl();
+  console.log(`[pipeline/run] usage POST base = ${internalApiUrl}`);
+
   const proc = spawn(pythonPath, [scriptPath, ...args], {
     cwd: tmpDir,
     env: {
@@ -157,11 +191,12 @@ export async function POST(request: NextRequest) {
       PIPELINE_USER_ID: userId || "",
       PIPELINE_PROBLEM_ID: safeProblemId,
       PIPELINE_STEP_ID: stepId || "",
-      INTERNAL_API_URL:
-        process.env.INTERNAL_API_URL ||
-        process.env.NEXTAUTH_URL ||
-        (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : "") ||
-        "http://127.0.0.1:5000",
+      // Base URL the Python pipeline uses to POST cost/usage back to this same
+      // app (`/api/internal/llm-usage`). It MUST resolve to THIS environment's
+      // own running instance — in the deployment to the deployment, in dev to
+      // the dev workspace. A wrong base silently drops every cost row to
+      // "local only" (the row never reaches the database).
+      INTERNAL_API_URL: internalApiUrl,
       INTERNAL_API_SECRET: process.env.CRON_SECRET || "",
     },
     detached: true,
