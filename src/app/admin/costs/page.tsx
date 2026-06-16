@@ -2,6 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DollarSign, User, FileText, Filter, BarChart3, RefreshCw } from "lucide-react";
+import { STEP_CONFIGS } from "@/lib/pipeline-config";
+
+// Map raw pipeline step ids (e.g. "generate_editorial") to friendly labels
+// (e.g. "Generate Editorial") so the usage report reads cleanly.
+const STEP_LABELS: Record<string, string> = Object.fromEntries(
+  STEP_CONFIGS.map((s) => [s.id, s.label])
+);
+
+function stepLabel(stepId: string | null): string {
+  if (!stepId) return "—";
+  return STEP_LABELS[stepId] || stepId;
+}
 
 type UsageEntry = {
   id: string;
@@ -103,6 +115,7 @@ export default function AdminCostsPage() {
   const [filterProblem, setFilterProblem] = useState("");
   const [filterModel, setFilterModel] = useState("");
   const [filterPurpose, setFilterPurpose] = useState("");
+  const [filterStep, setFilterStep] = useState("");
   const [barMode, setBarMode] = useState<"cost" | "tokens" | "calls">("cost");
   const [timeRange, setTimeRange] = useState<TimeRange>("1m");
   const [refreshing, setRefreshing] = useState(false);
@@ -234,7 +247,7 @@ export default function AdminCostsPage() {
 
   // Helper: apply all filters except one (for cross-filtering dropdowns)
   const applyFilters = useCallback(
-    (data: UsageEntry[], exclude?: "user" | "problem" | "model" | "purpose") => {
+    (data: UsageEntry[], exclude?: "user" | "problem" | "model" | "purpose" | "step") => {
       let result = data;
       if (filterUser && exclude !== "user")
         result = result.filter((u) => matchesFilter(u.user_id, filterUser));
@@ -244,9 +257,11 @@ export default function AdminCostsPage() {
         result = result.filter((u) => u.model === filterModel);
       if (filterPurpose && exclude !== "purpose")
         result = result.filter((u) => u.purpose === filterPurpose);
+      if (filterStep && exclude !== "step")
+        result = result.filter((u) => matchesFilter(u.step_id, filterStep));
       return result;
     },
-    [filterUser, filterProblem, filterModel, filterPurpose]
+    [filterUser, filterProblem, filterModel, filterPurpose, filterStep]
   );
 
   // Filtered usage for the table
@@ -261,6 +276,7 @@ export default function AdminCostsPage() {
     const forProblem = applyFilters(usage, "problem");
     const forModel = applyFilters(usage, "model");
     const forPurpose = applyFilters(usage, "purpose");
+    const forStep = applyFilters(usage, "step");
 
     // Users available
     const userMap = new Map<string, string>();
@@ -289,11 +305,18 @@ export default function AdminCostsPage() {
     const purposeSet = new Set<string>();
     for (const u of forPurpose) purposeSet.add(u.purpose);
 
+    // Steps available
+    const stepSet = new Set<string>();
+    for (const u of forStep) if (u.step_id) stepSet.add(u.step_id);
+
     return {
       users: Array.from(userMap.entries()).map(([key, label]) => ({ key, label })),
       problems: Array.from(problemMap.entries()).map(([key, label]) => ({ key, label })),
       models: Array.from(modelSet).sort(),
       purposes: Array.from(purposeSet).sort(),
+      steps: Array.from(stepSet)
+        .map((key) => ({ key, label: stepLabel(key) }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
     };
   }, [usage, applyFilters]);
 
@@ -832,9 +855,19 @@ export default function AdminCostsPage() {
                   <option key={p} value={p} className="capitalize">{p}</option>
                 ))}
               </select>
-              {(filterUser || filterProblem || filterModel || filterPurpose) && (
+              <select
+                value={filterStep}
+                onChange={(e) => setFilterStep(e.target.value)}
+                className="text-xs bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                <option value="">All Steps</option>
+                {dropdownOptions.steps.map((s) => (
+                  <option key={s.key} value={s.key}>{s.label}</option>
+                ))}
+              </select>
+              {(filterUser || filterProblem || filterModel || filterPurpose || filterStep) && (
                 <button
-                  onClick={() => { setFilterUser(""); setFilterProblem(""); setFilterModel(""); setFilterPurpose(""); }}
+                  onClick={() => { setFilterUser(""); setFilterProblem(""); setFilterModel(""); setFilterPurpose(""); setFilterStep(""); }}
                   className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
                 >
                   Clear
@@ -842,7 +875,7 @@ export default function AdminCostsPage() {
               )}
             </div>
             {/* Totals summary on the right when filters are active */}
-            {(filterUser || filterProblem || filterModel || filterPurpose) && (
+            {(filterUser || filterProblem || filterModel || filterPurpose || filterStep) && (
               <div className="flex items-center gap-4 text-xs">
                 <span className="text-muted-foreground">
                   Prompt: <span className="font-semibold text-foreground tabular-nums">{filteredUsage.reduce((s, u) => s + u.prompt_tokens, 0).toLocaleString()}</span>
@@ -888,8 +921,8 @@ export default function AdminCostsPage() {
                   <td className="px-4 py-2.5 capitalize text-muted-foreground text-xs">
                     {u.purpose}
                   </td>
-                  <td className="px-4 py-2.5 text-muted-foreground text-xs font-mono">
-                    {u.step_id || "—"}
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs" title={u.step_id || undefined}>
+                    {stepLabel(u.step_id)}
                   </td>
                   <td className="px-4 py-2.5 text-muted-foreground text-xs max-w-[150px] truncate">
                     {u.problem_name || "—"}
