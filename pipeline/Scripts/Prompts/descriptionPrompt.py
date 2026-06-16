@@ -1,3 +1,123 @@
+def get_structure_only_prompt(problem_name, question_type, user_code):
+    """
+    Prompt for scenario_level == "none".
+
+    Unlike the other scenario levels, this is a PURE structuring/formatting pass:
+    the original problem statement, its variable/function names, its examples, and
+    its scenario/framing are all kept EXACTLY as-is. Only the layout, sectioning,
+    and formatting are improved. Nothing about the content is rewritten.
+    """
+
+    prompt = f"""You are an expert technical content writer for a coding interview platform.
+
+**YOUR OBJECTIVE:**
+Re-present the ORIGINAL problem statement with clean, consistent **structure and formatting ONLY**.
+This is a pure formatting/structuring pass — it is **NOT** a rewrite or a rephrase.
+
+**ABSOLUTE PRESERVATION RULES (HIGHEST PRIORITY — DO NOT VIOLATE):**
+- **DO NOT change the meaning or wording of the problem statement.** Keep the original sentences and phrasing. You may only split run-on text into readable lines and place existing content under the correct sections.
+- **DO NOT rename anything.** Keep the EXACT original function name and the EXACT original variable names. Do NOT invent or substitute new names.
+- **DO NOT change the examples.** Reuse the ORIGINAL examples verbatim — the same numbers, arrays, strings, inputs and outputs. Do NOT add, remove, reorder, or alter any example values.
+- **DO NOT change the scenario/framing.** If the original has a story/scenario, keep it exactly. If it has none, do NOT add one.
+- **DO NOT change the constraints.** Keep the original constraint values exactly; you may only reformat them into bullet points.
+- Your ONLY job is readability: section organization, line breaks, backticks for literals, blank lines, and consistent formatting. When in doubt, preserve the original content.
+
+**USER CODE (reference ONLY — to confirm whether the result is printed vs returned for the Output Format wording; DO NOT use it to change variables, examples, scenario, or wording):**
+```cpp
+{user_code}
+```
+
+**OUTPUT FORMAT RULES**
+1. Do NOT use `###`, `---`, or any heading tags.
+2. Do NOT use markdown code fences (```md) around the entire output.
+3. Do NOT include a "Problem Statement" title. Start directly with the description text.
+4. Use `**` for section titles: **Example 1:**, **Example 2:**, **Input:**, **Output:**, **Explanation:**, **Your Task**, **Constraints**, **Input Format**, **Output Format**.
+5. **CRITICAL:** You must leave exactly ONE BLANK LINE after every section title.
+6. **CRITICAL: Add a Blank Line BETWEEN every bullet point.**
+
+**BACKTICKS FOR LITERALS (PROSE ONLY):**
+- In the prose sections (Problem Statement, Explanation, Your Task), you MAY wrap literal values/characters/strings/booleans in backticks (`` ` ``) for readability.
+- This is a layout aid ONLY and must NEVER change the actual value, spelling, or casing of anything.
+- **NEVER touch the Examples' Input/Output code blocks** — those stay byte-for-byte identical to the original (see preservation rules).
+
+**CRITICAL: DOCUMENT TERMINATION (DO NOT EXCEED):**
+Your response MUST END immediately after the **Output Format** section.
+- DO NOT include any additional "Example" sections or text after the Output Format.
+- The Output Format section MUST be the FINAL section of your response.
+
+**SECTION INSTRUCTIONS**
+
+**Problem Statement**
+- Start immediately with the original description text. Do not write "**Problem Statement**".
+- Preserve the original wording and meaning. Only restructure for readability.
+- **Line Structure / Readability:**
+  - **CRITICAL: Do NOT write large blocks of text.**
+  - Break the existing description into multiple lines based on meaning.
+  - Start a new line (with a blank line in between) for each distinct rule, definition, or objective.
+
+**Examples**
+- **CRITICAL: Reuse the ORIGINAL examples exactly.** Do NOT invent new examples and do NOT change any values.
+- Keep the same number of examples as the original (do not add or drop any).
+- Re-format each original example into this exact layout (Pay attention to blank lines):
+
+    **Example 1:**
+
+    **Input:**
+
+    ```
+    n = 12
+    ```
+
+    **Output:**
+
+    ```
+    32
+    ```
+
+    **Explanation:**
+
+    - Explanation text here.
+
+**Your Task**
+- Preserve the ORIGINAL task sentence and the ORIGINAL function name/signature verbatim. Do NOT rename, paraphrase, or invent argument/return names.
+- Only reposition the existing task text under this heading and apply blank-line/bullet formatting.
+- Format (keep the original names, do not use placeholders):
+    **Your Task**
+
+    - <original task sentence, with the original function name and signature kept exactly as written>.
+
+**Constraints**
+- Reformat the ORIGINAL constraints into bullet points with backticks. Do NOT change any values or bounds.
+- If the original states explicit bounds, keep them exactly. Do NOT invent or tighten/loosen limits.
+
+**Input Format**
+- Title: **Input Format** followed by a blank line.
+- Describe the input structure consistent with the ORIGINAL examples and the `USER CODE` logic.
+- **BULLET POINTS**: Use bullet points to describe inputs line-by-line or item-by-item.
+- Keep the original variable names.
+
+**Output Format**
+- Title: **Output Format** followed by a blank line.
+- Describe the output structure consistent with the ORIGINAL examples and the `USER CODE` logic.
+- **BULLET POINTS**: Use bullet points to list the expected outcomes.
+- Start with a generic sentence like "The output is a single line:" followed by bullet points.
+- **CRITICAL: DO NOT use the word "Print" at the start of bullets.**
+- **PRINT VS RETURN**: You MUST explicitly state whether the final result is **printed** to standard output or **returned**, exactly as handled in the `USER CODE`.
+- **CONSISTENCY**: The output representation MUST match exactly what the original examples show.
+
+**FINAL CONFLICT-RESOLUTION RULE (READ LAST):**
+If ANY formatting/section rule above ever conflicts with preserving the original content, **PRESERVATION ALWAYS WINS**. Never modify the original wording, variable/function names, example values, scenario, or constraints in order to satisfy a formatting rule.
+"""
+
+    if question_type.lower() == 'node':
+        prompt += """
+    **For Node-Based Questions:**
+    - The first line contains space-separated values representing the nodes.
+    - `null` represents a null node.
+"""
+    return prompt
+
+
 def get_description_prompt(problem_name, question_type, user_code, scenario_level="moderate"):
     """
     Constructs the system prompt for generating coding question descriptions
@@ -10,19 +130,14 @@ def get_description_prompt(problem_name, question_type, user_code, scenario_leve
         scenario_level: Level of scenario wrapping - "none", "light", "moderate", or "heavy"
     """
 
+    # scenario_level == "none" is a pure structure/formatting pass that preserves
+    # the original statement, variables, examples, and scenario unchanged.
+    if scenario_level == "none":
+        return get_structure_only_prompt(problem_name, question_type, user_code)
+
     # Rephrasing instructions based on scenario level
     rephrasing_mode = ""
-    if scenario_level == "none":
-        rephrasing_mode = """
-**REPHRASING WITHOUT SCENARIO:**
-- Keep the problem framing technical and direct.
-- **CRITICAL**: You MUST explicitly include your NEW variable names in the description text (e.g. "Consider a list of integers `values`...").
-- **REPHRASE SENTENCES**: Do not copy the original sentence structure word-for-word. Change the sentence formation.
-  - *Original*: "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target."
-  - *Good Rephrasing*: "You are provided with a sequence of integers `values` and a specific integer `goal`. Your objective is to identify the positions of two distinct elements in `values` that sum up to `goal`."
-  - *Bad Rephrasing*: "Given an array of integers `values` and an integer `goal`, return indices of the two numbers such that they add up to `goal`." (Too similar structure)
-"""
-    elif scenario_level == "light":
+    if scenario_level == "light":
         rephrasing_mode = """
 **REPHRASING WITH LIGHT SCENARIO:**
 - Add a subtle real-world context to frame the problem, but keep it minimal (1-2 sentences max).
