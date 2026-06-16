@@ -77,6 +77,7 @@ Your response MUST END immediately after the **Output Format** section.
 **Examples**
 - **CRITICAL: Use the SAME examples as the original.** Do NOT invent new examples and do NOT change any input/output values or indices.
 - Keep the same number of examples as the original (do not add or drop any).
+- **CODE FENCES MUST BE BARE:** the opening fence is exactly three backticks with NOTHING after them — no language identifier (no ` ```text`, ` ```cpp`, ` ```plaintext`, etc.) and no other text on the same line.
 - Re-format each example into this exact layout (Pay attention to blank lines). If the original explanation uses a table, keep the table and its values:
 
     **Example 1:**
