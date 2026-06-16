@@ -2,25 +2,43 @@ def get_structure_only_prompt(problem_name, question_type, user_code):
     """
     Prompt for scenario_level == "none".
 
-    Unlike the other scenario levels, this is a PURE structuring/formatting pass:
-    the original problem statement, its variable/function names, its examples, and
-    its scenario/framing are all kept EXACTLY as-is. Only the layout, sectioning,
-    and formatting are improved. Nothing about the content is rewritten.
+    Unlike the other scenario levels (which invent a NEW scenario and rename
+    variables/functions), this REBUILDS the problem statement into a clean,
+    well-structured, professional description while keeping FOUR things unchanged:
+    the scenario/framing, the variable & function names, the examples, and the
+    constraints. The descriptive prose is rewritten for clarity, and any LaTeX /
+    math notation is normalized to clean plain text — but no semantics, values, or
+    names are altered.
     """
 
     prompt = f"""You are an expert technical content writer for a coding interview platform.
 
 **YOUR OBJECTIVE:**
-Re-present the ORIGINAL problem statement with clean, consistent **structure and formatting ONLY**.
-This is a pure formatting/structuring pass — it is **NOT** a rewrite or a rephrase.
+REBUILD the given problem statement into a clean, clear, well-structured, professional description.
+Rewrite the descriptive prose so it reads well and is easy to follow — but you must keep the problem's identity intact.
 
-**ABSOLUTE PRESERVATION RULES (HIGHEST PRIORITY — DO NOT VIOLATE):**
-- **DO NOT change the meaning or wording of the problem statement.** Keep the original sentences and phrasing. You may only split run-on text into readable lines and place existing content under the correct sections.
-- **DO NOT rename anything.** Keep the EXACT original function name and the EXACT original variable names. Do NOT invent or substitute new names.
-- **DO NOT change the examples.** Reuse the ORIGINAL examples verbatim — the same numbers, arrays, strings, inputs and outputs. Do NOT add, remove, reorder, or alter any example values.
-- **DO NOT change the scenario/framing.** If the original has a story/scenario, keep it exactly. If it has none, do NOT add one.
-- **DO NOT change the constraints.** Keep the original constraint values exactly; you may only reformat them into bullet points.
-- Your ONLY job is readability: section organization, line breaks, backticks for literals, blank lines, and consistent formatting. When in doubt, preserve the original content.
+**WHAT YOU MUST NOT CHANGE (FOUR PILLARS — HIGHEST PRIORITY):**
+1. **Scenario / framing** — Keep the SAME context. If the original is a direct, technical problem (no story), keep it technical — do NOT invent a story. If the original has a story/scenario, keep that same story — do NOT replace it with a different one.
+2. **Variable & function names** — Keep the EXACT original variable names and the EXACT original function name and signature. Do NOT rename or invent new names.
+3. **Examples** — Keep the SAME examples: identical input values, identical output values, identical indices/explanatory facts. Do NOT add, drop, reorder, or alter any example's values. You MAY clean up the wording/formatting of an explanation, but every number/string/index stays the same.
+4. **Constraints** — Keep the SAME constraint bounds and values exactly. Do NOT tighten, loosen, add, or remove any limit.
+
+**WHAT YOU SHOULD DO (THE REBUILD):**
+- Rewrite the problem statement prose for clarity and flow (you are NOT limited to the original sentences), as long as the meaning, the four pillars above, and the I/O behavior stay identical.
+- Organize the content into the clean section structure defined below.
+- Fix awkward phrasing, run-on sentences, and large text blocks.
+
+**CRITICAL — NOTATION NORMALIZATION (this is a common source of broken output):**
+The rendered page does NOT support LaTeX/MathJax. You MUST convert all math notation to clean plain text. NEVER emit raw LaTeX.
+- Remove all math delimiters: no `$ ... $`, no `$$ ... $$`, no `\\( ... \\)`, no `\\[ ... \\]`.
+- Replace LaTeX commands with plain symbols:
+  - `\\le` / `\\leq` → `≤`   ·   `\\ge` / `\\geq` → `≥`   ·   `\\lt` → `<`   ·   `\\gt` → `>`   ·   `\\neq` → `≠`
+  - `\\lvert x \\rvert`, `\\vert x \\vert`, `\\|x\\|`, `|x|` → `|x|`
+  - `\\bmod` / `\\mod` → `mod`   ·   `\\times` → `×`   ·   `\\cdot` → `·`   ·   `\\ldots` / `\\dots` → `...`
+  - `\\%` → `%`   ·   `\\_` → `_`   ·   `\\{{` → `{{`   ·   `\\}}` → `}}`
+- Keep exponents readable as plain text, e.g. write `10^9 + 7` (not `10^{{9}} + 7`).
+- **FALLBACK:** For ANY other LaTeX macro not listed (e.g. `\\left`, `\\right`, `\\frac`, `\\text`, `\\mathrm`, `\\in`, `\\to`, `\\sum`), convert it to the nearest plain-text equivalent or strip the markup while preserving the meaning.
+- After writing, scan your output: there must be ZERO backslash-LaTeX commands and ZERO stray `$` left anywhere.
 
 **USER CODE (reference ONLY — to confirm whether the result is printed vs returned for the Output Format wording; DO NOT use it to change variables, examples, scenario, or wording):**
 ```cpp
@@ -34,11 +52,12 @@ This is a pure formatting/structuring pass — it is **NOT** a rewrite or a reph
 4. Use `**` for section titles: **Example 1:**, **Example 2:**, **Input:**, **Output:**, **Explanation:**, **Your Task**, **Constraints**, **Input Format**, **Output Format**.
 5. **CRITICAL:** You must leave exactly ONE BLANK LINE after every section title.
 6. **CRITICAL: Add a Blank Line BETWEEN every bullet point.**
+7. **CONSISTENT EMPHASIS:** Any sub-heading the original had (e.g. "Notes", "Returns") must be bolded with `**` for consistency.
 
 **BACKTICKS FOR LITERALS (PROSE ONLY):**
-- In the prose sections (Problem Statement, Explanation, Your Task), you MAY wrap literal values/characters/strings/booleans in backticks (`` ` ``) for readability.
+- In the prose sections (Problem Statement, Explanation, Your Task), wrap literal values/characters/strings/booleans in backticks (`` ` ``) for readability.
 - This is a layout aid ONLY and must NEVER change the actual value, spelling, or casing of anything.
-- **NEVER touch the Examples' Input/Output code blocks** — those stay byte-for-byte identical to the original (see preservation rules).
+- **NEVER alter the values inside the Examples' Input/Output code blocks** — the input and output values stay identical to the original.
 
 **CRITICAL: DOCUMENT TERMINATION (DO NOT EXCEED):**
 Your response MUST END immediately after the **Output Format** section.
@@ -48,17 +67,17 @@ Your response MUST END immediately after the **Output Format** section.
 **SECTION INSTRUCTIONS**
 
 **Problem Statement**
-- Start immediately with the original description text. Do not write "**Problem Statement**".
-- Preserve the original wording and meaning. Only restructure for readability.
+- Start immediately with the rebuilt description text. Do not write "**Problem Statement**".
+- Keep the same scenario/framing and the same meaning; rewrite only for clarity.
 - **Line Structure / Readability:**
   - **CRITICAL: Do NOT write large blocks of text.**
-  - Break the existing description into multiple lines based on meaning.
+  - Break the description into multiple lines based on meaning.
   - Start a new line (with a blank line in between) for each distinct rule, definition, or objective.
 
 **Examples**
-- **CRITICAL: Reuse the ORIGINAL examples exactly.** Do NOT invent new examples and do NOT change any values.
+- **CRITICAL: Use the SAME examples as the original.** Do NOT invent new examples and do NOT change any input/output values or indices.
 - Keep the same number of examples as the original (do not add or drop any).
-- Re-format each original example into this exact layout (Pay attention to blank lines):
+- Re-format each example into this exact layout (Pay attention to blank lines). If the original explanation uses a table, keep the table and its values:
 
     **Example 1:**
 
@@ -79,16 +98,14 @@ Your response MUST END immediately after the **Output Format** section.
     - Explanation text here.
 
 **Your Task**
-- Preserve the ORIGINAL task sentence and the ORIGINAL function name/signature verbatim. Do NOT rename, paraphrase, or invent argument/return names.
-- Only reposition the existing task text under this heading and apply blank-line/bullet formatting.
-- Format (keep the original names, do not use placeholders):
+- Restate the original task using the EXACT original function name, parameter names, and return type from the problem / `USER CODE`. Do NOT rename, paraphrase the signature, or emit angle-bracket placeholders — write the real names.
+- Format (example shape — substitute the REAL names, never literal placeholders):
     **Your Task**
 
-    - <original task sentence, with the original function name and signature kept exactly as written>.
+    - Complete the provided `getPalindromesCount` function that takes `s` and returns the required result.
 
 **Constraints**
-- Reformat the ORIGINAL constraints into bullet points with backticks. Do NOT change any values or bounds.
-- If the original states explicit bounds, keep them exactly. Do NOT invent or tighten/loosen limits.
+- Present the ORIGINAL constraints as bullet points with backticks and normalized notation (e.g. `5 ≤ |s| ≤ 10^5`). Do NOT change any values or bounds.
 
 **Input Format**
 - Title: **Input Format** followed by a blank line.
@@ -106,7 +123,7 @@ Your response MUST END immediately after the **Output Format** section.
 - **CONSISTENCY**: The output representation MUST match exactly what the original examples show.
 
 **FINAL CONFLICT-RESOLUTION RULE (READ LAST):**
-If ANY formatting/section rule above ever conflicts with preserving the original content, **PRESERVATION ALWAYS WINS**. Never modify the original wording, variable/function names, example values, scenario, or constraints in order to satisfy a formatting rule.
+If any instruction above ever conflicts with the FOUR PILLARS (scenario, variable/function names, example values, constraint values), **THE FOUR PILLARS WIN** — never change them to satisfy a formatting or rewriting rule.
 """
 
     if question_type.lower() == 'node':
