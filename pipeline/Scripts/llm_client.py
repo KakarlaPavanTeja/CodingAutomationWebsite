@@ -298,7 +298,11 @@ def _resolve_read_timeout_sec(purpose: str) -> int:
 
 
 _DEFAULT_MAX_TOKENS: dict[str, int] = {
-    "testcases": 32000,
+    # Testcase generation emits a full Python generator script AND runs with
+    # reasoning effort=high, so hidden reasoning tokens + the script body can
+    # blow past a smaller cap, truncating the script (finish_reason=length →
+    # SyntaxError → empty testcases.json). Keep generous headroom.
+    "testcases": 64000,
     "chat": 16000,
     "code": 16000,
     "enrichment": 16000,
