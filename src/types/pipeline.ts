@@ -5,7 +5,8 @@ export type StepId =
   | "execute_tests_function"
   | "execute_tests_nonfunction"
   | "generate_enrichment"
-  | "package_platform";
+  | "package_platform"
+  | "generate_editorial";
 
 export type StepStatus = "pending" | "running" | "completed" | "failed";
 

@@ -19,10 +19,12 @@ import {
   AlertTriangle,
   FileText,
   Code,
+  BookOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ProblemPipeline } from "@/components/problems/ProblemPipeline";
 import { ProblemOutputs } from "@/components/problems/ProblemOutputs";
+import { ProblemEditorial } from "@/components/problems/ProblemEditorial";
 import { cn } from "@/lib/utils";
 
 type Problem = {
@@ -65,14 +67,16 @@ const STEP_LABELS: Record<string, string> = {
   execute_tests_nonfunction: "Execute Tests (Non-function)",
   generate_enrichment: "Generate Enrichment",
   package_platform: "Package for Platform",
+  generate_editorial: "Generate Editorial",
 };
 
-type Tab = "overview" | "pipeline" | "outputs";
+type Tab = "overview" | "pipeline" | "outputs" | "editorial";
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "pipeline", label: "Pipeline", icon: Play },
   { id: "outputs", label: "Outputs", icon: FolderOpen },
+  { id: "editorial", label: "Editorial", icon: BookOpen },
 ];
 
 function formatDuration(start: string, end: string | null): string {
@@ -607,6 +611,8 @@ export default function ProblemDetailPage() {
       {activeTab === "pipeline" && <ProblemPipeline problemId={id} onStatusChange={fetchProblem} />}
 
       {activeTab === "outputs" && <ProblemOutputs problemId={id} />}
+
+      {activeTab === "editorial" && <ProblemEditorial problemId={id} problemName={problem.name} />}
     </div>
   );
 }

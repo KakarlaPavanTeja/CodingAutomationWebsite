@@ -88,6 +88,16 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasTestcaseCount: false,
     needsMode: true,
   },
+  {
+    id: "generate_editorial",
+    label: "Generate Editorial",
+    description: "Write a complete multi-solution DSA editorial (intuition, approach, pseudocode, 4-language code, complexity)",
+    script: "Scripts/editorial_manager.py",
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+  },
 ];
 
 export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode): StepId[] {
@@ -99,6 +109,7 @@ export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode)
     ];
     if (mode === "practice") steps.push("generate_enrichment");
     steps.push("package_platform");
+    steps.push("generate_editorial");
     return steps;
   } else {
     const steps: StepId[] = [
@@ -109,6 +120,7 @@ export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode)
     ];
     if (mode === "practice") steps.push("generate_enrichment");
     steps.push("package_platform");
+    steps.push("generate_editorial");
     return steps;
   }
 }

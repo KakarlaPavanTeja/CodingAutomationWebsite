@@ -52,6 +52,7 @@ _PURPOSE_DEFAULTS: dict[str, str] = {
     "chat": "openai/gpt-5.4",
     "code": "openai/gpt-5.3-codex",
     "enrichment": "openai/gpt-5.4",
+    "editorial": "openai/gpt-5.5",
 }
 
 _ENV_SUFFIX = {
@@ -59,6 +60,7 @@ _ENV_SUFFIX = {
     "chat": "CHAT",
     "code": "CODE",
     "enrichment": "ENRICHMENT",
+    "editorial": "EDITORIAL",
 }
 
 _REASONING_EFFORT_ALLOWED = frozenset(
@@ -66,6 +68,10 @@ _REASONING_EFFORT_ALLOWED = frozenset(
 )
 
 _DEFAULT_TESTCASES_TIMEOUT_SEC = 1800
+# A full multi-solution editorial with 4-language code at a 100K-token cap can
+# stream for many minutes; keep a generous read timeout (the run route's hard
+# cap is 45 min).
+_DEFAULT_EDITORIAL_TIMEOUT_SEC = 1800
 _DEFAULT_OTHER_TIMEOUT_SEC = 300
 
 
@@ -289,11 +295,17 @@ def _resolve_read_timeout_sec(purpose: str) -> int:
     global_override = os.environ.get("OPENAI_READ_TIMEOUT_SEC", "").strip()
     if global_override:
         return max(1, int(global_override))
-    if _canonical_purpose(purpose) == "testcases":
+    p = _canonical_purpose(purpose)
+    if p == "testcases":
         raw = os.environ.get("OPENAI_TESTCASES_READ_TIMEOUT_SEC", "").strip()
         if raw:
             return max(1, int(raw))
         return _DEFAULT_TESTCASES_TIMEOUT_SEC
+    if p == "editorial":
+        raw = os.environ.get("OPENAI_EDITORIAL_READ_TIMEOUT_SEC", "").strip()
+        if raw:
+            return max(1, int(raw))
+        return _DEFAULT_EDITORIAL_TIMEOUT_SEC
     return _DEFAULT_OTHER_TIMEOUT_SEC
 
 
@@ -306,6 +318,11 @@ _DEFAULT_MAX_TOKENS: dict[str, int] = {
     "chat": 16000,
     "code": 16000,
     "enrichment": 16000,
+    # A complete multi-solution editorial (intuition + approach + pseudocode +
+    # 4-language code + complexity) is long; give it a 100K visible-output cap.
+    # If reasoning effort is ever enabled for editorial, the hidden reasoning
+    # tokens are billed against this same budget — this cap leaves room for both.
+    "editorial": 100000,
 }
 
 
@@ -338,8 +355,17 @@ def _resolve_max_tokens(purpose: str) -> int:
 
 def _resolve_reasoning_effort(purpose: str) -> str | None:
     p = _canonical_purpose(purpose)
-    if p not in {"chat", "testcases"}:
+    if p not in {"chat", "testcases", "editorial"}:
         return None
+    if p == "editorial":
+        # Editorial reasoning is OFF by default — the 100K cap is budgeted for
+        # the (long) visible editorial. Enable it explicitly via
+        # OPENAI_REASONING_EFFORT_EDITORIAL when desired.
+        raw = os.environ.get("OPENAI_REASONING_EFFORT_EDITORIAL")
+        if raw is None:
+            return None
+        effort = str(raw).strip().lower()
+        return effort if effort in _REASONING_EFFORT_ALLOWED else None
     if p == "testcases":
         raw = os.environ.get("OPENAI_REASONING_EFFORT_TESTCASES")
     else:
@@ -384,6 +410,7 @@ def call_llm(
       - "chat"        — descriptions, signature, refactor, titles, difficulty, topics
       - "code"        — multi-language conversion / code_splitter
       - "enrichment"  — hints, real-life, follow-ups
+      - "editorial"   — full multi-solution DSA editorial (100K output cap)
 
     Returns (content, usage) where usage has:
       prompt_tokens, completion_tokens, total_tokens, cost (USD), model
