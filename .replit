@@ -53,3 +53,7 @@ EMAIL_FROM = "onboarding@resend.dev"
 deploymentTarget = "cloudrun"
 build = ["sh", "-c", "npm ci && npm run build"]
 run = ["sh", "-c", "npm start"]
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 180000
