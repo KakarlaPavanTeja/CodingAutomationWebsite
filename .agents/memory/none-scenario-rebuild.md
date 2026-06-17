@@ -27,6 +27,16 @@ delimiters and convert every LaTeX macro to plain text (≤ ≥ |x| mod × · ..
 keep exponents as `10^9 + 7`, and end with a self-check for zero backslash-LaTeX
 and zero stray `$`. Include a fallback clause for unlisted macros.
 
+**Renderer-safe normalization is mandatory and deterministic** for `none`: the
+custom markdown renderer cannot display ATX headings (`#`..`######`), horizontal
+rules (`---`/`***`/`___`), language-tagged code fences, or markdown tables. The
+prompt forbids them, but LLM compliance is unreliable, so a post-LLM
+`normalize_renderer_safe()` pass in `generate_full_question.py` (runs only for
+`none`, after the scratchpad strip) deterministically: bolds ATX headings, drops
+HRs, strips fence language tags (skipping fence interiors), and converts pipe
+tables to bullet/sub-bullet lists preserving every value. It is idempotent and a
+no-op on already-clean descriptions.
+
 **Pipeline wiring:** the original statement is the USER message —
 `call_llm(get_description_prompt(...), problem_content, purpose="chat")` in
 `generate_full_question.py`. The system prompt comes from

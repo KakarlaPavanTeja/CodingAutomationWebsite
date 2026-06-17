@@ -22,6 +22,111 @@ BASE_DIR = os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(SCRIPT_DIR)
 INPUT_DIR = os.path.join(BASE_DIR, 'Inputs')
 OUTPUT_DIR = os.path.join(BASE_DIR, 'Outputs')
 
+def _is_table_row(line):
+    s = line.strip()
+    return s.startswith('|') and s.count('|') >= 2
+
+
+def _is_table_separator(line):
+    s = line.strip()
+    if not s.startswith('|'):
+        return False
+    cells = [c.strip() for c in s.strip('|').split('|')]
+    cells = [c for c in cells if c != '']
+    if not cells:
+        return False
+    return all(re.match(r'^:?-{1,}:?$', c) for c in cells)
+
+
+def _table_to_bullets(table_lines):
+    """Convert a markdown pipe-table block into a renderer-safe bullet/sub-bullet
+    list, preserving every value exactly. Row 0 is the header, row 1 the separator,
+    rows 2+ the data."""
+    rows = []
+    for ln in table_lines:
+        s = ln.strip().strip('|')
+        rows.append([c.strip() for c in s.split('|')])
+    if len(rows) < 2:
+        return table_lines
+
+    header = rows[0]
+    data_rows = rows[2:]
+    out = []
+    for r in data_rows:
+        if all(c == '' for c in r):
+            continue
+        first_label = header[0] if header and header[0] else ''
+        out.append(f"- {first_label}: {r[0]}" if first_label else f"- {r[0]}")
+        for ci in range(1, len(r)):
+            label = header[ci] if ci < len(header) and header[ci] else ''
+            out.append(f"    - {label}: {r[ci]}" if label else f"    - {r[ci]}")
+        out.append("")
+    return out
+
+
+def normalize_renderer_safe(text):
+    """Deterministic renderer-safe normalization for the 'none' scenario description.
+
+    The platform's custom markdown renderer cannot display ATX headings, horizontal
+    rules, language-tagged code fences, or markdown tables. This pass guarantees
+    renderer-safe output regardless of model drift, WITHOUT altering any values:
+    - ATX headings (`#`..`######`) -> bold `**Title**` (skipped inside code fences)
+    - horizontal rules (`---`, `***`, `___`) -> removed
+    - code-fence openers -> bare ``` (language identifier stripped)
+    - markdown pipe-tables -> bullet/sub-bullet lists preserving every value
+    """
+    lines = text.replace('\r\n', '\n').split('\n')
+    out = []
+    in_fence = False
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+
+        fence_match = re.match(r'^(\s*)(`{3,}|~{3,})(.*)$', line)
+        if fence_match:
+            indent, ticks, _rest = fence_match.groups()
+            out.append(f"{indent}{ticks}")
+            in_fence = not in_fence
+            i += 1
+            continue
+
+        if in_fence:
+            out.append(line)
+            i += 1
+            continue
+
+        # Horizontal rule -> drop
+        if re.match(r'^\s*([-*_])(\s*\1){2,}\s*$', line):
+            i += 1
+            continue
+
+        # ATX heading -> bold title
+        h = re.match(r'^\s*#{1,6}\s+(.*?)\s*#*\s*$', line)
+        if h:
+            title = h.group(1).strip()
+            if title.startswith('**') and title.endswith('**'):
+                out.append(title)
+            else:
+                out.append(f"**{title}**")
+            i += 1
+            continue
+
+        # Markdown table -> bullet list
+        if _is_table_row(line) and i + 1 < n and _is_table_separator(lines[i + 1]):
+            table_lines = []
+            while i < n and _is_table_row(lines[i]):
+                table_lines.append(lines[i])
+                i += 1
+            out.extend(_table_to_bullets(table_lines))
+            continue
+
+        out.append(line)
+        i += 1
+
+    return '\n'.join(out)
+
+
 def parse_problem_md(file_path):
     """Parse problem.md to extract metadata"""
     if not os.path.exists(file_path):
@@ -111,6 +216,12 @@ def main():
         desc_response, desc_usage = call_llm(desc_prompt, problem_content, purpose="chat")
 
         desc_response = re.sub(r'<scratchpad>.*?</scratchpad>', '', desc_response, flags=re.DOTALL).strip()
+
+        # For the "none" scenario, the platform's custom renderer cannot display
+        # ATX headings, horizontal rules, language-tagged code fences, or tables.
+        # Guarantee renderer-safe output deterministically regardless of model drift.
+        if scenario_level == "none":
+            desc_response = normalize_renderer_safe(desc_response)
 
         update_usage(
             desc_usage.get('prompt_tokens', 0),

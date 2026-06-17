@@ -45,14 +45,17 @@ The rendered page does NOT support LaTeX/MathJax. You MUST convert all math nota
 {user_code}
 ```
 
-**OUTPUT FORMAT RULES**
-1. Do NOT use `###`, `---`, or any heading tags.
-2. Do NOT use markdown code fences (```md) around the entire output.
-3. Do NOT include a "Problem Statement" title. Start directly with the description text.
-4. Use `**` for section titles: **Example 1:**, **Example 2:**, **Input:**, **Output:**, **Explanation:**, **Your Task**, **Constraints**, **Input Format**, **Output Format**.
-5. **CRITICAL:** You must leave exactly ONE BLANK LINE after every section title.
-6. **CRITICAL: Add a Blank Line BETWEEN every bullet point.**
-7. **CONSISTENT EMPHASIS:** Any sub-heading the original had (e.g. "Notes", "Returns") must be bolded with `**` for consistency.
+**OUTPUT FORMAT RULES (THE RENDERER SUPPORTS NONE OF THE FORBIDDEN CONSTRUCTS BELOW):**
+1. **NO ATX HEADINGS OF ANY LEVEL.** Do NOT start any line with `#`, `##`, `###`, `####`, `#####`, or `######`. Section titles use bold `**Title:**` form ONLY (see rule 4). The renderer cannot display `#`-style headings.
+2. **NO HORIZONTAL DIVIDERS.** Do NOT emit `---`, `***`, or `___` on their own line. The renderer cannot display them.
+3. **NO MARKDOWN TABLES — EVER.** Do NOT use the `| col | col |` / `|---|---|` pipe-table syntax anywhere, not even inside an explanation. The renderer cannot display tables. If the original explanation contains a table, REWRITE its contents as a bullet list (one bullet per row, sub-bullets for the columns) preserving EVERY value, label, and number exactly.
+4. Do NOT use markdown code fences (```md) around the entire output.
+5. Do NOT include a "Problem Statement" title. Start directly with the description text.
+6. Use `**` for section titles: **Example 1:**, **Example 2:**, **Input:**, **Output:**, **Explanation:**, **Your Task**, **Constraints**, **Input Format**, **Output Format**.
+7. **CRITICAL:** You must leave exactly ONE BLANK LINE after every section title.
+8. **CRITICAL: Add a Blank Line BETWEEN every bullet point.**
+9. **CONSISTENT EMPHASIS:** Any sub-heading the original had (e.g. "Notes", "Returns") must be bolded with `**` for consistency — NEVER as an ATX heading.
+10. **CODE FENCES MUST BE BARE:** every opening code fence is exactly three backticks with NOTHING after them on the same line — no language identifier (no ` ```text`, ` ```plaintext`, ` ```cpp`, etc.).
 
 **BACKTICKS FOR LITERALS (PROSE ONLY):**
 - In the prose sections (Problem Statement, Explanation, Your Task), wrap literal values/characters/strings/booleans in backticks (`` ` ``) for readability.
@@ -78,7 +81,8 @@ Your response MUST END immediately after the **Output Format** section.
 - **CRITICAL: Use the SAME examples as the original.** Do NOT invent new examples and do NOT change any input/output values or indices.
 - Keep the same number of examples as the original (do not add or drop any).
 - **CODE FENCES MUST BE BARE:** the opening fence is exactly three backticks with NOTHING after them — no language identifier (no ` ```text`, ` ```cpp`, ` ```plaintext`, etc.) and no other text on the same line.
-- Re-format each example into this exact layout (Pay attention to blank lines). If the original explanation uses a table, keep the table and its values:
+- **NO TABLES:** if the original explanation uses a markdown table, do NOT reproduce it. Convert the table into a bullet list (one bullet per row, sub-bullets for each column value) that preserves every value, label, and number exactly.
+- Re-format each example into this exact layout (Pay attention to blank lines):
 
     **Example 1:**
 
