@@ -1,12 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import archiver from "archiver";
 import { PassThrough } from "stream";
-import { downloadAllOutputs } from "@/lib/storage-sync";
+import { downloadAllOutputs, readStorageFileBuffer } from "@/lib/storage-sync";
 import { requireProblemAccess } from "@/lib/auth/ownership";
-import { assertSafeProblemId } from "@/lib/storage-path";
+import { assertSafeProblemId, assertSafeRelativePath } from "@/lib/storage-path";
+
+const CONTENT_TYPE_BY_EXT: Record<string, string> = {
+  json: "application/json",
+  md: "text/markdown",
+  txt: "text/plain",
+  py: "text/x-python",
+  cpp: "text/x-c++src",
+  h: "text/x-c++hdr",
+  java: "text/x-java-source",
+  js: "text/javascript",
+  lua: "text/x-lua",
+};
 
 export async function GET(request: NextRequest) {
   const problemId = request.nextUrl.searchParams.get("problemId");
+  const pathParam = request.nextUrl.searchParams.get("path");
 
   let safeProblemId: string;
   try {
@@ -17,6 +30,35 @@ export async function GET(request: NextRequest) {
 
   const auth = await requireProblemAccess(safeProblemId);
   if (auth.error) return auth.error;
+
+  // Single-file download when a `path` is supplied (e.g. the upload-ready
+  // coding_questions.json). Falls back to the full ZIP when omitted.
+  if (pathParam !== null) {
+    let safePath: string;
+    try {
+      safePath = assertSafeRelativePath(pathParam);
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+    }
+
+    let buffer: Buffer;
+    try {
+      buffer = await readStorageFileBuffer(safeProblemId, safePath);
+    } catch {
+      return NextResponse.json({ error: "File not found" }, { status: 404 });
+    }
+
+    const filename = safePath.split("/").pop() || "download";
+    const ext = filename.split(".").pop()?.toLowerCase() || "";
+    const contentType = CONTENT_TYPE_BY_EXT[ext] || "application/octet-stream";
+
+    return new Response(new Uint8Array(buffer), {
+      headers: {
+        "Content-Type": contentType,
+        "Content-Disposition": `attachment; filename="${filename}"`,
+      },
+    });
+  }
 
   let outputFiles: { path: string; buffer: Buffer }[];
   try {

@@ -1,8 +1,11 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { OutputBrowser } from "@/components/files/OutputBrowser";
 import { TabbedEditor } from "@/components/files/TabbedEditor";
+import type { OutputFile } from "@/types/pipeline";
+
+const CODING_QUESTIONS_PATH = "forJSONPreparation/coding_questions.json";
 
 export interface OpenTab {
   path: string;
@@ -33,6 +36,29 @@ interface ProblemOutputsProps {
 export function ProblemOutputs({ problemId }: ProblemOutputsProps) {
   const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
   const [activeTabPath, setActiveTabPath] = useState<string | null>(null);
+  const [hasCodingQuestions, setHasCodingQuestions] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/files/outputs?problemId=${encodeURIComponent(problemId)}`
+        );
+        const data = await res.json();
+        if (cancelled) return;
+        const exists = (data.files || []).some(
+          (f: OutputFile) => !f.isDirectory && f.path === CODING_QUESTIONS_PATH
+        );
+        setHasCodingQuestions(exists);
+      } catch {
+        if (!cancelled) setHasCodingQuestions(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [problemId]);
 
   const openFile = useCallback(
     async (path: string) => {
@@ -129,7 +155,43 @@ export function ProblemOutputs({ problemId }: ProblemOutputsProps) {
   const openPaths = new Set(openTabs.map((t) => t.path));
 
   return (
-    <div className="flex border rounded-lg overflow-hidden" style={{ height: "calc(100vh - 280px)" }}>
+    <div className="flex flex-col gap-3">
+      {hasCodingQuestions && (
+        <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-foreground">
+              Upload-ready question file
+            </p>
+            <p className="text-xs text-muted-foreground truncate">
+              coding_questions.json — ready to upload to the coding platform
+            </p>
+          </div>
+          <a
+            href={`/api/files/download?problemId=${encodeURIComponent(problemId)}&path=${encodeURIComponent(CODING_QUESTIONS_PATH)}`}
+            download
+            className="inline-flex items-center gap-1.5 shrink-0 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" x2="12" y1="15" y2="3" />
+            </svg>
+            Download
+          </a>
+        </div>
+      )}
+
+      <div className="flex border rounded-lg overflow-hidden" style={{ height: "calc(100vh - 280px)" }}>
       {/* Sidebar */}
       <div className="w-60 border-r bg-card flex flex-col shrink-0">
         <div className="px-3 py-2 border-b flex items-center justify-between">
@@ -178,6 +240,7 @@ export function ProblemOutputs({ problemId }: ProblemOutputsProps) {
           onUpdateTab={updateTab}
           onSaveTab={saveTab}
         />
+      </div>
       </div>
     </div>
   );
