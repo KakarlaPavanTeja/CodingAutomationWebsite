@@ -4,3 +4,4 @@
 - [None scenario = rebuild not verbatim](none-scenario-rebuild.md) — scenario_level "none" must REBUILD prose + normalize LaTeX to plain text, preserving only the 4 pillars (scenario, names, examples, constraints).
 - [Pipeline cost POST URL](pipeline-internal-usage-url.md) — internal usage POST base must be env-aware (deployment→APP_URL, dev→REPLIT_DEV_DOMAIN); wrong base → 404 HTML → rows silently go "local only". Dev/prod DBs are separate.
 - [Editorial prompt ↔ renderer contract](editorial-prompt-renderer-contract.md) — pseudocode MUST be `<CodeBlock language={customtext}...>` wrapping a ```pseudocode fence (downstream platform requires it); no tables/dividers.
+- [Editorial reasoning auto-router](editorial-reasoning-router.md) — a classifier picks A/B/C → reasoning off/medium/high per problem; call_llm gained per-call reasoning_effort/max_tokens overrides (_USE_ENV sentinel vs explicit None=off).

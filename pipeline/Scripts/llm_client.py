@@ -374,6 +374,19 @@ def _resolve_reasoning_effort(purpose: str) -> str | None:
     return effort if effort in _REASONING_EFFORT_ALLOWED else None
 
 
+# Sentinel: distinguishes "caller did not pass an override" (resolve from env)
+# from "caller explicitly passed None" (force reasoning OFF for this call).
+_USE_ENV = object()
+
+
+def _normalize_effort(value) -> str | None:
+    """Validate an explicit reasoning-effort override; None / invalid -> OFF."""
+    if value is None:
+        return None
+    effort = str(value).strip().lower()
+    return effort if effort in _REASONING_EFFORT_ALLOWED else None
+
+
 def _extract_usage(usage_obj, model_name: str) -> dict:
     """Normalize the OpenRouter usage object → flat dict incl. real USD cost."""
     raw: dict = {}
@@ -401,6 +414,8 @@ def call_llm(
     user_prompt: str,
     temperature: float = 1,
     purpose: str = "chat",
+    reasoning_effort=_USE_ENV,
+    max_tokens=_USE_ENV,
 ):
     """
     Make a single Chat Completions call through the OpenRouter proxy gateway.
@@ -417,8 +432,16 @@ def call_llm(
     """
     model = _resolve_model(purpose)
     timeout_sec = _resolve_read_timeout_sec(purpose)
-    effort = _resolve_reasoning_effort(purpose)
-    max_tokens = _resolve_max_tokens(purpose)
+    effort = (
+        _resolve_reasoning_effort(purpose)
+        if reasoning_effort is _USE_ENV
+        else _normalize_effort(reasoning_effort)
+    )
+    max_tokens = (
+        _resolve_max_tokens(purpose)
+        if max_tokens is _USE_ENV
+        else max(1, int(max_tokens))
+    )
 
     messages = [
         {"role": "system", "content": system_prompt},

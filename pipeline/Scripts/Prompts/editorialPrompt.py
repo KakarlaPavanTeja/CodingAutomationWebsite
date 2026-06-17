@@ -509,3 +509,64 @@ def build_user_message(statement: str, solutions: dict, drivers: dict | None = N
         )
 
     return "".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Reasoning router: a small classifier that decides how much "thinking"
+# (reasoning effort) the editorial model needs for THIS specific problem.
+#   A -> no extended reasoning (straightforward problem)
+#   B -> medium reasoning      (moderately involved problem)
+#   C -> high reasoning        (hard / advanced problem)
+# The editorial_manager maps A/B/C to None / "medium" / "high" reasoning effort.
+# ---------------------------------------------------------------------------
+
+EDITORIAL_ROUTER_PROMPT = (
+    "You are a routing classifier for an automated DSA editorial generator.\n"
+    "Given a coding/DSA problem statement and its reference solution, decide how "
+    "much step-by-step reasoning the editorial-writing model needs to produce a "
+    "correct, complete, multi-approach editorial (intuition, approaches, "
+    "pseudocode, multi-language code, and complexity analysis).\n\n"
+    "Choose EXACTLY ONE option:\n"
+    "A - No extended thinking. Straightforward problem: basic loops, simple "
+    "array/string/hash use, a single well-known pattern, trivial complexity. A "
+    "strong model can write the full editorial directly.\n"
+    "B - Medium thinking. Moderately involved: several non-trivial approaches, a "
+    "classic algorithm needing careful steps (two pointers, sliding window, "
+    "standard DP, BFS/DFS, binary search on answer), or edge-case-heavy logic.\n"
+    "C - High thinking. Hard: advanced algorithms or data structures (segment "
+    "tree, DSU, flow, advanced graph/DP, heavy math/number theory), non-obvious "
+    "optimal approach, intricate proofs or derivations, or multiple interacting "
+    "ideas.\n\n"
+    "When unsure between two levels, pick the LOWER one.\n"
+    "Respond with ONLY the single capital letter A, B, or C. No other text."
+)
+
+
+def build_router_user_message(statement: str, solutions: dict) -> str:
+    """
+    Build the compact USER message for the reasoning router.
+
+    Includes the problem statement and ONE reference solution (Python or C++
+    preferred), truncated, to keep the classification call small and fast.
+    """
+    parts: list[str] = ["# PROBLEM STATEMENT\n"]
+    parts.append((statement or "").strip()[:8000] or "(no statement provided)")
+
+    code = ""
+    chosen_label = ""
+    for key, label in (("python", "Python"), ("cpp", "C++"),
+                       ("java", "Java"), ("nodejs", "JavaScript / Node.js")):
+        candidate = (solutions.get(key) or "").strip()
+        if candidate:
+            code = candidate
+            chosen_label = label
+            break
+
+    parts.append("\n\n# REFERENCE SOLUTION\n")
+    if code:
+        parts.append(f"({chosen_label})\n{code[:6000]}")
+    else:
+        parts.append("(no solution code provided)")
+
+    parts.append("\n\nReply with ONLY one letter: A, B, or C.")
+    return "".join(parts)
