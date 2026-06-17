@@ -68,6 +68,7 @@ const STEP_LABELS: Record<string, string> = {
   generate_enrichment: "Generate Enrichment",
   package_platform: "Package for Platform",
   generate_editorial: "Generate Editorial",
+  prepare_platform_json: "Prepare Platform JSON",
 };
 
 type Tab = "overview" | "pipeline" | "outputs" | "editorial";

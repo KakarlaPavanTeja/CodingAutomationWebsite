@@ -6,7 +6,8 @@ export type StepId =
   | "execute_tests_nonfunction"
   | "generate_enrichment"
   | "package_platform"
-  | "generate_editorial";
+  | "generate_editorial"
+  | "prepare_platform_json";
 
 export type StepStatus = "pending" | "running" | "completed" | "failed";
 

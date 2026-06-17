@@ -98,6 +98,16 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasTestcaseCount: false,
     needsMode: false,
   },
+  {
+    id: "prepare_platform_json",
+    label: "Prepare Platform JSON",
+    description: "Convert the packaged LUA + testcases into the ready-to-upload coding_questions.json",
+    script: "Scripts/prepare_platform_json.py",
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: true,
+  },
 ];
 
 export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode): StepId[] {
@@ -110,6 +120,7 @@ export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode)
     if (mode === "practice") steps.push("generate_enrichment");
     steps.push("package_platform");
     steps.push("generate_editorial");
+    steps.push("prepare_platform_json");
     return steps;
   } else {
     const steps: StepId[] = [
@@ -121,6 +132,7 @@ export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode)
     if (mode === "practice") steps.push("generate_enrichment");
     steps.push("package_platform");
     steps.push("generate_editorial");
+    steps.push("prepare_platform_json");
     return steps;
   }
 }
