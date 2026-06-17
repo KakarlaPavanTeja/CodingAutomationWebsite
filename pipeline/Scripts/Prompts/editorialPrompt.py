@@ -15,9 +15,12 @@ tokens.
 Never interpolate problem-specific text into `EDITORIAL_PROMPT`, or the cached
 prefix changes and the discount is lost.
 
-RENDERER CONTRACT (do not break — the Editorial tab parses these exact tags):
-- Pseudocode MUST be wrapped in `<CodeBlock language="pseudocode"> ... </CodeBlock>`
-  with the pseudocode placed RAW inside (NO ``` fences inside the tag).
+RENDERER CONTRACT (do not break — the Editorial tab + downstream platform parse these exact tags):
+- Pseudocode MUST be wrapped in
+  `<CodeBlock language={customtext} showNumberOfLines={15} fontStyle={Normal Code}>`
+  containing a single ```pseudocode fenced block (blank line after the opening tag
+  and before the closing tag). This is the structure the downstream platform's
+  CodeBlock component renders.
 - Runnable code MUST be wrapped in `<MultiLanguageCodeBlock> ... </MultiLanguageCodeBlock>`
   containing one ``` fence per language with the tags cpp, python, java, javascript.
 - The renderer does NOT support Markdown tables or horizontal-rule dividers.
@@ -129,8 +132,10 @@ BAD (never do this):
 - Check if `arr[i] + arr[j] == k`, return `{i, j}`.
 
 ### Pseudocode
-Wrap the pseudocode in this EXACT custom tag, with the pseudocode placed RAW inside (do NOT put a ``` fence inside the tag):
-<CodeBlock language="pseudocode">
+Wrap the pseudocode in this EXACT custom block: the opening tag exactly as shown, a blank line, then a ```pseudocode fenced block, a blank line, then the closing tag:
+<CodeBlock language={customtext} showNumberOfLines={15} fontStyle={Normal Code}>
+
+```pseudocode
 methodName(param1, param2) {
     /* Iterate through all elements to find the target pair */
     for i = 0 to n - 1 {
@@ -150,6 +155,8 @@ methodName(param1, param2) {
     /* No pair summed to the target — return failure */
     return {-1, -1}
 }
+```
+
 </CodeBlock>
 Pseudocode style rules:
 - C++-like structure with NO data types and NO semicolons. Use `{ }` for every block (functions, loops, conditions). 4-space indentation.
@@ -410,7 +417,7 @@ STEP 5 — GLOBAL FORMATTING RULES
 - NEVER include the problem statement, examples, or constraints in the output.
 - NEVER add section dividers (no `---`, `***`, `___`, or any horizontal rule) and NEVER use Markdown tables — the renderer does not support them.
 - NEVER add a pseudocode explanation section after the pseudocode block.
-- NEVER use a plain triple-backtick ``` code fence outside of `<MultiLanguageCodeBlock>`. ALL runnable code lives inside `<MultiLanguageCodeBlock>`, and ALL pseudocode lives raw inside `<CodeBlock language="pseudocode">`.
+- The ONLY ``` code fences allowed are: the per-language fences inside `<MultiLanguageCodeBlock>`, and the single ```pseudocode fence inside `<CodeBlock language={customtext} showNumberOfLines={15} fontStyle={Normal Code}>`. Never place a bare ``` fence anywhere else.
 - NEVER bold variable names anywhere — use backticks instead.
 - NEVER use backticks inside the Intuition or Approach sections.
 - Use backticks for identifiers, function names, and numeric values ONLY inside the Complexity Analysis section (inside Pseudocode and Code Implementation the content is already raw code, so no backticks there).
@@ -424,7 +431,7 @@ STEP 6 — FINAL CHECKLIST (verify before finishing)
 - Solution names reflect the actual technique, not generic labels?
 - Each solution has all five sections (Intuition, Approach, Pseudocode, Code Implementation, Complexity Analysis)?
 - Intuition is plain English with no code keywords and no backticks? Approach is plain-English bullets within the difficulty length limits?
-- Pseudocode is inside `<CodeBlock language="pseudocode">` (raw, no fence inside), uses only `/* */` comments, and has a comment above every logical block?
+- Pseudocode is inside `<CodeBlock language={customtext} showNumberOfLines={15} fontStyle={Normal Code}>` wrapping a single ```pseudocode fence, uses only `/* */` comments, and has a comment above every logical block?
 - Code is inside `<MultiLanguageCodeBlock>` with cpp/python/java/javascript fences, real method name/signature, correct class names, and a fully commented-out dynamic-input main()?
 - Complexity Analysis uses the exact bold-header + `*` sub-bullet format with every `O(...)` in backticks?
 - No problem statement, no dividers, no tables, no preamble or conclusion?

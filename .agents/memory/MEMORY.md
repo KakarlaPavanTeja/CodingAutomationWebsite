@@ -3,4 +3,4 @@
 - [Reasoning calls need max_tokens](openrouter-reasoning-max-tokens.md) — gateway defaults completion to 4096; reasoning eats it → empty content (finish_reason=length). Set max_tokens + fail loud on empty.
 - [None scenario = rebuild not verbatim](none-scenario-rebuild.md) — scenario_level "none" must REBUILD prose + normalize LaTeX to plain text, preserving only the 4 pillars (scenario, names, examples, constraints).
 - [Pipeline cost POST URL](pipeline-internal-usage-url.md) — internal usage POST base must be env-aware (deployment→APP_URL, dev→REPLIT_DEV_DOMAIN); wrong base → 404 HTML → rows silently go "local only". Dev/prod DBs are separate.
-- [Editorial prompt ↔ renderer contract](editorial-prompt-renderer-contract.md) — editorial.md is rendered by a tiny custom parser; prompt must emit only its supported tags (no fenced pseudocode, no tables).
+- [Editorial prompt ↔ renderer contract](editorial-prompt-renderer-contract.md) — pseudocode MUST be `<CodeBlock language={customtext}...>` wrapping a ```pseudocode fence (downstream platform requires it); no tables/dividers.

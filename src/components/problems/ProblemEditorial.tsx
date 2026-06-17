@@ -52,12 +52,26 @@ function parseEditorial(raw: string): Block[] {
     const tag = m[0];
     if (tag.startsWith("<CodeBlock")) {
       const langMatch = tag.match(/language\s*=\s*"([^"]*)"/);
-      const inner = tag
+      let language = langMatch ? langMatch[1] : "pseudocode";
+      let inner = tag
         .replace(/^<CodeBlock\b[^>]*>/, "")
         .replace(/<\/CodeBlock>\s*$/, "");
+      // The downstream platform format wraps the pseudocode in an inner
+      // ```pseudocode fence (with a language={customtext} attribute that has no
+      // double quotes). Unwrap that fence when present; otherwise fall back to
+      // the raw inner content (older editorials).
+      FENCE_RE.lastIndex = 0;
+      const fenceMatch = FENCE_RE.exec(inner);
+      if (fenceMatch) {
+        if (fenceMatch[1]) language = fenceMatch[1].toLowerCase();
+        inner = fenceMatch[2];
+      }
+      if (language === "customtext" || language === "text" || language === "") {
+        language = "pseudocode";
+      }
       blocks.push({
         kind: "codeblock",
-        language: langMatch ? langMatch[1] : "pseudocode",
+        language,
         code: inner.replace(/^\n/, "").replace(/\n\s*$/, ""),
       });
     } else {
@@ -84,7 +98,8 @@ function serializeBlocks(blocks: Block[]): string {
     .map((b) => {
       if (b.kind === "prose") return b.text;
       if (b.kind === "codeblock") {
-        return `<CodeBlock language="${b.language}">\n${b.code}\n</CodeBlock>`;
+        const lang = b.language || "pseudocode";
+        return `<CodeBlock language={customtext} showNumberOfLines={15} fontStyle={Normal Code}>\n\n\`\`\`${lang}\n${b.code}\n\`\`\`\n\n</CodeBlock>`;
       }
       const fences = b.langs
         .map((l) => `\`\`\`${l.lang}\n${l.code}\n\`\`\``)
