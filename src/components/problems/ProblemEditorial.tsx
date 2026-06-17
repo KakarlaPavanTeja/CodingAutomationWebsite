@@ -277,6 +277,8 @@ const LANG_LABEL: Record<string, string> = {
   python: "Python",
   java: "Java",
   javascript: "JavaScript",
+  js: "JavaScript",
+  nodejs: "JavaScript",
 };
 
 const COLLAPSED_HEIGHT = 360;

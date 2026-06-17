@@ -22,7 +22,7 @@ RENDERER CONTRACT (do not break — the Editorial tab + downstream platform pars
   and before the closing tag). This is the structure the downstream platform's
   CodeBlock component renders.
 - Runnable code MUST be wrapped in `<MultiLanguageCodeBlock> ... </MultiLanguageCodeBlock>`
-  containing one ``` fence per language with the tags cpp, python, java, javascript.
+  containing one ``` fence per language with the tags cpp, python, java, js.
 - The renderer does NOT support Markdown tables or horizontal-rule dividers.
 The constant is a raw string (r\"\"\"...\"\"\") so code templates containing
 backslashes (e.g. JS `split(/\\s+/)`) are preserved verbatim.
@@ -167,7 +167,7 @@ Pseudocode style rules:
 - You MAY use an inline HTML-style tag to annotate a step, e.g. `<edge case>` or `<base case>`; these render styled like a comment, so use them only as human-readable annotations, never as real code.
 
 ### Code Implementation
-Wrap ALL language blocks inside this EXACT custom tag, one ``` fence per language, in this order — C++, Python, Java, JavaScript — using the tags cpp, python, java, javascript:
+Wrap ALL language blocks inside this EXACT custom tag, one ``` fence per language, in this order — C++, Python, Java, JavaScript — using the tags cpp, python, java, js:
 <MultiLanguageCodeBlock>
 ```cpp
 // C++ implementation
@@ -178,7 +178,7 @@ Wrap ALL language blocks inside this EXACT custom tag, one ``` fence per languag
 ```java
 // Java implementation
 ```
-```javascript
+```js
 // JavaScript implementation
 ```
 </MultiLanguageCodeBlock>
@@ -266,7 +266,7 @@ public class Main {
 }
 */
 ```
-```javascript
+```js
 class Solution {
     static methodName(params) {
         // solution logic
@@ -369,7 +369,7 @@ public class Main {
 }
 */
 ```
-```javascript
+```js
 class Node {
     constructor(val = 0, left = null, right = null) {
         this.val = val;
@@ -432,7 +432,7 @@ STEP 6 — FINAL CHECKLIST (verify before finishing)
 - Each solution has all five sections (Intuition, Approach, Pseudocode, Code Implementation, Complexity Analysis)?
 - Intuition is plain English with no code keywords and no backticks? Approach is plain-English bullets within the difficulty length limits?
 - Pseudocode is inside `<CodeBlock language={customtext} showNumberOfLines={15} fontStyle={Normal Code}>` wrapping a single ```pseudocode fence, uses only `/* */` comments, and has a comment above every logical block?
-- Code is inside `<MultiLanguageCodeBlock>` with cpp/python/java/javascript fences, real method name/signature, correct class names, and a fully commented-out dynamic-input main()?
+- Code is inside `<MultiLanguageCodeBlock>` with cpp/python/java/js fences, real method name/signature, correct class names, and a fully commented-out dynamic-input main()?
 - Complexity Analysis uses the exact bold-header + `*` sub-bullet format with every `O(...)` in backticks?
 - No problem statement, no dividers, no tables, no preamble or conclusion?
 
