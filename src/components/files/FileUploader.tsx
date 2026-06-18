@@ -50,6 +50,8 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
   const [questionType, setQuestionType] = useState("function");
   const [mode, setMode] = useState("practice");
   const [scenarioLevel, setScenarioLevel] = useState<"none" | "light" | "moderate" | "heavy">("none");
+  const [difficulty, setDifficulty] = useState<"" | "easy" | "medium" | "hard">("");
+  const [score, setScore] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploaded, setUploaded] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -88,6 +90,8 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
     formData.append("questionType", questionType);
     formData.append("mode", mode);
     formData.append("scenarioLevel", scenarioLevel);
+    if (difficulty) formData.append("difficulty", difficulty);
+    if (score.trim()) formData.append("score", score.trim());
 
     // Problem description
     if (problemInputMode === "paste" && problemText.trim()) {
@@ -227,6 +231,46 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">Difficulty</span>
+              <div className="flex gap-1.5">
+                {([
+                  { id: "", label: "None" },
+                  { id: "easy", label: "Easy" },
+                  { id: "medium", label: "Medium" },
+                  { id: "hard", label: "Hard" },
+                ] as const).map((opt) => (
+                  <button
+                    key={opt.id || "none"}
+                    type="button"
+                    onClick={() => setDifficulty(opt.id)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-md text-sm font-medium transition-colors border",
+                      difficulty === opt.id
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background text-foreground border-border hover:bg-muted"
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Label htmlFor="problem-score" className="text-sm font-medium">Score</Label>
+              <Input
+                id="problem-score"
+                type="number"
+                min={0}
+                max={100000}
+                placeholder="e.g. 100"
+                value={score}
+                onChange={(e) => setScore(e.target.value)}
+                className="w-28"
+              />
             </div>
           </div>
         </div>

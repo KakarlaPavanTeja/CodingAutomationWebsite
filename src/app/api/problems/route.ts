@@ -40,6 +40,8 @@ export async function GET() {
     structure_type: r.problem.structureType,
     mode: r.problem.mode,
     scenario_level: r.problem.scenarioLevel,
+    difficulty: r.problem.difficulty,
+    score: r.problem.score,
     languages: r.problem.languages,
     status: r.problem.status,
     storage_path: r.problem.storagePath,

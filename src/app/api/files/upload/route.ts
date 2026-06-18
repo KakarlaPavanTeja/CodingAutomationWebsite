@@ -30,6 +30,8 @@ export async function POST(request: NextRequest) {
   const rawQuestionType = (formData.get("questionType") as string) || "function";
   const rawMode = (formData.get("mode") as string) || "practice";
   const rawScenarioLevel = (formData.get("scenarioLevel") as string) || "none";
+  const rawDifficulty = (formData.get("difficulty") as string) || "";
+  const rawScore = (formData.get("score") as string) || "";
 
   // Clamp every client-supplied enum to the values the DB check constraints
   // accept, so a malformed field can't 500 the insert.
@@ -40,6 +42,14 @@ export async function POST(request: NextRequest) {
   const scenarioLevel = ["none", "light", "moderate", "heavy"].includes(rawScenarioLevel)
     ? rawScenarioLevel
     : "none";
+  const difficulty = ["easy", "medium", "hard"].includes(rawDifficulty)
+    ? rawDifficulty
+    : null;
+  const parsedScore = parseInt(rawScore, 10);
+  const score =
+    Number.isFinite(parsedScore) && parsedScore >= 0 && parsedScore <= 100000
+      ? parsedScore
+      : null;
 
   // Canonical structure form written into the problem.md `# Type:` header.
   // The Python pipeline compares against the lowercase-with-spaces form
@@ -60,6 +70,8 @@ export async function POST(request: NextRequest) {
       structureType,
       mode,
       scenarioLevel,
+      difficulty,
+      score,
       status: "draft",
     })
     .returning({ id: problems.id });

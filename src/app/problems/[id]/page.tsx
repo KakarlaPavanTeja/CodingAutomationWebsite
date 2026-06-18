@@ -22,6 +22,7 @@ import {
   BookOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ProblemPipeline } from "@/components/problems/ProblemPipeline";
 import { ProblemOutputs } from "@/components/problems/ProblemOutputs";
 import { ProblemEditorial } from "@/components/problems/ProblemEditorial";
@@ -34,6 +35,8 @@ type Problem = {
   structure_type?: string;
   mode: string;
   scenario_level: string;
+  difficulty?: string | null;
+  score?: number | null;
   status: string;
   languages: string[];
   storage_path: string;
@@ -104,7 +107,44 @@ export default function ProblemDetailPage() {
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [inputFiles, setInputFiles] = useState<{ name: string; content: string; expanded: boolean }[]>([]);
+  const [editingMeta, setEditingMeta] = useState(false);
+  const [editDifficulty, setEditDifficulty] = useState<string>("");
+  const [editScore, setEditScore] = useState<string>("");
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [metaError, setMetaError] = useState<string | null>(null);
   const isAdmin = profile?.role === "admin";
+
+  const startEditMeta = () => {
+    setEditDifficulty(problem?.difficulty || "");
+    setEditScore(problem?.score != null ? String(problem.score) : "");
+    setMetaError(null);
+    setEditingMeta(true);
+  };
+
+  const handleSaveMeta = async () => {
+    setSavingMeta(true);
+    setMetaError(null);
+    try {
+      const res = await fetch(`/api/problems/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          difficulty: editDifficulty || null,
+          score: editScore.trim() === "" ? null : Number(editScore),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save");
+      setProblem((prev) =>
+        prev ? { ...prev, difficulty: data.difficulty, score: data.score } : prev
+      );
+      setEditingMeta(false);
+    } catch (err) {
+      setMetaError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSavingMeta(false);
+    }
+  };
 
   const fetchProblem = () => {
     fetch(`/api/problems/${id}`)
@@ -320,7 +360,14 @@ export default function ProblemDetailPage() {
         <div className="space-y-6">
           {/* Details */}
           <div className="rounded-lg border bg-card p-5 space-y-3">
-            <h2 className="text-sm font-semibold">Details</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Details</h2>
+              {!editingMeta && (
+                <Button variant="outline" size="sm" onClick={startEditMeta}>
+                  Edit
+                </Button>
+              )}
+            </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
               <div>
                 <p className="text-muted-foreground">Type</p>
@@ -339,10 +386,76 @@ export default function ProblemDetailPage() {
                 <p className="font-medium capitalize">{problem.scenario_level}</p>
               </div>
               <div>
+                <p className="text-muted-foreground">Difficulty</p>
+                <p className="font-medium capitalize">{problem.difficulty || "Not set"}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Score</p>
+                <p className="font-medium">{problem.score ?? "Not set"}</p>
+              </div>
+              <div>
                 <p className="text-muted-foreground">Created</p>
                 <p className="font-medium">{new Date(problem.created_at).toLocaleDateString()}</p>
               </div>
             </div>
+
+            {editingMeta && (
+              <div className="mt-2 rounded-md border bg-muted/30 p-4 space-y-4">
+                <div className="flex flex-wrap items-center gap-6">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">Difficulty</span>
+                    <div className="flex gap-1.5">
+                      {([
+                        { id: "", label: "None" },
+                        { id: "easy", label: "Easy" },
+                        { id: "medium", label: "Medium" },
+                        { id: "hard", label: "Hard" },
+                      ] as const).map((opt) => (
+                        <button
+                          key={opt.id || "none"}
+                          type="button"
+                          onClick={() => setEditDifficulty(opt.id)}
+                          className={cn(
+                            "px-3 py-1.5 rounded-md text-sm font-medium transition-colors border",
+                            editDifficulty === opt.id
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-background text-foreground border-border hover:bg-muted"
+                          )}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">Score</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100000}
+                      placeholder="e.g. 100"
+                      value={editScore}
+                      onChange={(e) => setEditScore(e.target.value)}
+                      className="w-28"
+                    />
+                  </div>
+                </div>
+                {metaError && <p className="text-sm text-destructive">{metaError}</p>}
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleSaveMeta} disabled={savingMeta}>
+                    {savingMeta ? "Saving…" : "Save"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditingMeta(false)}
+                    disabled={savingMeta}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Input Files */}

@@ -16,6 +16,8 @@ export type Problem = {
   question_type: string;
   mode: string;
   scenario_level?: string;
+  difficulty?: string | null;
+  score?: number | null;
   status: string;
   languages?: string[];
   created_at: string;

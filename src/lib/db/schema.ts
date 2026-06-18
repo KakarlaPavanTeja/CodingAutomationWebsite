@@ -89,6 +89,8 @@ export const problems = pgTable(
     structureType: text("structure_type").notNull().default("standard"),
     mode: text("mode").notNull(),
     scenarioLevel: text("scenario_level").notNull().default("none"),
+    difficulty: text("difficulty"),
+    score: integer("score"),
     languages: text("languages").array().notNull().default(sql`'{}'::text[]`),
     status: text("status").notNull().default("draft"),
     storagePath: text("storage_path"),
@@ -110,6 +112,14 @@ export const problems = pgTable(
     scenarioCheck: check(
       "problems_scenario_level_check",
       sql`${t.scenarioLevel} IN ('none','light','moderate','heavy')`,
+    ),
+    difficultyCheck: check(
+      "problems_difficulty_check",
+      sql`${t.difficulty} IS NULL OR ${t.difficulty} IN ('easy','medium','hard')`,
+    ),
+    scoreCheck: check(
+      "problems_score_check",
+      sql`${t.score} IS NULL OR (${t.score} >= 0 AND ${t.score} <= 100000)`,
     ),
     statusCheck: check(
       "problems_status_check",

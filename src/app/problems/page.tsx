@@ -158,6 +158,8 @@ export default function ProblemsPage() {
                     )}
                     <th className="text-left px-4 py-3 font-medium">Type</th>
                     <th className="text-left px-4 py-3 font-medium">Mode</th>
+                    <th className="text-left px-4 py-3 font-medium">Difficulty</th>
+                    <th className="text-left px-4 py-3 font-medium">Score</th>
                     <th className="text-left px-4 py-3 font-medium">Status</th>
                     <th className="text-left px-4 py-3 font-medium">Created</th>
                   </tr>
@@ -190,6 +192,12 @@ export default function ProblemsPage() {
                         </td>
                         <td className="px-4 py-3 text-muted-foreground capitalize">
                           {p.mode || "—"}
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground capitalize">
+                          {p.difficulty || "—"}
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">
+                          {p.score ?? "—"}
                         </td>
                         <td className="px-4 py-3">
                           <span
