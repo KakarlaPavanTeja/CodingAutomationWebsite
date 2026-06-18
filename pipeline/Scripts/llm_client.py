@@ -100,6 +100,21 @@ _DEFAULT_EDITORIAL_TIMEOUT_SEC = 1800
 _DEFAULT_OTHER_TIMEOUT_SEC = 300
 
 
+def _heartbeat_interval_sec() -> float:
+    """How often to log a streaming heartbeat (seconds).
+
+    NOTE: this is observability only — it logs what the socket has received; it
+    does NOT transmit anything to the gateway and cannot by itself keep the
+    connection alive. More frequent logging just pinpoints when a stall starts.
+    Default 15s; override with OPENROUTER_HEARTBEAT_SEC.
+    """
+    try:
+        val = float(os.environ.get("OPENROUTER_HEARTBEAT_SEC", "15"))
+    except ValueError:
+        return 15.0
+    return val if val > 0 else 15.0
+
+
 def _ca_bundle() -> str | bool:
     """
     CA bundle used to verify TLS to the gateway.
@@ -546,6 +561,7 @@ def call_llm(
             content_chars = 0
             reasoning_chars = 0
             stream = _create_with_retry(client, kwargs)
+            heartbeat_interval = _heartbeat_interval_sec()
             last_log = time.monotonic()
             for chunk in stream:
                 if getattr(chunk, "model", None):
@@ -572,7 +588,7 @@ def call_llm(
                 if getattr(chunk, "usage", None):
                     usage_obj = chunk.usage
                 now = time.monotonic()
-                if now - last_log >= 30.0:
+                if now - last_log >= heartbeat_interval:
                     print(
                         f"[LLM] streaming heartbeat elapsed={now - started:.1f}s "
                         f"content_chars={content_chars} reasoning_chars={reasoning_chars}",
