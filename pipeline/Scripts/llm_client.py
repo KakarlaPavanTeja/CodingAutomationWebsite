@@ -23,7 +23,7 @@ Bare model names (no "/") are auto-prefixed with "openai/" for backward compat.
 
 Reasoning effort (chat + testcases purposes):
   OPENAI_REASONING_EFFORT            (default: high)
-  OPENAI_REASONING_EFFORT_TESTCASES  (default: medium — see _resolve_reasoning_effort)
+  OPENAI_REASONING_EFFORT_TESTCASES  (default: high — see _resolve_reasoning_effort)
 
 Timeouts:
   OPENAI_READ_TIMEOUT_SEC            (global override, seconds)
@@ -311,10 +311,10 @@ def _resolve_read_timeout_sec(purpose: str) -> int:
 
 _DEFAULT_MAX_TOKENS: dict[str, int] = {
     # Testcase generation emits a full Python generator script AND runs with
-    # reasoning enabled (default effort=medium), so hidden reasoning tokens + the
+    # reasoning enabled (default effort=high), so hidden reasoning tokens + the
     # script body can blow past a smaller cap, truncating the script
     # (finish_reason=length → SyntaxError → empty testcases.json). Keep generous
-    # headroom (also covers effort=high if overridden).
+    # headroom.
     "testcases": 80000,
     "chat": 16000,
     "code": 16000,
@@ -368,19 +368,17 @@ def _resolve_reasoning_effort(purpose: str) -> str | None:
         effort = str(raw).strip().lower()
         return effort if effort in _REASONING_EFFORT_ALLOWED else None
     if p == "testcases":
-        # Default to "medium", NOT "high". gpt-5.4 is a reasoning model and
-        # OpenAI HIDES reasoning — during the think phase NOTHING streams over
-        # the socket. With effort=high that silent window runs past the proxy
-        # gateway's idle timeout (~160s observed), so the gateway severs the
-        # connection mid-stream ("peer closed connection ... incomplete chunked
-        # read") and the step dies before any content arrives. Streaming can't
-        # help (no reasoning bytes to stream), so the only lever that lets the
-        # call complete in a single shot is shortening the silent think window:
-        # "medium" gets the first visible tokens out well within the idle cutoff
-        # while still producing strong generators. Override with
-        # OPENAI_REASONING_EFFORT_TESTCASES (e.g. =high) if needed.
+        # Default "high" for the best generator quality. gpt-5.4 is a reasoning
+        # model and OpenAI HIDES reasoning, so during the think phase NOTHING
+        # streams over the socket. That silent window used to outlast the proxy
+        # gateway's ~160s idle timeout and the connection was severed mid-stream
+        # ("peer closed connection ... incomplete chunked read"). That is now
+        # fixed AT THE GATEWAY: it emits SSE keep-alive comment pings (~every
+        # 15s) during silence, so the connection survives an arbitrarily long
+        # reasoning phase. If the gateway heartbeat ever regresses, drop this to
+        # "medium" via OPENAI_REASONING_EFFORT_TESTCASES to shorten the silence.
         raw = os.environ.get("OPENAI_REASONING_EFFORT_TESTCASES")
-        effort = "medium" if raw is None else str(raw).strip().lower()
+        effort = "high" if raw is None else str(raw).strip().lower()
         return effort if effort in _REASONING_EFFORT_ALLOWED else None
     raw = os.environ.get("OPENAI_REASONING_EFFORT")
     effort = "high" if raw is None else str(raw).strip().lower()
