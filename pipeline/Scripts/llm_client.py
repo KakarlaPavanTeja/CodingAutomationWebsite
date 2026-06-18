@@ -315,7 +315,7 @@ _DEFAULT_MAX_TOKENS: dict[str, int] = {
     # script body can blow past a smaller cap, truncating the script
     # (finish_reason=length → SyntaxError → empty testcases.json). Keep generous
     # headroom (also covers effort=high if overridden).
-    "testcases": 64000,
+    "testcases": 80000,
     "chat": 16000,
     "code": 16000,
     "enrichment": 16000,
