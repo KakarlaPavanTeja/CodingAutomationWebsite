@@ -14,6 +14,27 @@ from llm_client import call_llm
 from usage_tracker import update_usage
 
 
+def _sanitize_generated_script(content: str) -> str:
+    """Strip any markdown code fence the model wrapped the script in.
+
+    Handles ``` and ```python / ```py (any language tag) opening fences and a
+    trailing ``` close fence. The prompt forbids fences, but this is a cheap
+    safety net so a stray wrapper doesn't crash the generated .py file.
+    """
+    if content is None:
+        return ""
+    text = content.strip()
+    if text.startswith("```"):
+        first_nl = text.find("\n")
+        if first_nl != -1:
+            text = text[first_nl + 1:]
+        else:
+            text = text[3:]
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3]
+    return text.strip()
+
+
 def _testcase_payload_byte_size(tc: dict) -> int:
     inp = tc.get("input", "") or ""
     out = tc.get("output", "") or ""
@@ -193,11 +214,7 @@ def main():
         print("LLM call completed.")
         
         # Remove markdown code blocks if present
-        if content.startswith("```python"):
-            content = content.replace("```python", "", 1)
-        if content.endswith("```"):
-            content = content.rsplit("```", 1)[0]
-        content = content.strip()
+        content = _sanitize_generated_script(content)
         
         with open(output_script_path, "w") as f:
             f.write(content)
@@ -240,7 +257,13 @@ def main():
             retry_system = (
                 "You are a Python expert. The user gave you a test case generator script that failed. "
                 "Fix the script so it runs without errors and produces the same output format. "
-                "Return ONLY the corrected Python script, no explanations."
+                "Return ONLY the corrected Python script, no explanations. "
+                "OUTPUT HYGIENE (CRITICAL): your entire response is written verbatim to a .py file and executed directly. "
+                "The very first character MUST be the start of valid Python (import/#/from). "
+                "Do NOT prepend or append any non-Python text — no quotes, aphorisms, preamble, sign-off, or markdown fences (no ``` ). "
+                "IMPORT CORRECTNESS (CRITICAL): only import names that actually exist in the module. "
+                "`round`, `abs`, `min`, `max`, `sum`, `pow`, `divmod` are built-ins, NOT in `math` — never write `from math import round`; use them directly. "
+                "From `math` only import real members (floor, ceil, sqrt, gcd, factorial, inf, pi) or use `import math` and `math.<name>`."
             )
             retry_user = (
                 f"The following Python script failed with this error:\n\n"
@@ -253,11 +276,7 @@ def main():
                 retry_content, retry_usage = call_llm(retry_system, retry_user, purpose="testcases_retry")
                 print("LLM retry call completed.")
 
-                if retry_content.startswith("```python"):
-                    retry_content = retry_content.replace("```python", "", 1)
-                if retry_content.endswith("```"):
-                    retry_content = retry_content.rsplit("```", 1)[0]
-                retry_content = retry_content.strip()
+                retry_content = _sanitize_generated_script(retry_content)
 
                 with open(output_script_path, "w") as f:
                     f.write(retry_content)

@@ -79,6 +79,20 @@ Analyze the 'Constraints' section of the 'Problem Description' thoroughly.
 - TEMP TAG NOTE: `testcase_type` is a temporary orchestration tag used for post-processing reorder. It will be removed later, so do not rely on it for judge logic.
 - SEQUENTIAL ORDERING (CRITICAL): The `order` field MUST start at 1 for the first test case and increment by exactly 1 for each subsequent test case (1, 2, 3, ...). NEVER use random or non-sequential numbers.
 
+(OUTPUT HYGIENE - ABSOLUTELY CRITICAL - YOUR RESPONSE IS EXECUTED DIRECTLY AS A .py FILE):
+Your ENTIRE response is written verbatim to `testcases_generator_script.py` and run with `python`. There is NO post-processing to strip extra text. Any non-Python byte anywhere will crash the script.
+1. The VERY FIRST CHARACTER of your response MUST be the start of valid Python (e.g. `import`, `#`, or `from`). The VERY LAST line MUST be valid Python.
+2. Do NOT prepend or append ANYTHING that is not Python: no quotes, no famous sayings, aphorisms, or motivational lines (e.g. "An expert is someone who..."), no preamble, no "Here is the script", no explanations, no sign-off.
+3. Do NOT wrap the code in markdown fences (no ``` or ```python). Do NOT use markdown of any kind.
+4. Any human-language commentary MUST appear ONLY as a Python comment (`#`) or inside a docstring. Plain prose on its own line is a SyntaxError.
+
+(IMPORT CORRECTNESS - CRITICAL):
+1. Only import names that ACTUALLY EXIST in the module you import from. A bad import (`ImportError`) aborts the whole script before any test case is generated.
+2. `round`, `abs`, `min`, `max`, `sum`, `pow`, `divmod` are Python BUILT-INS — they are NOT in the `math` module. NEVER write `from math import round` (or abs/min/max/etc.); use them directly without importing.
+3. From `math`, only import real members such as `floor`, `ceil`, `sqrt`, `gcd`, `log`, `factorial`, `inf`, `pi`. If unsure whether a name is in `math`, do `import math` and use `math.<name>`, or just use the built-in.
+4. Prefer `import math` / `import random` / `import json` and qualified calls over `from X import ...` to avoid name-existence mistakes.
+5. Standard imports needed by this script are typically just `import json`, `import random`, and (if used) `import math`. Do not import packages you do not use.
+
 Return ONLY the Python code. No text, no markdown block wrappers.
 
 (Technical Implementation Details for the Script - MANDATORY STRUCTURE):
