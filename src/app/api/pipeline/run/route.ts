@@ -4,7 +4,7 @@ import path from "path";
 import { mkdirSync, createWriteStream } from "fs";
 import { readFile } from "fs/promises";
 import { eq } from "drizzle-orm";
-import { buildCommand, STEP_CONFIGS, LANGUAGES } from "@/lib/pipeline-config";
+import { buildCommand, getWorkflowSteps, STEP_CONFIGS, LANGUAGES } from "@/lib/pipeline-config";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { db } from "@/lib/db";
 import { problems, pipelineRuns, pipelineStates } from "@/lib/db/schema";
@@ -17,7 +17,7 @@ import {
   startPeriodicSync,
 } from "@/lib/storage-sync";
 import { registerProcess, unregisterProcess } from "@/lib/process-registry";
-import type { RunRequest } from "@/types/pipeline";
+import type { RunRequest, PipelineMode, QuestionType, StepId } from "@/types/pipeline";
 
 /**
  * Resolve the base URL the spawned Python pipeline uses to POST usage/cost rows
@@ -102,12 +102,46 @@ export async function POST(request: NextRequest) {
   if (auth.error) return auth.error;
   const user = { id: auth.session.userId, email: auth.session.email };
 
+  // The stored problem config — not the client request — is the source of truth
+  // for which steps are valid and which mode the pipeline runs in. This stops a
+  // caller from running, say, a function-only step (split_code / execute_tests_function)
+  // on a non-function problem, or driving the pipeline in a mode the problem
+  // was never set up for.
+  const cfgRows = await db
+    .select({ questionType: problems.questionType, mode: problems.mode })
+    .from(problems)
+    .where(eq(problems.id, safeProblemId))
+    .limit(1);
+  if (!cfgRows[0]) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  const storedQuestionType = cfgRows[0].questionType as QuestionType;
+  const storedMode = cfgRows[0].mode as PipelineMode;
+
+  // Reject a step that isn't part of this problem's workflow.
+  const workflowSteps = getWorkflowSteps(storedQuestionType, storedMode);
+  if (!workflowSteps.includes(stepId as StepId)) {
+    return NextResponse.json(
+      { error: "Step is not part of this problem's workflow" },
+      { status: 400 }
+    );
+  }
+
+  // Reject a client mode that contradicts the stored mode; otherwise derive it.
+  if (mode !== undefined && mode !== storedMode) {
+    return NextResponse.json(
+      { error: "Mode does not match the problem configuration" },
+      { status: 400 }
+    );
+  }
+  const effectiveMode: PipelineMode = storedMode;
+
   const pythonPath = process.env.PYTHON_PATH || "python3";
 
   const pipelineRoot = process.env.PIPELINE_ROOT || path.join(process.cwd(), "pipeline");
   const scriptsDir = process.env.PIPELINE_SCRIPTS_DIR || path.join(pipelineRoot, "Scripts");
 
-  const { script, args } = buildCommand(stepId, mode, subSteps, languages, testcaseCount);
+  const { script, args } = buildCommand(stepId, effectiveMode, subSteps, languages, testcaseCount);
 
   const scriptBasename = path.basename(script);
   const scriptPath = path.join(scriptsDir, scriptBasename);

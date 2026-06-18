@@ -42,6 +42,7 @@ export async function GET(
     created_by: problem.createdBy,
     name: problem.name,
     question_type: problem.questionType,
+    structure_type: problem.structureType,
     mode: problem.mode,
     scenario_level: problem.scenarioLevel,
     languages: problem.languages,

@@ -138,14 +138,23 @@ def parse_problem_md(file_path):
     
     lines = content.split('\n')
     problem_name = "Unknown Problem"
-    question_type = "standard"
+    # `# Type:` carries the data-structure shape (standard / linked list /
+    # binary tree). Normalize underscores -> spaces and lowercase so both the
+    # canonical header form and any historical underscore form match the
+    # downstream comparisons.
+    structure_type = "standard"
+    # `# Question Type:` carries function vs nonfunction. Default to function.
+    question_kind = "function"
     scenario_level = "moderate"  # default for backward compatibility
 
     for line in lines:
         if line.startswith('# Problem:'):
             problem_name = line.replace('# Problem:', '').strip()
+        elif line.startswith('# Question Type:'):
+            value = line.replace('# Question Type:', '').strip().lower()
+            question_kind = "nonfunction" if "non" in value else "function"
         elif line.startswith('# Type:'):
-            question_type = line.replace('# Type:', '').strip()
+            structure_type = line.replace('# Type:', '').strip().lower().replace('_', ' ')
         elif line.startswith('# Scenario Level:'):
             value = line.replace('# Scenario Level:', '').strip().lower()
             if value in ['none', 'light', 'moderate', 'heavy']:
@@ -156,7 +165,7 @@ def parse_problem_md(file_path):
             if value not in ['yes', 'true']:
                 scenario_level = "none"
 
-    return problem_name, question_type, scenario_level, content
+    return problem_name, structure_type, question_kind, scenario_level, content
 
 def _parse_signature(raw):
     """Robustly parse the function-signature JSON the extractor returns.
@@ -228,10 +237,10 @@ def main():
 
     # Step 0: Load inputs
     problem_path = os.path.join(INPUT_DIR, 'problem.md')
-    problem_name, question_type, scenario_level, problem_content = parse_problem_md(problem_path)
+    problem_name, structure_type, question_kind, scenario_level, problem_content = parse_problem_md(problem_path)
     
     solution_path, detected_lang = detect_user_solution()
-    print(f"\n📋 Problem: {problem_name} ({question_type})")
+    print(f"\n📋 Problem: {problem_name} ({structure_type}, {question_kind})")
     print(f"🎭 Scenario Level: {scenario_level}")
     print(f"💻 User Code: {os.path.basename(solution_path)} ({detected_lang})")
     
@@ -245,7 +254,7 @@ def main():
         print("STEP 1: Description Creation")
         print("=" * 60)
 
-        desc_prompt = get_description_prompt(problem_name, question_type, user_code, scenario_level)
+        desc_prompt = get_description_prompt(problem_name, structure_type, user_code, scenario_level)
         desc_response, desc_usage = call_llm(desc_prompt, problem_content, purpose="chat")
 
         desc_response = re.sub(r'<scratchpad>.*?</scratchpad>', '', desc_response, flags=re.DOTALL).strip()
@@ -285,8 +294,20 @@ def main():
     # and parameter names identical across C++/Python/Java/Node.js. It therefore
     # MUST run whenever code translation runs — otherwise each language is named
     # independently by its own LLM call (and drifts, e.g. Python snake_case).
+    #
+    # Non-function problems have no single solving function — the user code
+    # reads stdin and prints stdout as a whole program. Extracting/forcing a
+    # function signature would corrupt them, so naming enforcement only runs
+    # for function problems. description_signature stays None otherwise, which
+    # also makes Step 3 translate the whole program verbatim (no signature
+    # override).
     description_signature = None
-    run_naming = "naming" in selected_steps or "codes" in selected_steps
+    run_naming = (
+        ("naming" in selected_steps or "codes" in selected_steps)
+        and question_kind == "function"
+    )
+    if question_kind == "nonfunction":
+        print("\nℹ Non-function problem — skipping function-signature naming enforcement.")
     if run_naming:
         print("\n" + "=" * 60)
         print("STEP 2: Naming Enforcement")
@@ -306,7 +327,7 @@ def main():
 
         if description_signature:
             print(f"Enforcing function name: {description_signature.get('function_name')}")
-            refactor_prompt = get_normalization_prompt(user_code, detected_lang, description_signature, desc_response, question_type)
+            refactor_prompt = get_normalization_prompt(user_code, detected_lang, description_signature, desc_response, structure_type)
             renamed_code, refactor_usage = call_llm(refactor_prompt, "", purpose="chat")
             update_usage(refactor_usage.get('prompt_tokens', 0), refactor_usage.get('completion_tokens', 0), f"{problem_name}_refactor", model=refactor_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=refactor_usage.get('cost', 0.0))
 
@@ -361,7 +382,7 @@ def main():
                 print(f"  ⏭ Skipping {lang} (not selected)")
                 continue
             print(f"  - Converting to {lang}...")
-            conv_prompt = get_conversion_prompt(lang, user_code, question_type, description_signature, desc_response)
+            conv_prompt = get_conversion_prompt(lang, user_code, structure_type, description_signature, desc_response)
             conv_response, conv_usage = call_llm(conv_prompt, "", purpose="code")
             update_usage(conv_usage.get('prompt_tokens', 0), conv_usage.get('completion_tokens', 0), f"{problem_name}_convert_{lang}", model=conv_usage.get('model', 'unknown'), purpose="code", step_id="generate_question", cost=conv_usage.get('cost', 0.0))
 

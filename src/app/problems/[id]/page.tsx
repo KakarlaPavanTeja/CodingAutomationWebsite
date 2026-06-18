@@ -31,6 +31,7 @@ type Problem = {
   id: string;
   name: string;
   question_type: string;
+  structure_type?: string;
   mode: string;
   scenario_level: string;
   status: string;
@@ -322,6 +323,10 @@ export default function ProblemDetailPage() {
               <div>
                 <p className="text-muted-foreground">Type</p>
                 <p className="font-medium capitalize">{problem.question_type.replace("_", " ")}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Structure</p>
+                <p className="font-medium capitalize">{(problem.structure_type || "standard").replace("_", " ")}</p>
               </div>
               <div>
                 <p className="text-muted-foreground">Mode</p>

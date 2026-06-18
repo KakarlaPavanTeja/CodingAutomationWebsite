@@ -86,6 +86,7 @@ export const problems = pgTable(
     createdBy: uuid("created_by").notNull().references(() => profiles.id),
     name: text("name").notNull(),
     questionType: text("question_type").notNull(),
+    structureType: text("structure_type").notNull().default("standard"),
     mode: text("mode").notNull(),
     scenarioLevel: text("scenario_level").notNull().default("none"),
     languages: text("languages").array().notNull().default(sql`'{}'::text[]`),
@@ -101,6 +102,10 @@ export const problems = pgTable(
     questionTypeCheck: check(
       "problems_question_type_check",
       sql`${t.questionType} IN ('function','nonfunction')`,
+    ),
+    structureTypeCheck: check(
+      "problems_structure_type_check",
+      sql`${t.structureType} IN ('standard','linked_list','binary_tree')`,
     ),
     scenarioCheck: check(
       "problems_scenario_level_check",

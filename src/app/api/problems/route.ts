@@ -37,6 +37,7 @@ export async function GET() {
     created_by: r.problem.createdBy,
     name: r.problem.name,
     question_type: r.problem.questionType,
+    structure_type: r.problem.structureType,
     mode: r.problem.mode,
     scenario_level: r.problem.scenarioLevel,
     languages: r.problem.languages,

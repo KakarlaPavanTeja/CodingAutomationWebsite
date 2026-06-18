@@ -26,10 +26,30 @@ export async function POST(request: NextRequest) {
   const uploaded: string[] = [];
 
   const problemName = (formData.get("problemName") as string) || "Untitled";
-  const problemType = (formData.get("problemType") as string) || "standard";
-  const questionType = (formData.get("questionType") as string) || "function";
-  const mode = (formData.get("mode") as string) || "practice";
-  const scenarioLevel = (formData.get("scenarioLevel") as string) || "none";
+  const rawProblemType = (formData.get("problemType") as string) || "standard";
+  const rawQuestionType = (formData.get("questionType") as string) || "function";
+  const rawMode = (formData.get("mode") as string) || "practice";
+  const rawScenarioLevel = (formData.get("scenarioLevel") as string) || "none";
+
+  // Clamp every client-supplied enum to the values the DB check constraints
+  // accept, so a malformed field can't 500 the insert.
+  const STRUCTURE_TYPES = new Set(["standard", "linked_list", "binary_tree"]);
+  const structureType = STRUCTURE_TYPES.has(rawProblemType) ? rawProblemType : "standard";
+  const questionType = rawQuestionType === "nonfunction" ? "nonfunction" : "function";
+  const mode = rawMode === "exam" ? "exam" : "practice";
+  const scenarioLevel = ["none", "light", "moderate", "heavy"].includes(rawScenarioLevel)
+    ? rawScenarioLevel
+    : "none";
+
+  // Canonical structure form written into the problem.md `# Type:` header.
+  // The Python pipeline compares against the lowercase-with-spaces form
+  // ("standard" / "linked list" / "binary tree"), so map the underscore UI
+  // ids to that form here.
+  const STRUCTURE_HEADER_FORM: Record<string, string> = {
+    standard: "standard",
+    linked_list: "linked list",
+    binary_tree: "binary tree",
+  };
 
   const inserted = await db
     .insert(problems)
@@ -37,6 +57,7 @@ export async function POST(request: NextRequest) {
       createdBy: user.id,
       name: problemName,
       questionType,
+      structureType,
       mode,
       scenarioLevel,
       status: "draft",
@@ -51,7 +72,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const header = `# Problem: ${problemName}\n# Type: ${problemType}\n# Scenario Level: ${scenarioLevel}\n`;
+  const header = `# Problem: ${problemName}\n# Type: ${STRUCTURE_HEADER_FORM[structureType]}\n# Question Type: ${questionType}\n# Scenario Level: ${scenarioLevel}\n`;
 
   const filesToUpload: { name: string; content: Buffer }[] = [];
 
@@ -71,7 +92,7 @@ export async function POST(request: NextRequest) {
     const lines = originalContent.split("\n");
     const contentLines: string[] = [];
     for (const line of lines) {
-      if (/^#\s*(Problem|Type|Use Scenario|Scenario Level)\s*:/i.test(line)) continue;
+      if (/^#\s*(Problem|Question Type|Type|Use Scenario|Scenario Level)\s*:/i.test(line)) continue;
       contentLines.push(line);
     }
     while (contentLines.length > 0 && contentLines[0].trim() === "") {

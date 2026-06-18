@@ -153,7 +153,7 @@ def main():
             lines = f.read().split('\n')
             for line in lines:
                 if line.startswith('# Type:'):
-                    question_type = line.replace('# Type:', '').strip().lower()
+                    question_type = line.replace('# Type:', '').strip().lower().replace('_', ' ')
 
     # Map likely keys from generated code to readable names
     lang_keys = {

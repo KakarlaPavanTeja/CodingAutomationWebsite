@@ -80,7 +80,7 @@ def get_question_type():
     with open(problem_md_path, "r") as f:
         for line in f:
             if line.startswith("# Type:"):
-                return line.replace("# Type:", "").strip().lower()
+                return line.replace("# Type:", "").strip().lower().replace("_", " ")
     return "standard"
 
 
