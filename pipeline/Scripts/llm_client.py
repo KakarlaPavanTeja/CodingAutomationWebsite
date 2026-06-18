@@ -1,12 +1,13 @@
 """
-LLM calls via the OpenRouter proxy gateway (Chat Completions).
+LLM calls via OpenRouter (Chat Completions).
 
-This uses the OpenAI SDK pointed at the Replit-hosted OpenRouter proxy gateway
-(NOT openrouter.ai directly). Configure with:
+Uses the OpenAI SDK pointed at openrouter.ai DIRECTLY by default. Configure with:
 
-  OPENROUTER_API_KEY    (required — the gateway API key)
-  OPENROUTER_BASE_URL   (optional — defaults to
-                         https://open-router-gateway.replit.app/api/proxy)
+  OPENROUTER_API_KEY    (required — a real OpenRouter API key)
+  OPENROUTER_BASE_URL   (optional — defaults to https://openrouter.ai/api/v1;
+                         set to https://open-router-gateway.replit.app/api/proxy
+                         to route through the Replit proxy gateway with the
+                         gateway key instead)
 
 Only the Chat Completions API is supported.
 
@@ -490,7 +491,7 @@ def call_llm(
     _allow_tc_downgrade: bool = True,
 ):
     """
-    Make a single Chat Completions call through the OpenRouter proxy gateway.
+    Make a single Chat Completions call to OpenRouter (direct by default).
 
     purpose:
       - "testcases"   — reasoning model for the testcase generator script

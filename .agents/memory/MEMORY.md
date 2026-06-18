@@ -1,3 +1,4 @@
+- [OpenRouter direct vs gateway](openrouter-direct-vs-gateway.md) — default is DIRECT openrouter.ai; gateway caused the stream-severing + WAF 403s. Switch back via OPENROUTER_BASE_URL.
 - [Replit egress proxy TLS](replit-egress-proxy-tls.md) — outbound HTTPS to `*.replit.app` is MITM'd by a per-repl Replit proxy CA; certifi fails, must verify against the system CA bundle.
 - [Gateway WAF 403s](replit-egress-proxy-tls.md) — gateway WAF is anomaly-scoring (not one signature); bypass by gzipping the request body (Content-Encoding: gzip), WAF skips compressed bodies, OpenRouter decompresses.
 - [Reasoning calls need max_tokens](openrouter-reasoning-max-tokens.md) — gateway defaults completion to 4096; reasoning eats it → empty content (finish_reason=length). Set max_tokens + fail loud on empty.
