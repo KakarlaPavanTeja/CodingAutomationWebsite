@@ -6,13 +6,13 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { BarChart3, Users, FileText, DollarSign } from "lucide-react";
+import { BarChart3, Users, FileText, Activity } from "lucide-react";
 
 const ADMIN_NAV = [
   { href: "/admin", label: "Overview", icon: BarChart3 },
   { href: "/admin/users", label: "Users", icon: Users },
   { href: "/admin/problems", label: "Problems", icon: FileText },
-  { href: "/admin/costs", label: "LLM Costs", icon: DollarSign },
+  { href: "/admin/openrouter", label: "OpenRouter Dashboard", icon: Activity },
 ];
 
 export default function AdminLayout({
