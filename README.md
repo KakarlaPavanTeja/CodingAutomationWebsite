@@ -258,7 +258,7 @@ Set these in **Replit Secrets** (production) or `.env.local` (Cursor local dev �
 | `PRIVATE_OBJECT_DIR` | ✅ | Replit App Storage private dir |
 | `APP_URL` | (prod) | Trusted base URL for emails |
 | `STORAGE_BUCKET` | (legacy) | Old Supabase bucket name — only used by migration scripts |
-| `OPENROUTER_MODEL_{TESTCASES,CHAT,CODE,ENRICHMENT}` | optional | Override the OpenRouter model per purpose (default `openai/gpt-5.4`, code = `openai/gpt-5.3-codex`) |
+| `OPENROUTER_MODEL_{TESTCASES,CHAT,CODE,ENRICHMENT,EDITORIAL}` | optional | Override the OpenRouter model per purpose (defaults: chat/enrichment = `openai/gpt-5.4`, testcases = `google/gemini-2.5-pro`, code = `openai/gpt-5.3-codex`, editorial = `openai/gpt-5.5`) |
 
 **Legacy / safe to delete** (kept temporarily, no runtime use): `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`.
 

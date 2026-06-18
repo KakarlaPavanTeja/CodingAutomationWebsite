@@ -16,8 +16,10 @@ OpenAI models, now routed through OpenRouter. Override per purpose via env:
   OPENROUTER_MODEL_TESTCASES / _CHAT / _CODE / _ENRICHMENT   (legacy OPENAI_MODEL_* also honored)
   OPENROUTER_MODEL / OPENAI_MODEL                            (global fallback)
 
-  defaults: chat / testcases / enrichment = openai/gpt-5.4
-            code                          = openai/gpt-5.3-codex
+  defaults: chat / enrichment = openai/gpt-5.4
+            testcases         = google/gemini-2.5-pro
+            code              = openai/gpt-5.3-codex
+            editorial         = openai/gpt-5.5
 
 Bare model names (no "/") are auto-prefixed with "openai/" for backward compat.
 
@@ -47,8 +49,16 @@ import httpx
 from openai import OpenAI, PermissionDeniedError
 
 # Purpose → default OpenRouter model id.
+#
+# Testcases use Google Gemini 2.5 Pro (not an OpenAI model): the testcase
+# generator runs at the highest reasoning effort, and OpenAI's reasoning models
+# HIDE their reasoning, so during the (long) think phase NOTHING streams over the
+# socket. That silent window outlasts the proxy gateway's idle timeout and the
+# connection is severed mid-stream → empty content. Gemini 2.5 Pro STREAMS its
+# reasoning tokens as it thinks, so the socket is never idle and the gateway
+# never cuts it — even at the max thinking budget — with no quality compromise.
 _PURPOSE_DEFAULTS: dict[str, str] = {
-    "testcases": "openai/gpt-5.4",
+    "testcases": "google/gemini-2.5-pro",
     "chat": "openai/gpt-5.4",
     "code": "openai/gpt-5.3-codex",
     "enrichment": "openai/gpt-5.4",
@@ -66,6 +76,18 @@ _ENV_SUFFIX = {
 _REASONING_EFFORT_ALLOWED = frozenset(
     {"none", "minimal", "low", "medium", "high", "xhigh"}
 )
+
+# One-step downgrade ladder for the testcases self-healing retry: if a streaming
+# testcases call ends with empty content for a reason OTHER than budget
+# exhaustion (i.e. a severed silent connection, finish_reason != "length"), we
+# retry once at the next lower effort to shorten any silent window.
+_EFFORT_DOWNGRADE = {
+    "xhigh": "high",
+    "high": "medium",
+    "medium": "low",
+    "low": "minimal",
+    "minimal": "none",
+}
 
 _DEFAULT_TESTCASES_TIMEOUT_SEC = 1800
 # A full multi-solution editorial with 4-language code at a 100K-token cap can
@@ -310,11 +332,13 @@ def _resolve_read_timeout_sec(purpose: str) -> int:
 
 
 _DEFAULT_MAX_TOKENS: dict[str, int] = {
-    # Testcase generation emits a full Python generator script AND runs with
-    # reasoning enabled (default effort=high), so hidden reasoning tokens + the
-    # script body can blow past a smaller cap, truncating the script
-    # (finish_reason=length → SyntaxError → empty testcases.json). Keep generous
-    # headroom.
+    # Testcase generation emits a full Python generator script AND runs at the
+    # max reasoning effort on Gemini 2.5 Pro, so the (billed-as-completion)
+    # thinking tokens PLUS the visible script body must both fit under the cap —
+    # otherwise we hit finish_reason=length and the script is truncated
+    # (SyntaxError → empty testcases.json). 80K leaves ample headroom for the max
+    # thinking budget and the longest generator script. Override with
+    # OPENAI_MAX_TOKENS_TESTCASES.
     "testcases": 80000,
     "chat": 16000,
     "code": 16000,
@@ -368,15 +392,15 @@ def _resolve_reasoning_effort(purpose: str) -> str | None:
         effort = str(raw).strip().lower()
         return effort if effort in _REASONING_EFFORT_ALLOWED else None
     if p == "testcases":
-        # Default "high" for the best generator quality. gpt-5.4 is a reasoning
-        # model and OpenAI HIDES reasoning, so during the think phase NOTHING
-        # streams over the socket. That silent window used to outlast the proxy
-        # gateway's ~160s idle timeout and the connection was severed mid-stream
-        # ("peer closed connection ... incomplete chunked read"). That is now
-        # fixed AT THE GATEWAY: it emits SSE keep-alive comment pings (~every
-        # 15s) during silence, so the connection survives an arbitrarily long
-        # reasoning phase. If the gateway heartbeat ever regresses, drop this to
-        # "medium" via OPENAI_REASONING_EFFORT_TESTCASES to shorten the silence.
+        # Default "high" — Gemini 2.5 Pro's max thinking budget, for the best
+        # generator quality. Unlike OpenAI's reasoning models (which HIDE their
+        # reasoning and therefore stream ZERO bytes during the think phase, so
+        # the silent socket outlasts the proxy gateway's idle timeout and gets
+        # severed mid-stream → empty content), Gemini 2.5 Pro STREAMS its
+        # reasoning tokens as it thinks. The socket stays warm throughout even at
+        # full effort, so the gateway never cuts it. Override with
+        # OPENAI_REASONING_EFFORT_TESTCASES if needed; the empty-content path in
+        # call_llm also self-heals by retrying once at a lower effort.
         raw = os.environ.get("OPENAI_REASONING_EFFORT_TESTCASES")
         effort = "high" if raw is None else str(raw).strip().lower()
         return effort if effort in _REASONING_EFFORT_ALLOWED else None
@@ -427,6 +451,7 @@ def call_llm(
     purpose: str = "chat",
     reasoning_effort=_USE_ENV,
     max_tokens=_USE_ENV,
+    _allow_tc_downgrade: bool = True,
 ):
     """
     Make a single Chat Completions call through the OpenRouter proxy gateway.
@@ -542,6 +567,34 @@ def call_llm(
     # means the (reasoning) token budget was exhausted before any answer; raise
     # so the caller surfaces a real error and the user can retry / raise the cap.
     if not content:
+        # Self-healing safety net (testcases only): empty content with a
+        # finish_reason that is NOT "length" means the budget was NOT exhausted —
+        # most likely a severed silent connection. Retry ONCE at the next lower
+        # reasoning effort to shorten any silent window before giving up. The
+        # token-budget case (finish_reason == "length") is a genuine cap problem
+        # and keeps its raise-loudly behavior below.
+        if (
+            _canonical_purpose(purpose) == "testcases"
+            and finish_reason != "length"
+            and _allow_tc_downgrade
+            and effort in _EFFORT_DOWNGRADE
+        ):
+            lower = _EFFORT_DOWNGRADE[effort]
+            print(
+                f"[LLM] testcases call returned empty content "
+                f"(finish_reason={finish_reason}) — self-healing: retrying once "
+                f"at lower reasoning effort '{effort}' -> '{lower}'.",
+                flush=True,
+            )
+            return call_llm(
+                system_prompt,
+                user_prompt,
+                temperature=temperature,
+                purpose=purpose,
+                reasoning_effort=lower,
+                max_tokens=max_tokens,
+                _allow_tc_downgrade=False,
+            )
         hint = (
             " The output token budget was exhausted (likely by reasoning) before "
             "any content was produced — raise OPENAI_MAX_TOKENS / "
