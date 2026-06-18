@@ -152,6 +152,20 @@ def load_testcases(tc_path):
     return container
 
 
+def get_owner_total_score():
+    """The problem owner's score is FINAL. When set (positive int) it is the
+    total weightage for the question and overrides the difficulty-derived
+    default. Returns None when the owner did not set a score."""
+    raw = os.environ.get("PIPELINE_OWNER_SCORE", "").strip()
+    if not raw:
+        return None
+    try:
+        val = int(raw)
+    except ValueError:
+        return None
+    return val if val >= 1 else None
+
+
 def parse_difficulty(lua):
     difficulty = parse_section(
         lua,
@@ -193,18 +207,19 @@ def exam_parse_test_cases(container):
     return test_cases
 
 
-def exam_assign_weights(test_cases, difficulty_level):
+def exam_assign_weights(test_cases, difficulty_level, total_score_override=None):
     totals = {"EASY": 20, "MEDIUM": 25, "HARD": 30}
     level = difficulty_level.strip().upper()
     if level not in totals:
         raise ValueError(f"Unknown difficulty level: {difficulty_level}")
-    total_score = totals[level]
+    total_score = total_score_override if total_score_override is not None else totals[level]
     n = len(test_cases)
     if n == 0:
         return test_cases
-    min_weight = 0.1
-    if total_score < n * min_weight:
-        raise ValueError(f"Total score {total_score} too small for {n} test cases.")
+    # The owner-set total score is FINAL. If it is too small to give every test
+    # case the usual 0.1 floor, shrink the floor so the distribution still sums
+    # to exactly total_score instead of raising.
+    min_weight = min(0.1, round(total_score / n, 2)) if total_score < n * 0.1 else 0.1
     weights = [min_weight] * n
     remaining = total_score - n * min_weight
     random_parts = [random.random() for _ in range(n)]
@@ -220,7 +235,15 @@ def exam_assign_weights(test_cases, difficulty_level):
 
 
 def build_exam_json(lua, container, difficulty):
-    test_cases = exam_assign_weights(exam_parse_test_cases(container), difficulty)
+    owner_total_score = get_owner_total_score()
+    test_cases = exam_assign_weights(
+        exam_parse_test_cases(container), difficulty, owner_total_score
+    )
+    total_score = (
+        owner_total_score
+        if owner_total_score is not None
+        else {"EASY": 20, "MEDIUM": 25, "HARD": 30}[difficulty]
+    )
     question_id = str(uuid.uuid4())
     coding_details_id = str(uuid.uuid4())
 
@@ -230,7 +253,7 @@ def build_exam_json(lua, container, difficulty):
     json_data = [
         {
             "test_cases": test_cases,
-            "total_score": {"EASY": 20, "MEDIUM": 25, "HARD": 30}[difficulty],
+            "total_score": total_score,
             "question_type": "CODING",
             "question_asked_by_companies_info": [],
             "question": {
@@ -541,7 +564,12 @@ def practice_parse_solutions(lua):
 
 def build_practice_json(lua, container, difficulty, node_based):
     parsed_test_cases = practice_parse_test_cases(container)
-    total_score = practice_calculate_total_score(parsed_test_cases)
+    owner_total_score = get_owner_total_score()
+    total_score = (
+        js_number(owner_total_score)
+        if owner_total_score is not None
+        else practice_calculate_total_score(parsed_test_cases)
+    )
 
     def sec(start, end):
         return parse_section(lua, start, end)

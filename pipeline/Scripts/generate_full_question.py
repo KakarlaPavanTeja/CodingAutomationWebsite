@@ -439,13 +439,21 @@ def main():
         print("STEP 5b: Generating Difficulty")
         print("=" * 60)
 
-        diff_prompt = get_difficulty_prompt(desc_response)
-        diff_response, diff_usage = call_llm(diff_prompt, "", purpose="chat")
-        update_usage(diff_usage.get('prompt_tokens', 0), diff_usage.get('completion_tokens', 0), f"{problem_name}_difficulty", model=diff_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=diff_usage.get('cost', 0.0))
         diff_path = os.path.join(OUTPUT_DIR, 'generated_difficulty.txt')
-        with open(diff_path, 'w') as f:
-            f.write(diff_response.strip())
-        print(f"✓ Difficulty generated")
+        # The problem owner's difficulty is FINAL: if they set one, use it
+        # verbatim and skip the LLM estimation entirely.
+        owner_difficulty = os.environ.get("PIPELINE_OWNER_DIFFICULTY", "").strip().lower()
+        if owner_difficulty in ("easy", "medium", "hard"):
+            with open(diff_path, 'w') as f:
+                f.write(owner_difficulty)
+            print(f"✓ Using owner-set difficulty (final): {owner_difficulty}")
+        else:
+            diff_prompt = get_difficulty_prompt(desc_response)
+            diff_response, diff_usage = call_llm(diff_prompt, "", purpose="chat")
+            update_usage(diff_usage.get('prompt_tokens', 0), diff_usage.get('completion_tokens', 0), f"{problem_name}_difficulty", model=diff_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=diff_usage.get('cost', 0.0))
+            with open(diff_path, 'w') as f:
+                f.write(diff_response.strip())
+            print(f"✓ Difficulty generated")
     else:
         print("\n⏭ Skipping Step 5b: Difficulty Estimation")
 

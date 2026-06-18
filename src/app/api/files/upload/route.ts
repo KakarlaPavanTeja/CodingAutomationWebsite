@@ -45,11 +45,16 @@ export async function POST(request: NextRequest) {
   const difficulty = ["easy", "medium", "hard"].includes(rawDifficulty)
     ? rawDifficulty
     : null;
-  const parsedScore = parseInt(rawScore, 10);
-  const score =
-    Number.isFinite(parsedScore) && parsedScore >= 0 && parsedScore <= 100000
-      ? parsedScore
-      : null;
+  // The owner-set score is FINAL, so a non-empty but invalid value is rejected
+  // (consistent with PATCH /api/problems/[id]) rather than silently dropped.
+  let score: number | null = null;
+  if (rawScore.trim() !== "") {
+    const parsedScore = parseInt(rawScore, 10);
+    if (!Number.isFinite(parsedScore) || parsedScore < 1 || parsedScore > 100000) {
+      return NextResponse.json({ error: "Invalid score" }, { status: 400 });
+    }
+    score = parsedScore;
+  }
 
   // Canonical structure form written into the problem.md `# Type:` header.
   // The Python pipeline compares against the lowercase-with-spaces form

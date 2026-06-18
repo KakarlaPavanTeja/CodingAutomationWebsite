@@ -108,7 +108,7 @@ export async function PATCH(
       updates.score = null;
     } else {
       const n = typeof s === "number" ? s : parseInt(String(s), 10);
-      if (!Number.isFinite(n) || n < 0 || n > 100000) {
+      if (!Number.isFinite(n) || n < 1 || n > 100000) {
         return NextResponse.json({ error: "Invalid score" }, { status: 400 });
       }
       updates.score = Math.trunc(n);

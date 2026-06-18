@@ -91,8 +91,13 @@ def main():
     # SHORT_TEXT
     template_content = replace_tag_content(template_content, "----------SHORT_TEXT_START----------", "----------SHORT_TEXT_END----------", short_text)
 
-    # QUESTION_LEVEL
-    level = read_file(os.path.join(OUTPUTS_DIR, "generated_difficulty.txt")).upper()
+    # QUESTION_LEVEL — the owner-set difficulty is FINAL, so prefer it over the
+    # auto-generated value even if this step runs without re-generating difficulty.
+    owner_difficulty = os.environ.get("PIPELINE_OWNER_DIFFICULTY", "").strip().lower()
+    if owner_difficulty in ("easy", "medium", "hard"):
+        level = owner_difficulty.upper()
+    else:
+        level = read_file(os.path.join(OUTPUTS_DIR, "generated_difficulty.txt")).upper()
     template_content = replace_tag_content(template_content, "----------QUESTION_LEVEL_START----------", "----------QUESTION_LEVEL_END----------", level)
 
     if mode == "practice":

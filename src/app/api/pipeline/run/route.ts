@@ -108,7 +108,12 @@ export async function POST(request: NextRequest) {
   // on a non-function problem, or driving the pipeline in a mode the problem
   // was never set up for.
   const cfgRows = await db
-    .select({ questionType: problems.questionType, mode: problems.mode })
+    .select({
+      questionType: problems.questionType,
+      mode: problems.mode,
+      difficulty: problems.difficulty,
+      score: problems.score,
+    })
     .from(problems)
     .where(eq(problems.id, safeProblemId))
     .limit(1);
@@ -117,6 +122,10 @@ export async function POST(request: NextRequest) {
   }
   const storedQuestionType = cfgRows[0].questionType as QuestionType;
   const storedMode = cfgRows[0].mode as PipelineMode;
+  // The owner-set difficulty/score are FINAL: when present they override the
+  // pipeline's auto-generated difficulty and difficulty-derived weightage.
+  const ownerDifficulty = cfgRows[0].difficulty ?? "";
+  const ownerScore = cfgRows[0].score != null ? String(cfgRows[0].score) : "";
 
   // Reject a step that isn't part of this problem's workflow.
   const workflowSteps = getWorkflowSteps(storedQuestionType, storedMode);
@@ -225,6 +234,11 @@ export async function POST(request: NextRequest) {
       PIPELINE_USER_ID: userId || "",
       PIPELINE_PROBLEM_ID: safeProblemId,
       PIPELINE_STEP_ID: stepId || "",
+      // Owner-set, FINAL difficulty/score. Empty string means "not set" — the
+      // pipeline then falls back to auto-generating difficulty and deriving the
+      // weightage from it.
+      PIPELINE_OWNER_DIFFICULTY: ownerDifficulty,
+      PIPELINE_OWNER_SCORE: ownerScore,
       // Base URL the Python pipeline uses to POST cost/usage back to this same
       // app (`/api/internal/llm-usage`). It MUST resolve to THIS environment's
       // own running instance — in the deployment to the deployment, in dev to

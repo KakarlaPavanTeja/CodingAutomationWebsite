@@ -179,22 +179,38 @@ def main():
         print("Error: No python_code found in generatedFullCode/PYTHON.py")
         sys.exit(1)
 
-    # 3. Read Difficulty
-    difficulty_path = os.path.join("Outputs", "generated_difficulty.txt")
-    total_score = 100 # Default
-    if os.path.exists(difficulty_path):
-        with open(difficulty_path, "r") as f:
-            difficulty = f.read().strip().lower()
-        
-        difficulty_map = {
-            "easy": 20,
-            "medium": 25,
-            "hard": 30
-        }
-        total_score = difficulty_map.get(difficulty, 100)
-        print(f"Detected difficulty: {difficulty}. Setting total weightage to: {total_score}")
+    # 3. Determine total weightage (score).
+    # The problem owner's score is FINAL: if they set one, it is the total
+    # weightage and overrides the difficulty-derived default.
+    total_score = 100  # Default
+    owner_score_raw = os.environ.get("PIPELINE_OWNER_SCORE", "").strip()
+    owner_score = None
+    if owner_score_raw:
+        try:
+            parsed = int(owner_score_raw)
+            if parsed >= 1:
+                owner_score = parsed
+        except ValueError:
+            owner_score = None
+
+    if owner_score is not None:
+        total_score = owner_score
+        print(f"Using owner-set score (final). Setting total weightage to: {total_score}")
     else:
-        print("Warning: generated_difficulty.txt not found. Using default total weightage: 100")
+        difficulty_path = os.path.join("Outputs", "generated_difficulty.txt")
+        if os.path.exists(difficulty_path):
+            with open(difficulty_path, "r") as f:
+                difficulty = f.read().strip().lower()
+
+            difficulty_map = {
+                "easy": 20,
+                "medium": 25,
+                "hard": 30
+            }
+            total_score = difficulty_map.get(difficulty, 100)
+            print(f"Detected difficulty: {difficulty}. Setting total weightage to: {total_score}")
+        else:
+            print("Warning: generated_difficulty.txt not found. Using default total weightage: 100")
 
     # 4. Determine number of test cases
     if args.count is not None:

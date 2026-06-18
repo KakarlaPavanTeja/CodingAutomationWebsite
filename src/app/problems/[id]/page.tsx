@@ -431,7 +431,7 @@ export default function ProblemDetailPage() {
                     <span className="text-sm font-medium">Score</span>
                     <Input
                       type="number"
-                      min={0}
+                      min={1}
                       max={100000}
                       placeholder="e.g. 100"
                       value={editScore}

@@ -119,7 +119,7 @@ export const problems = pgTable(
     ),
     scoreCheck: check(
       "problems_score_check",
-      sql`${t.score} IS NULL OR (${t.score} >= 0 AND ${t.score} <= 100000)`,
+      sql`${t.score} IS NULL OR (${t.score} >= 1 AND ${t.score} <= 100000)`,
     ),
     statusCheck: check(
       "problems_status_check",

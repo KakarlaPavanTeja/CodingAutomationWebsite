@@ -264,7 +264,7 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
               <Input
                 id="problem-score"
                 type="number"
-                min={0}
+                min={1}
                 max={100000}
                 placeholder="e.g. 100"
                 value={score}
