@@ -139,6 +139,12 @@ export function OutputBrowser({ selectedPath, openPaths, onSelectFile, problemId
 
   const tree = useMemo(() => buildTree(files), [files]);
 
+  const allDirPaths = useMemo(
+    () => files.filter((f) => f.isDirectory).map((f) => f.path),
+    [files]
+  );
+  const allExpanded = allDirPaths.length > 0 && allDirPaths.every((p) => expandedDirs.has(p));
+
   const toggleDir = (path: string) => {
     setExpandedDirs((prev) => {
       const next = new Set(prev);
@@ -146,6 +152,10 @@ export function OutputBrowser({ selectedPath, openPaths, onSelectFile, problemId
       else next.add(path);
       return next;
     });
+  };
+
+  const toggleAll = () => {
+    setExpandedDirs(allExpanded ? new Set() : new Set(allDirPaths));
   };
 
   if (loading) {
@@ -158,12 +168,22 @@ export function OutputBrowser({ selectedPath, openPaths, onSelectFile, problemId
 
   return (
     <div className="py-1">
-      <button
-        onClick={fetchFiles}
-        className="w-full text-left px-3 py-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-      >
-        Refresh files
-      </button>
+      <div className="flex items-center justify-between px-3 py-1">
+        <button
+          onClick={fetchFiles}
+          className="text-left text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+        >
+          Refresh files
+        </button>
+        {allDirPaths.length > 0 && (
+          <button
+            onClick={toggleAll}
+            className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {allExpanded ? "Collapse all" : "Expand all"}
+          </button>
+        )}
+      </div>
 
       {tree.map((node) => (
         <TreeNodeRow
@@ -175,6 +195,7 @@ export function OutputBrowser({ selectedPath, openPaths, onSelectFile, problemId
           expandedDirs={expandedDirs}
           onToggleDir={toggleDir}
           onSelectFile={onSelectFile}
+          problemId={problemId}
         />
       ))}
     </div>
@@ -189,6 +210,7 @@ function TreeNodeRow({
   expandedDirs,
   onToggleDir,
   onSelectFile,
+  problemId,
 }: {
   node: TreeNode;
   depth: number;
@@ -197,6 +219,7 @@ function TreeNodeRow({
   expandedDirs: Set<string>;
   onToggleDir: (path: string) => void;
   onSelectFile: (path: string) => void;
+  problemId?: string | null;
 }) {
   const paddingLeft = 12 + depth * 16;
 
@@ -241,6 +264,7 @@ function TreeNodeRow({
               expandedDirs={expandedDirs}
               onToggleDir={onToggleDir}
               onSelectFile={onSelectFile}
+              problemId={problemId}
             />
           ))}
       </>
@@ -250,24 +274,57 @@ function TreeNodeRow({
   const icon = getFileIcon(node.name);
   const selected = selectedPath === node.path;
   const isOpen = openPaths.has(node.path);
+  const downloadUrl = problemId
+    ? `/api/files/download?problemId=${encodeURIComponent(problemId)}&path=${encodeURIComponent(node.path)}`
+    : null;
 
   return (
-    <button
+    <div
       className={cn(
-        "flex items-center gap-1.5 w-full text-left py-[3px] text-[13px] transition-colors",
+        "group flex items-center w-full text-[13px] transition-colors",
         selected
           ? "bg-primary/15 text-foreground"
           : isOpen
             ? "bg-muted/30 text-foreground"
             : "text-foreground/80 hover:bg-muted/50"
       )}
-      style={{ paddingLeft: paddingLeft + 14 }}
-      onClick={() => onSelectFile(node.path)}
     >
-      <span className={cn("text-[10px] font-mono font-bold shrink-0 w-4 text-center", icon.color)}>
-        {icon.label}
-      </span>
-      <span className="truncate">{node.name}</span>
-    </button>
+      <button
+        className="flex items-center gap-1.5 flex-1 min-w-0 text-left py-[3px]"
+        style={{ paddingLeft: paddingLeft + 14 }}
+        onClick={() => onSelectFile(node.path)}
+      >
+        <span className={cn("text-[10px] font-mono font-bold shrink-0 w-4 text-center", icon.color)}>
+          {icon.label}
+        </span>
+        <span className="truncate">{node.name}</span>
+      </button>
+      {downloadUrl && (
+        <a
+          href={downloadUrl}
+          download
+          title={`Download ${node.name}`}
+          aria-label={`Download ${node.name}`}
+          onClick={(e) => e.stopPropagation()}
+          className="shrink-0 p-1 mr-1.5 rounded text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-foreground hover:bg-muted transition-all"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" x2="12" y1="15" y2="3" />
+          </svg>
+        </a>
+      )}
+    </div>
   );
 }
