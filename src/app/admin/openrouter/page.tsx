@@ -70,7 +70,7 @@ function matchesFilter(
   return value === filterKey;
 }
 
-type TimeRange = "1d" | "7d" | "1m" | "3m" | "6m" | "1y";
+type TimeRange = "1d" | "7d" | "1m" | "3m" | "6m" | "1y" | "all";
 const TIME_RANGES: { key: TimeRange; label: string; days: number }[] = [
   { key: "1d", label: "24h", days: 1 },
   { key: "7d", label: "7d", days: 7 },
@@ -78,6 +78,7 @@ const TIME_RANGES: { key: TimeRange; label: string; days: number }[] = [
   { key: "3m", label: "3m", days: 90 },
   { key: "6m", label: "6m", days: 180 },
   { key: "1y", label: "1y", days: 365 },
+  { key: "all", label: "All", days: 0 },
 ];
 
 function toLocalDateStr(d: Date): string {
@@ -117,7 +118,8 @@ export default function AdminCostsPage() {
   const [filterPurpose, setFilterPurpose] = useState("");
   const [filterStep, setFilterStep] = useState("");
   const [barMode, setBarMode] = useState<"cost" | "tokens" | "calls">("cost");
-  const [timeRange, setTimeRange] = useState<TimeRange>("1m");
+  const [timeRange, setTimeRange] = useState<TimeRange>("all");
+  const [includeImported, setIncludeImported] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const inFlight = useRef(false);
@@ -156,96 +158,17 @@ export default function AdminCostsPage() {
     };
   }, [fetchUsage]);
 
-  // ---- Derived data ----
-  const { totalCost, totalTokens, byUser, byProblem, dailyBars, allModels, allPurposes } =
-    useMemo(() => {
-      let tCost = 0;
-      let tTokens = 0;
+  // ---- Time-range window (applies to the WHOLE dashboard, not just the chart) ----
+  const rangeStart = useMemo(() => {
+    if (timeRange === "all") return new Date(0);
+    const rangeDays = TIME_RANGES.find((r) => r.key === timeRange)?.days ?? 30;
+    const start = new Date();
+    start.setDate(start.getDate() - rangeDays + 1);
+    start.setHours(0, 0, 0, 0);
+    return start;
+  }, [timeRange]);
 
-      // By user
-      const uMap = new Map<string, GroupedData>();
-      // By problem
-      const pMap = new Map<string, GroupedData>();
-      // Daily
-      const dMap = new Map<string, DailyBar>();
-      const modelSet = new Set<string>();
-      const purposeSet = new Set<string>();
-
-      for (const u of usage) {
-        const cost = parseFloat(u.cost_usd || "0");
-        tCost += cost;
-        tTokens += u.total_tokens;
-
-        // User & Problem grouping — exclude imported data (only real pipeline usage)
-        if (u.purpose !== "imported") {
-          const uKey = u.user_id ?? "__null__";
-          const uLabel =
-            u.profiles?.display_name || u.profiles?.email || "Unknown User";
-          if (!uMap.has(uKey)) {
-            uMap.set(uKey, { key: uKey, label: uLabel, cost: 0, tokens: 0, calls: 0 });
-          }
-          const ug = uMap.get(uKey)!;
-          ug.cost += cost;
-          ug.tokens += u.total_tokens;
-          ug.calls += 1;
-
-          const pKey = u.problem_id ?? "__null__";
-          const pLabel = u.problems?.name || u.problem_name?.split("_")[0] || (u.problem_id ? u.problem_id.slice(0, 8) : "Unknown");
-          if (!pMap.has(pKey)) {
-            pMap.set(pKey, { key: pKey, label: pLabel, cost: 0, tokens: 0, calls: 0, users: new Set() });
-          }
-          const pg = pMap.get(pKey)!;
-          pg.cost += cost;
-          pg.tokens += u.total_tokens;
-          pg.calls += 1;
-          const userName = u.profiles?.display_name || u.profiles?.email || "";
-          if (userName) pg.users!.add(userName);
-        }
-
-        // Daily — use local date so today always shows correctly
-        const createdDate = new Date(u.created_at);
-        const day = toLocalDateStr(createdDate);
-        if (!dMap.has(day)) {
-          const label = createdDate.toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-          });
-          dMap.set(day, {
-            date: day,
-            label,
-            cost: 0,
-            tokens: 0,
-            calls: 0,
-            byModel: {},
-            byPurpose: {},
-          });
-        }
-        const db = dMap.get(day)!;
-        db.cost += cost;
-        db.tokens += u.total_tokens;
-        db.calls += 1;
-        db.byModel[u.model] = (db.byModel[u.model] || 0) + cost;
-        db.byPurpose[u.purpose] = (db.byPurpose[u.purpose] || 0) + cost;
-        modelSet.add(u.model);
-        purposeSet.add(u.purpose);
-      }
-
-      const daily = Array.from(dMap.values()).sort((a, b) =>
-        a.date.localeCompare(b.date)
-      );
-
-      return {
-        totalCost: tCost,
-        totalTokens: tTokens,
-        byUser: Array.from(uMap.values()).sort((a, b) => b.cost - a.cost),
-        byProblem: Array.from(pMap.values()).sort((a, b) => b.cost - a.cost),
-        dailyBars: daily,
-        allModels: Array.from(modelSet),
-        allPurposes: Array.from(purposeSet),
-      };
-    }, [usage]);
-
-  // Helper: apply all filters except one (for cross-filtering dropdowns)
+  // Helper: apply all active filters except one (for cross-filtering dropdowns)
   const applyFilters = useCallback(
     (data: UsageEntry[], exclude?: "user" | "problem" | "model" | "purpose" | "step") => {
       let result = data;
@@ -264,19 +187,126 @@ export default function AdminCostsPage() {
     [filterUser, filterProblem, filterModel, filterPurpose, filterStep]
   );
 
-  // Filtered usage for the table
-  const filteredUsage = useMemo(
-    () => applyFilters(usage),
-    [usage, applyFilters]
+  // Base set: within the selected time range, and (unless opted in) excluding the
+  // legacy "imported" rows so the dashboard reflects real per-call OpenRouter usage.
+  const rangeUsage = useMemo(
+    () =>
+      usage.filter(
+        (u) =>
+          new Date(u.created_at) >= rangeStart &&
+          (includeImported || u.purpose !== "imported")
+      ),
+    [usage, rangeStart, includeImported]
   );
+
+  // Fully-filtered set — drives the summary cards, the chart, and the table.
+  const filteredUsage = useMemo(
+    () => applyFilters(rangeUsage),
+    [rangeUsage, applyFilters]
+  );
+  // Breakdown sets exclude their own dimension so each list stays switchable.
+  const userScoped = useMemo(
+    () => applyFilters(rangeUsage, "user"),
+    [rangeUsage, applyFilters]
+  );
+  const problemScoped = useMemo(
+    () => applyFilters(rangeUsage, "problem"),
+    [rangeUsage, applyFilters]
+  );
+
+  // ---- Totals + daily chart series (from the fully-filtered set) ----
+  const { totalCost, totalTokens, dailyBars, allPurposes } = useMemo(() => {
+    let tCost = 0;
+    let tTokens = 0;
+    const dMap = new Map<string, DailyBar>();
+    const purposeSet = new Set<string>();
+
+    for (const u of filteredUsage) {
+      const cost = parseFloat(u.cost_usd || "0");
+      tCost += cost;
+      tTokens += u.total_tokens;
+
+      const createdDate = new Date(u.created_at);
+      const day = toLocalDateStr(createdDate);
+      if (!dMap.has(day)) {
+        dMap.set(day, {
+          date: day,
+          label: createdDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+          cost: 0,
+          tokens: 0,
+          calls: 0,
+          byModel: {},
+          byPurpose: {},
+        });
+      }
+      const db = dMap.get(day)!;
+      db.cost += cost;
+      db.tokens += u.total_tokens;
+      db.calls += 1;
+      db.byModel[u.model] = (db.byModel[u.model] || 0) + cost;
+      db.byPurpose[u.purpose] = (db.byPurpose[u.purpose] || 0) + cost;
+      purposeSet.add(u.purpose);
+    }
+
+    return {
+      totalCost: tCost,
+      totalTokens: tTokens,
+      dailyBars: Array.from(dMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
+      allPurposes: Array.from(purposeSet),
+    };
+  }, [filteredUsage]);
+
+  // ---- Per-user breakdown (every active filter except the user filter) ----
+  const byUser = useMemo(() => {
+    const uMap = new Map<string, GroupedData>();
+    for (const u of userScoped) {
+      const cost = parseFloat(u.cost_usd || "0");
+      const uKey = u.user_id ?? "__null__";
+      const uLabel =
+        u.profiles?.display_name ||
+        u.profiles?.email ||
+        (u.user_id ? "Unknown User" : "Imported / system");
+      if (!uMap.has(uKey)) {
+        uMap.set(uKey, { key: uKey, label: uLabel, cost: 0, tokens: 0, calls: 0 });
+      }
+      const g = uMap.get(uKey)!;
+      g.cost += cost;
+      g.tokens += u.total_tokens;
+      g.calls += 1;
+    }
+    return Array.from(uMap.values()).sort((a, b) => b.cost - a.cost);
+  }, [userScoped]);
+
+  // ---- Per-problem breakdown (every active filter except the problem filter) ----
+  const byProblem = useMemo(() => {
+    const pMap = new Map<string, GroupedData>();
+    for (const u of problemScoped) {
+      const cost = parseFloat(u.cost_usd || "0");
+      const pKey = u.problem_id ?? "__null__";
+      const pLabel =
+        u.problems?.name ||
+        u.problem_name?.split("_")[0] ||
+        (u.problem_id ? u.problem_id.slice(0, 8) : "Unknown");
+      if (!pMap.has(pKey)) {
+        pMap.set(pKey, { key: pKey, label: pLabel, cost: 0, tokens: 0, calls: 0, users: new Set() });
+      }
+      const g = pMap.get(pKey)!;
+      g.cost += cost;
+      g.tokens += u.total_tokens;
+      g.calls += 1;
+      const userName = u.profiles?.display_name || u.profiles?.email || "";
+      if (userName) g.users!.add(userName);
+    }
+    return Array.from(pMap.values()).sort((a, b) => b.cost - a.cost);
+  }, [problemScoped]);
 
   // Cross-filtered dropdown options: each shows only values available given the other filters
   const dropdownOptions = useMemo(() => {
-    const forUser = applyFilters(usage, "user");
-    const forProblem = applyFilters(usage, "problem");
-    const forModel = applyFilters(usage, "model");
-    const forPurpose = applyFilters(usage, "purpose");
-    const forStep = applyFilters(usage, "step");
+    const forUser = applyFilters(rangeUsage, "user");
+    const forProblem = applyFilters(rangeUsage, "problem");
+    const forModel = applyFilters(rangeUsage, "model");
+    const forPurpose = applyFilters(rangeUsage, "purpose");
+    const forStep = applyFilters(rangeUsage, "step");
 
     // Users available
     const userMap = new Map<string, string>();
@@ -318,15 +348,23 @@ export default function AdminCostsPage() {
         .map((key) => ({ key, label: stepLabel(key) }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     };
-  }, [usage, applyFilters]);
+  }, [rangeUsage, applyFilters]);
 
   // Build chart bars with filled-in empty days for the selected range
   const chartData = useMemo(() => {
-    const rangeDays = TIME_RANGES.find((r) => r.key === timeRange)?.days ?? 30;
     const now = new Date();
-    const start = new Date(now);
-    start.setDate(start.getDate() - rangeDays + 1);
-    start.setHours(0, 0, 0, 0);
+    let start: Date;
+    if (timeRange === "all") {
+      // For "all", span from the earliest day we actually have data for
+      // (avoids generating an enormous day array back to 1970).
+      const earliest = dailyBars.length
+        ? new Date(dailyBars[0].date + "T12:00:00")
+        : now;
+      start = new Date(earliest);
+      start.setHours(0, 0, 0, 0);
+    } else {
+      start = new Date(rangeStart);
+    }
 
     const allDays = getDaysArray(start, now);
 
@@ -350,7 +388,7 @@ export default function AdminCostsPage() {
         byPurpose: {},
       } as DailyBar;
     });
-  }, [dailyBars, timeRange]);
+  }, [dailyBars, timeRange, rangeStart]);
 
   // All hooks above — early returns below
   if (loading) {
@@ -407,6 +445,11 @@ export default function AdminCostsPage() {
   const periodTokens = chartData.reduce((s, d) => s + d.tokens, 0);
   const periodCalls = chartData.reduce((s, d) => s + d.calls, 0);
 
+  // Breakdown bar widths use each breakdown's own total (these sets intentionally
+  // ignore their own dimension filter, so they can differ from the headline total).
+  const byUserTotal = byUser.reduce((s, g) => s + g.cost, 0);
+  const byProblemTotal = byProblem.reduce((s, g) => s + g.cost, 0);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -418,6 +461,17 @@ export default function AdminCostsPage() {
             </span>
           )}
           <button
+            onClick={() => setIncludeImported((v) => !v)}
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border transition-colors ${
+              includeImported
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-card hover:bg-muted/50"
+            }`}
+            title="Include legacy imported usage rows (no user) in every total, chart, and breakdown"
+          >
+            {includeImported ? "Including imported" : "Excluding imported"}
+          </button>
+          <button
             onClick={() => fetchUsage()}
             disabled={refreshing}
             className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border bg-card hover:bg-muted/50 transition-colors disabled:opacity-60"
@@ -428,7 +482,7 @@ export default function AdminCostsPage() {
         </div>
       </div>
 
-      {/* Summary Cards — all-time totals */}
+      {/* Summary Cards — reflect the selected time range + active filters */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
         <div className="rounded-lg border bg-card p-5 space-y-1">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -443,12 +497,12 @@ export default function AdminCostsPage() {
         </div>
         <div className="rounded-lg border bg-card p-5 space-y-1">
           <p className="text-sm text-muted-foreground">API Calls</p>
-          <p className="text-2xl font-bold">{usage.length}</p>
+          <p className="text-2xl font-bold">{filteredUsage.length.toLocaleString()}</p>
         </div>
         <div className="rounded-lg border bg-card p-5 space-y-1">
           <p className="text-sm text-muted-foreground">Avg Cost / Call</p>
           <p className="text-2xl font-bold">
-            ${usage.length > 0 ? (totalCost / usage.length).toFixed(4) : "0"}
+            ${filteredUsage.length > 0 ? (totalCost / filteredUsage.length).toFixed(4) : "0"}
           </p>
         </div>
       </div>
@@ -696,7 +750,7 @@ export default function AdminCostsPage() {
           <div className="space-y-1">
             {byUser.map((g) => {
               const isActive = filterUser === g.key;
-              const barW = totalCost > 0 ? (g.cost / totalCost) * 100 : 0;
+              const barW = byUserTotal > 0 ? (g.cost / byUserTotal) * 100 : 0;
               return (
                 <button
                   key={g.key}
@@ -732,7 +786,7 @@ export default function AdminCostsPage() {
           <div className="space-y-1 max-h-[300px] overflow-y-auto">
             {byProblem.map((g) => {
               const isActive = filterProblem === g.key;
-              const barW = totalCost > 0 ? (g.cost / totalCost) * 100 : 0;
+              const barW = byProblemTotal > 0 ? (g.cost / byProblemTotal) * 100 : 0;
               return (
                 <button
                   key={g.key}
@@ -811,8 +865,9 @@ export default function AdminCostsPage() {
             <div className="flex items-center gap-3">
               <h3 className="text-sm font-semibold">
                 Usage Log{" "}
-                {filteredUsage.length !== usage.length &&
-                  `(${filteredUsage.length} of ${usage.length})`}
+                {filteredUsage.length !== rangeUsage.length
+                  ? `(${filteredUsage.length} of ${rangeUsage.length})`
+                  : `(${filteredUsage.length})`}
               </h3>
               {/* Cross-filtered dropdowns */}
               <select
