@@ -108,6 +108,22 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   const runningStepsRef = useRef<Map<StepId, string>>(new Map());
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingPollsRef = useRef<Array<{ runId: string; stepId: StepId }>>([]);
+  // One poller per running step, keyed by stepId, so steps poll independently.
+  const pollRefs = useRef<Map<StepId, ReturnType<typeof setInterval>>>(new Map());
+  // Monotonic token: each loadProblemState bumps it so a slow earlier load
+  // can detect it has been superseded and abort instead of clobbering state.
+  const loadGenerationRef = useRef(0);
+
+  // Refs mirror the latest state so debounced/interval callbacks can read fresh
+  // values without being torn down and recreated on every state change.
+  const stepStatesRef = useRef(stepStates);
+  const currentProblemIdRef = useRef(currentProblemId);
+  useEffect(() => {
+    stepStatesRef.current = stepStates;
+  }, [stepStates]);
+  useEffect(() => {
+    currentProblemIdRef.current = currentProblemId;
+  }, [currentProblemId]);
 
   // When global languages change, sync execution steps that haven't been run yet
   const setGlobalLanguages = useCallback((langs: string[]) => {
@@ -143,52 +159,64 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     // Debounce saves
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      setStepStates((currentSteps) => {
-        setCurrentProblemId((pid) => {
-          if (!pid) return pid;
+      // Read the latest state from refs so this stays a pure side effect
+      // (no state updaters) and never double-fires under Strict Mode.
+      const pid = currentProblemIdRef.current;
+      if (!pid) return;
+      const currentSteps = stepStatesRef.current;
 
-          // Build step configs and statuses from current state
-          const stepConfigs: Record<string, unknown> = {};
-          const stepStatuses: Record<string, unknown> = {};
+      // Build step configs and statuses from current state
+      const stepConfigs: Record<string, unknown> = {};
+      const stepStatuses: Record<string, unknown> = {};
 
-          for (const [id, state] of currentSteps) {
-            stepConfigs[id] = {
-              enabledSubSteps: state.enabledSubSteps,
-              enabledLanguages: state.enabledLanguages,
-              testcaseCount: state.testcaseCount,
-            };
-            stepStatuses[id] = {
-              status: state.status,
-              exitCode: state.exitCode,
-              startTime: state.startTime,
-              endTime: state.endTime,
-            };
-          }
+      for (const [id, state] of currentSteps) {
+        stepConfigs[id] = {
+          enabledSubSteps: state.enabledSubSteps,
+          enabledLanguages: state.enabledLanguages,
+          testcaseCount: state.testcaseCount,
+        };
+        stepStatuses[id] = {
+          status: state.status,
+          exitCode: state.exitCode,
+          startTime: state.startTime,
+          endTime: state.endTime,
+        };
+      }
 
-          fetch("/api/pipeline/state", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              problemId: pid,
-              questionType,
-              mode,
-              enabledLanguages: globalLanguages,
-              testcaseCount: globalTestcaseCount,
-              stepConfigs,
-              stepStatuses,
-            }),
-          }).catch(() => {});
-
-          return pid;
-        });
-        return currentSteps;
-      });
+      fetch("/api/pipeline/state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          problemId: pid,
+          questionType,
+          mode,
+          enabledLanguages: globalLanguages,
+          testcaseCount: globalTestcaseCount,
+          stepConfigs,
+          stepStatuses,
+        }),
+      }).catch(() => {});
     }, 500);
   }, [questionType, mode, globalLanguages, globalTestcaseCount]);
 
   const loadProblemState = useCallback(async (problemId: string) => {
+    // Claim a generation token; a later load supersedes this one.
+    const generation = ++loadGenerationRef.current;
     setStateLoading(true);
     setCurrentProblemId(problemId);
+
+    // Stop any pollers / run tracking / queued work / pending save left over
+    // from a previously-viewed problem so they can't write into the new
+    // problem's state.
+    for (const timer of pollRefs.current.values()) clearInterval(timer);
+    pollRefs.current.clear();
+    runningStepsRef.current.clear();
+    pendingPollsRef.current = [];
+    setRunAllQueue([]);
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
 
     try {
       // Fetch both pipeline state and problem record (for question_type/mode)
@@ -198,6 +226,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       ]);
       const { state } = await stateRes.json();
       const problemData = await problemRes.json();
+      // A newer load started while we were awaiting — abandon this one.
+      if (loadGenerationRef.current !== generation) return;
       const problem = problemData.problem;
 
       // Always use question_type and mode from the problem record
@@ -242,6 +272,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
             fetch(`/api/pipeline/run/logs?problemId=${encodeURIComponent(problemId)}&stepId=${encodeURIComponent(id)}&tail=500`)
               .then((r) => r.json())
               .then((logsData) => {
+                if (loadGenerationRef.current !== generation) return;
                 if (logsData.content) {
                   const logLines = parseLogContent(logsData.content);
                   setStepStates((prev) => {
@@ -266,6 +297,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       // Multiple steps may be running concurrently (e.g. editorial + JSON).
       const runsRes = await fetch(`/api/pipeline/run/status?problemId=${encodeURIComponent(problemId)}`);
       const runsData = await runsRes.json();
+      // Superseded by a newer load — don't register pollers for this problem.
+      if (loadGenerationRef.current !== generation) return;
       const runningRuns = (runsData.runs || []).filter(
         (r: { status: string }) => r.status === "running"
       ) as Array<{ id: string; step_id: StepId }>;
@@ -276,7 +309,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     } catch {
       // Failed to load — use defaults
     } finally {
-      setStateLoading(false);
+      // Only clear loading if we are still the latest load.
+      if (loadGenerationRef.current === generation) setStateLoading(false);
     }
   }, []);
 
@@ -310,10 +344,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     handleWorkflowChange(questionType, m);
   }, [questionType, handleWorkflowChange]);
 
-  // Poll for step status and logs
-  // One poller per running step, keyed by stepId, so steps poll independently.
-  const pollRefs = useRef<Map<StepId, ReturnType<typeof setInterval>>>(new Map());
-
+  // Poll for step status and logs.
   const stopPolling = useCallback((stepId: StepId) => {
     const timer = pollRefs.current.get(stepId);
     if (timer) {
@@ -331,12 +362,29 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         try {
           // Poll run status
           const statusRes = await fetch(`/api/pipeline/run/status?runId=${encodeURIComponent(runId)}`);
+
+          if (!statusRes.ok) {
+            // A genuine 404 means the run row is gone — stop polling and mark
+            // the step failed instead of leaking the interval forever.
+            if (statusRes.status === 404) {
+              updateStepState(stepId, { status: "failed", exitCode: -1, endTime: Date.now() });
+              runningStepsRef.current.delete(stepId);
+              stopPolling(stepId);
+            }
+            return;
+          }
+
           const { run } = await statusRes.json();
 
-          if (!run) return;
+          if (!run) {
+            updateStepState(stepId, { status: "failed", exitCode: -1, endTime: Date.now() });
+            runningStepsRef.current.delete(stepId);
+            stopPolling(stepId);
+            return;
+          }
 
           // Poll logs
-          const pid = currentProblemId;
+          const pid = currentProblemIdRef.current;
           if (pid) {
             const logsRes = await fetch(
               `/api/pipeline/run/logs?problemId=${encodeURIComponent(pid)}&stepId=${encodeURIComponent(stepId)}&tail=200`
@@ -376,7 +424,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       poll();
       pollRefs.current.set(stepId, setInterval(poll, 4000));
     },
-    [currentProblemId, updateStepState, stopPolling, savePipelineState]
+    [updateStepState, stopPolling, savePipelineState]
   );
 
   // Resume polling for any step that was running when state was loaded
@@ -387,6 +435,16 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       pending.forEach(({ runId, stepId }) => startPolling(runId, stepId));
     }
   }, [stateLoading, startPolling]);
+
+  // Clean up all pollers / pending saves on unmount.
+  useEffect(() => {
+    const polls = pollRefs.current;
+    return () => {
+      for (const timer of polls.values()) clearInterval(timer);
+      polls.clear();
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, []);
 
   const runStep = useCallback(
     async (state: StepState) => {
@@ -439,7 +497,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           runningStepsRef.current.set(state.id, data.runId);
           startPolling(data.runId, state.id);
         }
-      } catch (err) {
+      } catch {
         updateStepState(state.id, {
           status: "failed",
           exitCode: 1,
@@ -466,14 +524,14 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       // Stop request failed — process may have already exited
     }
 
-    // Update UI immediately — the close handler on the server will finalize
+    // Update UI immediately — the close handler on the server will finalize.
+    // Only this step is stopped; queued independent siblings keep running.
     updateStepState(stepId, {
       status: "failed",
       exitCode: -1,
       endTime: Date.now(),
     });
     runningStepsRef.current.delete(stepId);
-    setRunAllQueue([]);
     stopPolling(stepId);
     savePipelineState();
   }, [updateStepState, stopPolling, savePipelineState]);

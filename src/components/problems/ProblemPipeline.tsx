@@ -52,6 +52,10 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
 
   const workflowSteps = getWorkflowSteps(questionType, mode);
 
+  const allCompleted =
+    workflowSteps.length > 0 &&
+    workflowSteps.every((id) => stepStates.get(id)?.status === "completed");
+
   const enabledSubSteps = new Map(
     Array.from(stepStates.entries()).map(([id, state]) => [id, state.enabledSubSteps])
   );
@@ -111,21 +115,20 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
       <div className="flex items-center justify-between">
         <Separator className="flex-1" />
         <div className="px-4">
-          {isRunAllActive || isAnyRunning ? (
+          {isRunAllActive ? (
             <Button
               variant="destructive"
               size="sm"
               onClick={cancelRunAll}
-              disabled={!isRunAllActive}
             >
               <StopCircle className="mr-2 h-4 w-4" />
-              {isRunAllActive ? "Stop After Current Step" : "Running..."}
+              Cancel Queued Steps
             </Button>
           ) : (
             <Button
               size="sm"
               onClick={runAll}
-              disabled={isAnyRunning}
+              disabled={allCompleted}
             >
               <PlayCircle className="mr-2 h-4 w-4" />
               Run All
@@ -150,8 +153,6 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
               key={stepId}
               stepNumber={index + 1}
               stepState={state}
-              mode={mode}
-              isAnyRunning={isAnyRunning}
               previousCompleted={previousCompleted}
               onRun={runStep}
               onStop={stopStep}

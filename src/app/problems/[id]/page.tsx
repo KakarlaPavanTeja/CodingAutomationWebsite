@@ -152,11 +152,13 @@ export default function ProblemDetailPage() {
     };
   }, [problem?.name]);
 
-  // Poll every 5s while problem is processing or any run is still running
+  const anyRunning = runs.some((r) => r.status === "running");
+
+  // Poll every 5s while problem is processing or any run is still running.
+  // Depend on a derived boolean (not the `runs` array) so the interval isn't
+  // torn down and recreated on every poll.
   useEffect(() => {
-    const isActive =
-      problem?.status === "processing" ||
-      runs.some((r) => r.status === "running");
+    const isActive = problem?.status === "processing" || anyRunning;
     if (!isActive) return;
     const interval = setInterval(() => {
       fetch(`/api/problems/${id}`)
@@ -170,7 +172,7 @@ export default function ProblemDetailPage() {
         .catch(() => {});
     }, 5000);
     return () => clearInterval(interval);
-  }, [id, problem?.status, runs]);
+  }, [id, problem?.status, anyRunning]);
 
   const handleRequestDeletion = async () => {
     if (!deleteReason.trim() || deleteReason.trim().length < 5) {

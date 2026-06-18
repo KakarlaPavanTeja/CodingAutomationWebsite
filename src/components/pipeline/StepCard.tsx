@@ -9,13 +9,11 @@ import { ExecutionResults } from "./ExecutionResults";
 import { LogStream } from "./LogStream";
 import { getStepConfig, LANGUAGES } from "@/lib/pipeline-config";
 import { cn } from "@/lib/utils";
-import type { StepState, StepId, PipelineMode } from "@/types/pipeline";
+import type { StepState, StepId } from "@/types/pipeline";
 
 interface StepCardProps {
   stepNumber: number;
   stepState: StepState;
-  mode: PipelineMode;
-  isAnyRunning: boolean;
   previousCompleted: boolean;
   onRun: (state: StepState) => void;
   onStop?: (stepId: StepId) => void;
@@ -32,8 +30,6 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
 export function StepCard({
   stepNumber,
   stepState,
-  mode,
-  isAnyRunning,
   previousCompleted,
   onRun,
   onStop,
@@ -49,11 +45,13 @@ export function StepCard({
   const canRun = !isRunning && previousCompleted;
   const isExecution = stepState.id === "execute_tests_function" || stepState.id === "execute_tests_nonfunction";
 
-  // Live elapsed timer (lazy init avoids impure call during render)
+  // Live elapsed timer, ticking once a second while running. The displayed
+  // duration is clamped to >= 0 so a stale `now` can never render negative
+  // right after a (re)start.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (stepState.status !== "running" || !stepState.startTime) return;
-    const interval = setInterval(() => setNow(Date.now()), 3000);
+    const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
   }, [stepState.status, stepState.startTime]);
 
@@ -68,7 +66,7 @@ export function StepCard({
     stepState.startTime && stepState.endTime
       ? formatDuration(stepState.endTime - stepState.startTime)
       : stepState.startTime && stepState.status === "running"
-        ? formatDuration(now - stepState.startTime)
+        ? formatDuration(Math.max(0, now - stepState.startTime))
         : null;
 
   const hasLogs = stepState.logs.length > 0;
