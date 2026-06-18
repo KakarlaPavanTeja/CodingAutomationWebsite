@@ -9,7 +9,7 @@ import { ExecutionResults } from "./ExecutionResults";
 import { LogStream } from "./LogStream";
 import { getStepConfig, LANGUAGES } from "@/lib/pipeline-config";
 import { cn } from "@/lib/utils";
-import type { StepState, PipelineMode } from "@/types/pipeline";
+import type { StepState, StepId, PipelineMode } from "@/types/pipeline";
 
 interface StepCardProps {
   stepNumber: number;
@@ -18,7 +18,7 @@ interface StepCardProps {
   isAnyRunning: boolean;
   previousCompleted: boolean;
   onRun: (state: StepState) => void;
-  onStop?: () => void;
+  onStop?: (stepId: StepId) => void;
   onUpdateLanguages?: (languages: string[]) => void;
 }
 
@@ -43,7 +43,10 @@ export function StepCard({
   const [showRawLogs, setShowRawLogs] = useState(false);
 
   const isRunning = stepState.status === "running";
-  const canRun = !isAnyRunning && previousCompleted;
+  // A step can run as long as its prerequisite is met and it isn't already
+  // running — independent of whether OTHER steps are running, so siblings
+  // (editorial / JSON) can be launched concurrently.
+  const canRun = !isRunning && previousCompleted;
   const isExecution = stepState.id === "execute_tests_function" || stepState.id === "execute_tests_nonfunction";
 
   // Live elapsed timer (lazy init avoids impure call during render)
@@ -111,7 +114,7 @@ export function StepCard({
               <Button
                 size="sm"
                 variant="destructive"
-                onClick={() => onStop?.()}
+                onClick={() => onStop?.(stepState.id)}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="mr-1"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
                 Stop

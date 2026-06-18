@@ -77,7 +77,7 @@ interface PipelineContextType {
   setGlobalTestcaseCount: (count: number) => void;
   updateStepState: (stepId: StepId, partial: Partial<StepState>) => void;
   runStep: (state: StepState) => void;
-  stopStep: () => Promise<void>;
+  stopStep: (stepId: StepId) => Promise<void>;
   runAll: () => void;
   cancelRunAll: () => void;
   isRunAllActive: boolean;
@@ -104,10 +104,10 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     return map;
   });
 
-  const runningStepRef = useRef<StepId | null>(null);
-  const runningRunIdRef = useRef<string | null>(null);
+  // Per-step run tracking so independent steps can run concurrently.
+  const runningStepsRef = useRef<Map<StepId, string>>(new Map());
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingPollRef = useRef<{ runId: string; stepId: StepId } | null>(null);
+  const pendingPollsRef = useRef<Array<{ runId: string; stepId: StepId }>>([]);
 
   // When global languages change, sync execution steps that haven't been run yet
   const setGlobalLanguages = useCallback((langs: string[]) => {
@@ -262,15 +262,16 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         steps.forEach((id) => map.set(id, createInitialStepState(id)));
         setStepStates(map);
       }
-      // Store running run info for polling (started after this function)
+      // Store running run info for polling (started after this function).
+      // Multiple steps may be running concurrently (e.g. editorial + JSON).
       const runsRes = await fetch(`/api/pipeline/run/status?problemId=${encodeURIComponent(problemId)}`);
       const runsData = await runsRes.json();
-      const runningRun = (runsData.runs || []).find(
+      const runningRuns = (runsData.runs || []).filter(
         (r: { status: string }) => r.status === "running"
-      );
-      if (runningRun) {
-        runningStepRef.current = runningRun.step_id;
-        pendingPollRef.current = { runId: runningRun.id, stepId: runningRun.step_id };
+      ) as Array<{ id: string; step_id: StepId }>;
+      for (const r of runningRuns) {
+        runningStepsRef.current.set(r.step_id, r.id);
+        pendingPollsRef.current.push({ runId: r.id, stepId: r.step_id });
       }
     } catch {
       // Failed to load — use defaults
@@ -310,19 +311,21 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   }, [questionType, handleWorkflowChange]);
 
   // Poll for step status and logs
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // One poller per running step, keyed by stepId, so steps poll independently.
+  const pollRefs = useRef<Map<StepId, ReturnType<typeof setInterval>>>(new Map());
 
-  const stopPolling = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
+  const stopPolling = useCallback((stepId: StepId) => {
+    const timer = pollRefs.current.get(stepId);
+    if (timer) {
+      clearInterval(timer);
+      pollRefs.current.delete(stepId);
     }
   }, []);
 
   const startPolling = useCallback(
     (runId: string, stepId: StepId) => {
-      stopPolling();
-      runningRunIdRef.current = runId;
+      stopPolling(stepId);
+      runningStepsRef.current.set(stepId, runId);
 
       const poll = async () => {
         try {
@@ -360,9 +363,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
               exitCode: run.exit_code,
               endTime: run.finished_at ? new Date(run.finished_at).getTime() : Date.now(),
             });
-            runningStepRef.current = null;
-            runningRunIdRef.current = null;
-            stopPolling();
+            runningStepsRef.current.delete(stepId);
+            stopPolling(stepId);
             savePipelineState();
           }
         } catch {
@@ -372,24 +374,23 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
 
       // Poll immediately, then every 4 seconds
       poll();
-      pollRef.current = setInterval(poll, 4000);
+      pollRefs.current.set(stepId, setInterval(poll, 4000));
     },
     [currentProblemId, updateStepState, stopPolling, savePipelineState]
   );
 
   // Resume polling for any step that was running when state was loaded
   useEffect(() => {
-    if (!stateLoading && pendingPollRef.current) {
-      const { runId, stepId } = pendingPollRef.current;
-      pendingPollRef.current = null;
-      startPolling(runId, stepId);
+    if (!stateLoading && pendingPollsRef.current.length > 0) {
+      const pending = pendingPollsRef.current;
+      pendingPollsRef.current = [];
+      pending.forEach(({ runId, stepId }) => startPolling(runId, stepId));
     }
   }, [stateLoading, startPolling]);
 
   const runStep = useCallback(
     async (state: StepState) => {
-      stopPolling();
-      runningStepRef.current = state.id;
+      stopPolling(state.id);
 
       const startTime = Date.now();
       updateStepState(state.id, {
@@ -435,7 +436,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
 
         // Start polling for status and logs
         if (data.runId) {
-          runningRunIdRef.current = data.runId;
+          runningStepsRef.current.set(state.id, data.runId);
           startPolling(data.runId, state.id);
         }
       } catch (err) {
@@ -444,17 +445,16 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           exitCode: 1,
           endTime: Date.now(),
         });
-        runningStepRef.current = null;
+        runningStepsRef.current.delete(state.id);
         savePipelineState();
       }
     },
     [mode, globalLanguages, globalTestcaseCount, currentProblemId, updateStepState, savePipelineState, startPolling, stopPolling]
   );
 
-  const stopStep = useCallback(async () => {
-    const runId = runningRunIdRef.current;
-    const stepId = runningStepRef.current;
-    if (!runId || !stepId) return;
+  const stopStep = useCallback(async (stepId: StepId) => {
+    const runId = runningStepsRef.current.get(stepId);
+    if (!runId) return;
 
     try {
       await fetch("/api/pipeline/run/stop", {
@@ -472,69 +472,79 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       exitCode: -1,
       endTime: Date.now(),
     });
-    runningStepRef.current = null;
-    runningRunIdRef.current = null;
+    runningStepsRef.current.delete(stepId);
     setRunAllQueue([]);
-    stopPolling();
+    stopPolling(stepId);
     savePipelineState();
   }, [updateStepState, stopPolling, savePipelineState]);
 
   const isAnyRunning = Array.from(stepStates.values()).some((s) => s.status === "running");
   const isRunAllActive = runAllQueue.length > 0;
 
-  // Run All: queue all pending/failed steps from current workflow
+  // Run All: queue every not-yet-completed step from the current workflow.
+  // The auto-run effect drives execution, launching each step as soon as its
+  // real prerequisite is met — so independent siblings (editorial / JSON) run
+  // concurrently instead of one-at-a-time.
   const runAll = useCallback(() => {
     const steps = getWorkflowSteps(questionType, mode);
-    // Find the first step that isn't completed, queue from there
     const remaining = steps.filter((id) => {
       const state = stepStates.get(id);
       return state && state.status !== "completed";
     });
     if (remaining.length === 0) return;
-
-    // Start the first one immediately, queue the rest
-    const [first, ...rest] = remaining;
-    setRunAllQueue(rest);
-    const firstState = stepStates.get(first);
-    if (firstState && !isAnyRunning) {
-      runStep(firstState);
-    }
-  }, [questionType, mode, stepStates, isAnyRunning, runStep]);
+    setRunAllQueue(remaining);
+  }, [questionType, mode, stepStates]);
 
   const cancelRunAll = useCallback(() => {
     setRunAllQueue([]);
   }, []);
 
-  // Auto-run next queued step when current one finishes
+  // Auto-run driver: scan the whole queue and launch every step whose
+  // prerequisite has completed and that isn't already running. Steps still
+  // waiting on an in-flight prerequisite stay queued; steps whose prerequisite
+  // failed (or will never run) are dropped so the queue always drains.
   useEffect(() => {
-    if (runAllQueue.length === 0 || isAnyRunning) return;
+    if (runAllQueue.length === 0) return;
 
-    const nextId = runAllQueue[0];
-    const nextState = stepStates.get(nextId);
-
-    // Gate on the next step's real prerequisite: only run it once its
-    // prerequisite has completed. If the prerequisite did not complete
-    // (failed or skipped), skip just this step and keep draining the queue,
-    // so independent siblings off the same prerequisite (editorial / JSON)
-    // don't block one another.
     const steps = getWorkflowSteps(questionType, mode);
-    const prereq = getPrerequisiteStep(nextId, steps);
-    if (prereq) {
-      const prevState = stepStates.get(prereq);
-      if (!prevState || prevState.status !== "completed") {
-        setRunAllQueue((q) => q.slice(1));
-        return;
+    const toRun: StepState[] = [];
+    const remaining: StepId[] = [];
+    // Steps that are kept (waiting) or launched — used to decide whether a
+    // pending prerequisite is still going to run or was already dropped.
+    const alive = new Set<StepId>();
+
+    for (const id of runAllQueue) {
+      const state = stepStates.get(id);
+      // Drop steps that are done or already executing.
+      if (!state || state.status === "completed" || state.status === "running") {
+        continue;
       }
+
+      const prereq = getPrerequisiteStep(id, steps);
+      if (prereq) {
+        const prevStatus = stepStates.get(prereq)?.status;
+        if (prevStatus === "completed") {
+          // ready to run
+        } else if (prevStatus === "running" || (prevStatus === "pending" && alive.has(prereq))) {
+          // Prerequisite is in flight or still queued ahead — keep waiting.
+          remaining.push(id);
+          alive.add(id);
+          continue;
+        } else {
+          // Prerequisite failed / dropped / missing — skip this step.
+          continue;
+        }
+      }
+
+      toRun.push(state);
+      alive.add(id);
     }
 
-    if (nextState && nextState.status !== "completed") {
-      setRunAllQueue((q) => q.slice(1));
-      runStep(nextState);
-    } else {
-      // Already completed, skip to next
-      setRunAllQueue((q) => q.slice(1));
+    if (toRun.length > 0 || remaining.length !== runAllQueue.length) {
+      setRunAllQueue(remaining);
+      toRun.forEach((s) => runStep(s));
     }
-  }, [runAllQueue, isAnyRunning, stepStates, questionType, mode, runStep]);
+  }, [runAllQueue, stepStates, questionType, mode, runStep]);
 
   return (
     <PipelineContext.Provider
