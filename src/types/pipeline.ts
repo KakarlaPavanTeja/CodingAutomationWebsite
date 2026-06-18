@@ -37,6 +37,13 @@ export interface PipelineStepConfig {
   hasLanguageSelector: boolean;
   hasTestcaseCount: boolean;
   needsMode: boolean;
+  /**
+   * Explicit prerequisite step. When set, this step becomes runnable as soon as
+   * the named step completes, instead of depending on the immediately-previous
+   * step in the workflow array. Used to make sibling terminal steps (editorial
+   * and JSON) independent off `package_platform`.
+   */
+  prerequisite?: StepId;
 }
 
 export interface StepState {

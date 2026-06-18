@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from "react";
-import { getWorkflowSteps, getStepConfig, LANGUAGES } from "@/lib/pipeline-config";
+import { getWorkflowSteps, getStepConfig, getPrerequisiteStep, LANGUAGES } from "@/lib/pipeline-config";
 import type { QuestionType, PipelineMode, StepState, StepId, RunRequest, LogLine } from "@/types/pipeline";
 
 function parseLogContent(content: string, prevLogs?: LogLine[]): LogLine[] {
@@ -512,13 +512,17 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     const nextId = runAllQueue[0];
     const nextState = stepStates.get(nextId);
 
-    // Check if the previous step failed — stop the queue
+    // Gate on the next step's real prerequisite: only run it once its
+    // prerequisite has completed. If the prerequisite did not complete
+    // (failed or skipped), skip just this step and keep draining the queue,
+    // so independent siblings off the same prerequisite (editorial / JSON)
+    // don't block one another.
     const steps = getWorkflowSteps(questionType, mode);
-    const nextIndex = steps.indexOf(nextId);
-    if (nextIndex > 0) {
-      const prevState = stepStates.get(steps[nextIndex - 1]);
-      if (prevState && prevState.status === "failed") {
-        setRunAllQueue([]);
+    const prereq = getPrerequisiteStep(nextId, steps);
+    if (prereq) {
+      const prevState = stepStates.get(prereq);
+      if (!prevState || prevState.status !== "completed") {
+        setRunAllQueue((q) => q.slice(1));
         return;
       }
     }

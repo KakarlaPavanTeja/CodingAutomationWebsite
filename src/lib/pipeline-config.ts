@@ -97,6 +97,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: false,
     hasTestcaseCount: false,
     needsMode: false,
+    prerequisite: "package_platform",
   },
   {
     id: "prepare_platform_json",
@@ -107,6 +108,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: false,
     hasTestcaseCount: false,
     needsMode: true,
+    prerequisite: "package_platform",
   },
 ];
 
@@ -139,6 +141,20 @@ export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode)
 
 export function getStepConfig(stepId: StepId): PipelineStepConfig {
   return STEP_CONFIGS.find((s) => s.id === stepId)!;
+}
+
+/**
+ * Returns the step that must complete before `stepId` can run, given a workflow.
+ * If the step declares an explicit `prerequisite`, that is used; otherwise it
+ * falls back to the immediately-previous step in the workflow array. Returns
+ * `null` when the step has no prerequisite (e.g. the first step).
+ */
+export function getPrerequisiteStep(stepId: StepId, workflowSteps: StepId[]): StepId | null {
+  const config = getStepConfig(stepId);
+  if (config.prerequisite) return config.prerequisite;
+  const index = workflowSteps.indexOf(stepId);
+  if (index <= 0) return null;
+  return workflowSteps[index - 1];
 }
 
 export function buildCommand(

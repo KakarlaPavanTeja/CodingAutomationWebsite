@@ -6,7 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { GlobalConfig } from "@/components/pipeline/GlobalConfig";
 import { StepCard } from "@/components/pipeline/StepCard";
-import { getWorkflowSteps } from "@/lib/pipeline-config";
+import { getWorkflowSteps, getPrerequisiteStep } from "@/lib/pipeline-config";
 import { usePipeline } from "@/lib/pipeline-context";
 import { Loader2, PlayCircle, StopCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -140,9 +140,10 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
           const state = stepStates.get(stepId);
           if (!state) return null;
 
+          const prereq = getPrerequisiteStep(stepId, workflowSteps);
           const previousCompleted =
-            index === 0 ||
-            stepStates.get(workflowSteps[index - 1])?.status === "completed";
+            prereq === null ||
+            stepStates.get(prereq)?.status === "completed";
 
           return (
             <StepCard
