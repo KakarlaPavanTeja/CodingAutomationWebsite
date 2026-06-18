@@ -118,7 +118,8 @@ The problem description REQUIRES these specific names:
 2. Rename parameters to EXACTLY: {', '.join(f'`{p}`' for p in description_signature.get('parameters', []))}
 3. You MUST update all logic references in the function body to use these new names.
 4. DO NOT use the original names from the input code.
-5. This is a HARD REQUIREMENT.
+5. **VERBATIM — DO NOT RE-CASE**: Use the function and parameter names character-for-character, with their EXACT capitalization. Do NOT apply any language naming convention (no snake_case, PascalCase, etc.). The name must stay byte-for-byte identical to what the description specifies.
+6. This is a HARD REQUIREMENT.
 """
 
     prompt = f"""You are a Code Normalizer. Your task is to normalize the provided code to follow strict coding standards.

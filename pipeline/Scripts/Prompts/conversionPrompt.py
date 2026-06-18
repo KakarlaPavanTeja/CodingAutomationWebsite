@@ -140,6 +140,7 @@ The problem description REQUIRES these specific names:
 2. Use parameter names EXACTLY: {', '.join(description_signature.get('parameters', []))}
 3. Update all logic references to use these new names.
 4. IGNORE the function/parameter names in the source code; the description is the ONLY source of truth for naming.
+5. **VERBATIM — DO NOT RE-CASE**: Use the function name and parameter names **character-for-character, with their EXACT capitalization**. Do NOT apply {target_language} naming conventions: do NOT convert to snake_case, PascalCase, kebab-case, or any other style. For example, if the name is `findMatchingElements`, it MUST stay `findMatchingElements` in {target_language} — never `find_matching_elements`. The identifiers must be byte-for-byte identical across every language.
 """
 
     prompt = f"""You are an expert Code Translator. Your task is to **convert the provided Source Code** into **{target_language}**.

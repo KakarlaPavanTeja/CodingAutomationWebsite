@@ -5,3 +5,4 @@
 - [Pipeline cost POST URL](pipeline-internal-usage-url.md) — internal usage POST base must be env-aware (deployment→APP_URL, dev→REPLIT_DEV_DOMAIN); wrong base → 404 HTML → rows silently go "local only". Dev/prod DBs are separate.
 - [Editorial prompt ↔ renderer contract](editorial-prompt-renderer-contract.md) — pseudocode MUST be `<CodeBlock language={customtext}...>` wrapping a ```pseudocode fence (downstream platform requires it); no tables/dividers.
 - [Editorial reasoning auto-router](editorial-reasoning-router.md) — a classifier picks A/B/C → reasoning off/medium/high per problem; call_llm gained per-call reasoning_effort/max_tokens overrides (_USE_ENV sentinel vs explicit None=off).
+- [Cross-language function naming](cross-language-function-naming.md) — 4 lang solutions only share a function name via the canonical description_signature; naming step must run with "codes" and names used verbatim (no per-lang re-casing).

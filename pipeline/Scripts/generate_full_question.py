@@ -158,6 +158,39 @@ def parse_problem_md(file_path):
 
     return problem_name, question_type, scenario_level, content
 
+def _parse_signature(raw):
+    """Robustly parse the function-signature JSON the extractor returns.
+
+    The model may wrap the JSON in a code fence or add stray prose, so we strip
+    fences and grab the first {...} block before parsing. Returns a normalized
+    dict (with a non-empty function_name and a clean parameter list) or None.
+    """
+    if not raw:
+        return None
+    text = raw.strip()
+    if text.startswith("```"):
+        # Drop the opening fence line and any trailing fence.
+        text = text.split('\n', 1)[-1].rsplit('```', 1)[0]
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        text = match.group(0)
+    try:
+        data = json.loads(text)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    name = str(data.get("function_name") or "").strip()
+    if not name:
+        return None
+    params = data.get("parameters") or []
+    if not isinstance(params, list):
+        params = []
+    data["function_name"] = name
+    data["parameters"] = [str(p).strip() for p in params if str(p).strip()]
+    return data
+
+
 def detect_user_solution():
     """Find user's solution file in Inputs/ directory"""
     extensions = {
@@ -245,25 +278,31 @@ def main():
             desc_response = ""
 
     # Step 2: Naming Enforcement (Renaming)
+    #
+    # This step extracts ONE canonical function signature from the description and
+    # normalizes the source code to it. That signature is then handed to every
+    # language conversion in Step 3, which is the ONLY thing that keeps function
+    # and parameter names identical across C++/Python/Java/Node.js. It therefore
+    # MUST run whenever code translation runs — otherwise each language is named
+    # independently by its own LLM call (and drifts, e.g. Python snake_case).
     description_signature = None
-    if "naming" in selected_steps:
+    run_naming = "naming" in selected_steps or "codes" in selected_steps
+    if run_naming:
         print("\n" + "=" * 60)
         print("STEP 2: Naming Enforcement")
         print("=" * 60)
 
         from Prompts.signatureExtractionPrompt import get_signature_extraction_prompt
 
-        sig_prompt = get_signature_extraction_prompt(desc_response)
-        sig_response, sig_usage = call_llm(sig_prompt, "", purpose="chat")
-        update_usage(sig_usage.get('prompt_tokens', 0), sig_usage.get('completion_tokens', 0), f"{problem_name}_signature", model=sig_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=sig_usage.get('cost', 0.0))
+        if not desc_response.strip():
+            print("⚠ No description available — cannot extract a canonical signature. "
+                  "Function names may differ across languages.")
+        else:
+            sig_prompt = get_signature_extraction_prompt(desc_response)
+            sig_response, sig_usage = call_llm(sig_prompt, "", purpose="chat")
+            update_usage(sig_usage.get('prompt_tokens', 0), sig_usage.get('completion_tokens', 0), f"{problem_name}_signature", model=sig_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=sig_usage.get('cost', 0.0))
 
-        try:
-            clean_sig = sig_response.strip()
-            if clean_sig.startswith("```"):
-                clean_sig = clean_sig.split('\n', 1)[1].rsplit('\n', 1)[0].strip()
-            description_signature = json.loads(clean_sig)
-        except:
-            pass
+            description_signature = _parse_signature(sig_response)
 
         if description_signature:
             print(f"Enforcing function name: {description_signature.get('function_name')}")
@@ -275,6 +314,9 @@ def main():
                 renamed_code = renamed_code.strip().split('\n', 1)[1].rsplit('\n', 1)[0].strip()
             user_code = clean_generated_code(renamed_code, detected_lang)
             print("✓ Given code updated with description naming and normalization")
+        else:
+            print("⚠ Could not extract a function signature from the description; "
+                  "skipping rename. Translated languages may use inconsistent names.")
     else:
         print("\n⏭ Skipping Step 2: Naming Enforcement")
 
