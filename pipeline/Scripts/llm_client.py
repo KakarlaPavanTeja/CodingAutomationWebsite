@@ -55,8 +55,11 @@ from openai import OpenAI, PermissionDeniedError
 # HIDE their reasoning, so during the (long) think phase NOTHING streams over the
 # socket. That silent window outlasts the proxy gateway's idle timeout and the
 # connection is severed mid-stream → empty content. Gemini 2.5 Pro STREAMS its
-# reasoning tokens as it thinks, so the socket is never idle and the gateway
-# never cuts it — even at the max thinking budget — with no quality compromise.
+# reasoning tokens (on a separate `reasoning` delta field) as it thinks, which
+# keeps the socket warm during the think phase. NOTE: this is necessary but not
+# sufficient — the gateway can STILL sever the stream during a silent pause
+# between the reasoning and content phases, so call_llm also retries severed
+# streams (see the streaming loop / OPENROUTER_STREAM_RETRIES).
 _PURPOSE_DEFAULTS: dict[str, str] = {
     "testcases": "google/gemini-2.5-pro",
     "chat": "openai/gpt-5.4",
@@ -394,13 +397,13 @@ def _resolve_reasoning_effort(purpose: str) -> str | None:
     if p == "testcases":
         # Default "high" — Gemini 2.5 Pro's max thinking budget, for the best
         # generator quality. Unlike OpenAI's reasoning models (which HIDE their
-        # reasoning and therefore stream ZERO bytes during the think phase, so
-        # the silent socket outlasts the proxy gateway's idle timeout and gets
-        # severed mid-stream → empty content), Gemini 2.5 Pro STREAMS its
-        # reasoning tokens as it thinks. The socket stays warm throughout even at
-        # full effort, so the gateway never cuts it. Override with
-        # OPENAI_REASONING_EFFORT_TESTCASES if needed; the empty-content path in
-        # call_llm also self-heals by retrying once at a lower effort.
+        # reasoning and therefore stream ZERO bytes during the think phase),
+        # Gemini 2.5 Pro STREAMS its reasoning tokens as it thinks, which helps
+        # keep the socket warm. That alone is NOT enough: the gateway can still
+        # sever the stream during a silent pause between the reasoning and
+        # content phases, so call_llm retries severed streams at the same effort
+        # (OPENROUTER_STREAM_RETRIES) and, as a last resort for testcases, once
+        # at a lower effort. Override with OPENAI_REASONING_EFFORT_TESTCASES.
         raw = os.environ.get("OPENAI_REASONING_EFFORT_TESTCASES")
         effort = "high" if raw is None else str(raw).strip().lower()
         return effort if effort in _REASONING_EFFORT_ALLOWED else None
@@ -516,37 +519,87 @@ def call_llm(
 
     client = _make_client()
     started = time.monotonic()
+    severed = False
 
     if use_streaming:
         kwargs["stream"] = True
         kwargs["stream_options"] = {"include_usage": True}
-        parts: list[str] = []
-        usage_obj = None
-        resolved_model = model
+        # The proxy gateway severs a stream whose socket goes idle for too long —
+        # e.g. when the model pauses between its (long) reasoning phase and the
+        # first content token. A severed stream simply ends with NO finish_reason
+        # and no usage summary, which is distinct from a clean finish or a
+        # budget-capped ("length") finish. Because the stall is intermittent,
+        # retry the whole streaming attempt at the SAME effort a few times before
+        # giving up. Override the count with OPENROUTER_STREAM_RETRIES.
+        try:
+            stream_attempts = max(1, int(os.environ.get("OPENROUTER_STREAM_RETRIES", "3")))
+        except ValueError:
+            stream_attempts = 3
+        content = ""
+        usage = _extract_usage(None, model)
         finish_reason = None
-        stream = _create_with_retry(client, kwargs)
-        last_log = time.monotonic()
-        for chunk in stream:
-            if getattr(chunk, "model", None):
-                resolved_model = chunk.model
-            if chunk.choices:
-                delta = chunk.choices[0].delta
-                if delta is not None and getattr(delta, "content", None):
-                    parts.append(delta.content)
-                if getattr(chunk.choices[0], "finish_reason", None):
-                    finish_reason = chunk.choices[0].finish_reason
-            if getattr(chunk, "usage", None):
-                usage_obj = chunk.usage
-            now = time.monotonic()
-            if now - last_log >= 30.0:
+        for attempt in range(stream_attempts):
+            parts: list[str] = []
+            usage_obj = None
+            resolved_model = model
+            finish_reason = None
+            content_chars = 0
+            reasoning_chars = 0
+            stream = _create_with_retry(client, kwargs)
+            last_log = time.monotonic()
+            for chunk in stream:
+                if getattr(chunk, "model", None):
+                    resolved_model = chunk.model
+                if chunk.choices:
+                    delta = chunk.choices[0].delta
+                    if delta is not None:
+                        c = getattr(delta, "content", None)
+                        if c:
+                            parts.append(c)
+                            content_chars += len(c)
+                        # Reasoning tokens stream on a SEPARATE `reasoning` field
+                        # (not `content`); count them so the heartbeat reflects
+                        # real socket activity during the think phase instead of
+                        # falsely showing chars=0 while the model is working.
+                        r = getattr(delta, "reasoning", None)
+                        if r is None:
+                            extra = getattr(delta, "model_extra", None) or {}
+                            r = extra.get("reasoning") or extra.get("reasoning_content")
+                        if r:
+                            reasoning_chars += len(r)
+                    if getattr(chunk.choices[0], "finish_reason", None):
+                        finish_reason = chunk.choices[0].finish_reason
+                if getattr(chunk, "usage", None):
+                    usage_obj = chunk.usage
+                now = time.monotonic()
+                if now - last_log >= 30.0:
+                    print(
+                        f"[LLM] streaming heartbeat elapsed={now - started:.1f}s "
+                        f"content_chars={content_chars} reasoning_chars={reasoning_chars}",
+                        flush=True,
+                    )
+                    last_log = now
+            content = "".join(parts).strip()
+            usage = _extract_usage(usage_obj, resolved_model)
+            # A clean completion ALWAYS ends with a finish_reason; its absence
+            # means the gateway closed the connection mid-stream.
+            severed = finish_reason is None
+            if not severed:
+                break
+            if attempt < stream_attempts - 1:
+                wait = 2 ** attempt
                 print(
-                    f"[LLM] streaming heartbeat elapsed={now - started:.1f}s "
-                    f"chars={sum(len(p) for p in parts)}",
+                    f"[LLM] stream severed by gateway (no finish_reason; "
+                    f"content_chars={content_chars} reasoning_chars={reasoning_chars}) "
+                    f"— retrying {attempt + 1}/{stream_attempts - 1} at same effort "
+                    f"in {wait}s",
                     flush=True,
                 )
-                last_log = now
-        content = "".join(parts).strip()
-        usage = _extract_usage(usage_obj, resolved_model)
+                time.sleep(wait)
+        # A severed stream may have leaked partial (truncated) content — never
+        # trust it; blank it so the failure / self-heal path below takes over.
+        if severed:
+            content = ""
     else:
         resp = _create_with_retry(client, kwargs)
         content = (resp.choices[0].message.content or "").strip()
@@ -595,14 +648,24 @@ def call_llm(
                 max_tokens=max_tokens,
                 _allow_tc_downgrade=False,
             )
-        hint = (
-            " The output token budget was exhausted (likely by reasoning) before "
-            "any content was produced — raise OPENAI_MAX_TOKENS / "
-            f"OPENAI_MAX_TOKENS_{_ENV_SUFFIX[_canonical_purpose(purpose)]} or lower "
-            "the reasoning effort."
-            if finish_reason == "length"
-            else ""
-        )
+        if finish_reason == "length":
+            hint = (
+                " The output token budget was exhausted (likely by reasoning) "
+                "before any content was produced — raise OPENAI_MAX_TOKENS / "
+                f"OPENAI_MAX_TOKENS_{_ENV_SUFFIX[_canonical_purpose(purpose)]} or "
+                "lower the reasoning effort."
+            )
+        elif severed:
+            hint = (
+                " The proxy gateway severed the stream before completion (no "
+                "finish_reason) — most likely its idle timeout firing during a "
+                "long silent pause between the model's reasoning and content "
+                "phases. This is intermittent; retry. If it persists, the "
+                "gateway's stream idle timeout needs raising "
+                "(or set OPENROUTER_STREAM_RETRIES higher)."
+            )
+        else:
+            hint = ""
         raise RuntimeError(
             f"LLM returned empty content (purpose={purpose}, model={usage['model']}, "
             f"finish_reason={finish_reason}, completion_tokens="
