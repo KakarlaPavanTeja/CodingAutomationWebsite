@@ -186,43 +186,61 @@ class _GzipRequestTransport(httpx.BaseTransport):
         self._inner.close()
 
 
-def _build_http_client() -> httpx.Client:
-    """httpx client verifying TLS via the system CA bundle, gzipping requests."""
+_DIRECT_BASE_URL = "https://openrouter.ai/api/v1"
+_GATEWAY_BASE_URL = "https://open-router-gateway.replit.app/api/proxy"
+
+
+def _is_gateway_url(base_url: str) -> bool:
+    """True when base_url points at the Replit-hosted OpenRouter proxy gateway."""
+    return "replit.app" in (base_url or "")
+
+
+def _build_http_client(use_gzip: bool) -> httpx.Client:
+    """httpx client verifying TLS via the system CA bundle.
+
+    Request-body gzip is ONLY needed to slip code-heavy prompts past the Replit
+    gateway's WAF; calling openrouter.ai directly has no such WAF, and gzipping
+    the body there is unnecessary (and risks the upstream not decompressing it),
+    so the caller passes use_gzip=False for direct calls.
+    """
     inner = httpx.HTTPTransport(verify=_ca_bundle())
-    if os.environ.get("OPENROUTER_DISABLE_GZIP", "").strip().lower() in ("1", "true", "yes"):
-        transport: httpx.BaseTransport = inner
-    else:
-        transport = _GzipRequestTransport(inner)
+    transport: httpx.BaseTransport = _GzipRequestTransport(inner) if use_gzip else inner
     return httpx.Client(transport=transport)
 
 
 def _make_client() -> OpenAI:
     """
-    Build an OpenAI SDK client pointed at the OpenRouter proxy gateway.
+    Build an OpenAI SDK client for OpenRouter.
 
-    Calls go through the Replit-hosted OpenRouter proxy gateway (NOT openrouter.ai
-    directly). Base url defaults to the shared gateway endpoint and authenticates
-    with OPENROUTER_API_KEY (the gateway API key). Override the endpoint with
-    OPENROUTER_BASE_URL if it ever changes.
+    Calls go DIRECTLY to openrouter.ai (https://openrouter.ai/api/v1) by default,
+    authenticating with OPENROUTER_API_KEY (a real OpenRouter API key). To route
+    through the Replit-hosted OpenRouter proxy gateway instead (Replit-managed
+    billing), set OPENROUTER_BASE_URL to the gateway endpoint
+    (https://open-router-gateway.replit.app/api/proxy) and use the gateway key.
 
-    Request bodies are gzip-compressed (see _GzipRequestTransport) to avoid the
-    gateway WAF false-positive on code-heavy prompts.
+    Request bodies are gzip-compressed (see _GzipRequestTransport) ONLY when
+    talking to the gateway, to avoid its WAF false-positive on code-heavy
+    prompts; direct calls skip gzip. Force-disable with OPENROUTER_DISABLE_GZIP=1.
     """
-    base_url = os.environ.get(
-        "OPENROUTER_BASE_URL", "https://open-router-gateway.replit.app/api/proxy"
-    )
+    base_url = os.environ.get("OPENROUTER_BASE_URL", _DIRECT_BASE_URL)
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "OPENROUTER_API_KEY is not set — provide the OpenRouter proxy gateway "
-            "API key."
+            "OPENROUTER_API_KEY is not set — provide a real OpenRouter API key "
+            "(or set OPENROUTER_BASE_URL to the proxy gateway and use the gateway key)."
         )
+    disable_gzip = os.environ.get("OPENROUTER_DISABLE_GZIP", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    use_gzip = _is_gateway_url(base_url) and not disable_gzip
     max_retries = max(0, int(os.environ.get("OPENAI_MAX_RETRIES", "8")))
     return OpenAI(
         base_url=base_url,
         api_key=api_key,
         max_retries=max_retries,
-        http_client=_build_http_client(),
+        http_client=_build_http_client(use_gzip),
     )
 
 
