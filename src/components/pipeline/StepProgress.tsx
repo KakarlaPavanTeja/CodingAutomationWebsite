@@ -3,6 +3,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import type { LogLine, StepId } from "@/types/pipeline";
+import { parseExecutionLogs, type LangExecState } from "@/lib/execution-parser";
 
 interface ProgressItem {
   label: string;
@@ -12,7 +13,13 @@ interface ProgressItem {
 }
 
 // Parse log lines to extract structured progress for each step type
-function parseProgress(stepId: StepId, logs: LogLine[], isRunning: boolean): ProgressItem[] {
+function parseProgress(
+  stepId: StepId,
+  logs: LogLine[],
+  isRunning: boolean,
+  exitCode: number | null,
+  enabledLanguages?: string[]
+): ProgressItem[] {
   const lines = logs.map((l) => l.line);
   const items: ProgressItem[] = [];
 
@@ -43,7 +50,7 @@ function parseProgress(stepId: StepId, logs: LogLine[], isRunning: boolean): Pro
   }
 
   if (stepId === "execute_tests_function" || stepId === "execute_tests_nonfunction") {
-    return parseExecutionProgress(logs, isRunning);
+    return parseExecutionProgress(logs, isRunning, exitCode, enabledLanguages);
   }
 
   if (stepId === "generate_enrichment") {
@@ -123,66 +130,53 @@ function extractSteps(steps: StepPattern[], logs: LogLine[], isRunning: boolean)
   return items;
 }
 
-function parseExecutionProgress(logs: LogLine[], isRunning: boolean): ProgressItem[] {
-  const items: ProgressItem[] = [];
-  const allText = logs.map((l) => l.line).join("\n");
-
-  // Detect language sections: "TESTING PYTHON - N TEST CASES"
-  const langPattern = /TESTING\s+(\S+)\s+-\s+(\d+)\s+TEST\s+CASES/gi;
-  let match;
-  const languages: { name: string; count: number; startTs?: number }[] = [];
-
-  while ((match = langPattern.exec(allText)) !== null) {
-    const raw = match[1];
-    // Capitalize nicely: "PYTHON" -> "Python", "C++" -> "C++"
-    const displayName = raw.length > 3 ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase() : raw;
-    languages.push({ name: displayName, count: parseInt(match[2]) });
+// Map the shared parser's per-language terminal state onto the progress-list
+// status vocabulary so the top list and the result cards never disagree.
+function stateToStatus(state: LangExecState): ProgressItem["status"] {
+  switch (state) {
+    case "passed":
+      return "completed";
+    case "failed":
+    case "error":
+      return "failed";
+    case "running":
+      return "running";
+    default:
+      return "pending"; // pending / not_run
   }
+}
 
-  // Find timestamps for each language
-  for (const lang of languages) {
-    const escapedName = lang.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp(`TESTING\\s+${escapedName}`, "i");
-    for (const log of logs) {
-      if (re.test(log.line)) {
-        lang.startTs = log.ts;
-        break;
-      }
+function parseExecutionProgress(
+  logs: LogLine[],
+  isRunning: boolean,
+  exitCode: number | null,
+  enabledLanguages?: string[]
+): ProgressItem[] {
+  const { langs } = parseExecutionLogs(logs, { enabledLanguages, isRunning, exitCode });
+
+  const items: ProgressItem[] = langs.map((lang) => {
+    const processed = lang.passed + lang.failed;
+    const total = lang.total || processed;
+    let label = `${lang.name} (${processed}/${total})`;
+    if (lang.state === "not_run") {
+      label = `${lang.name} (didn't run)`;
+    } else if (lang.state === "error") {
+      label = `${lang.name} (stopped at ${processed}/${total}${
+        lang.errorReason ? ` — ${lang.errorReason.toLowerCase()}` : ""
+      })`;
     }
-  }
-
-  // Count progress per language from "[LANG] Progress X/Y" lines
-  for (const lang of languages) {
-    const escapedName = lang.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const progressRe = new RegExp(`\\[${escapedName}\\]\\s+Progress\\s+(\\d+)/(\\d+)\\s+-\\s+(\\w+)`, "gi");
-    let lastProgress = 0;
-    let lastTotal = lang.count;
-    let allCorrect = true;
-    let hasError = false;
-    let endTs: number | undefined;
-
-    for (const log of logs) {
-      const m = progressRe.exec(log.line);
-      if (m) {
-        lastProgress = parseInt(m[1]);
-        lastTotal = parseInt(m[2]);
-        if (m[3] !== "CORRECT") allCorrect = false;
-        if (/ERROR|FAIL/i.test(m[3])) hasError = true;
-        endTs = log.ts;
-      }
-      progressRe.lastIndex = 0;
-    }
-
-    const done = lastProgress >= lastTotal;
-    items.push({
-      label: `${lang.name} (${lastProgress}/${lastTotal})`,
-      status: done ? (hasError ? "failed" : "completed") : (lang.startTs ? "running" : "pending"),
+    return {
+      label,
+      status: stateToStatus(lang.state),
       startTs: lang.startTs,
-      endTs: done ? endTs : undefined,
-    });
-  }
+      endTs:
+        lang.state === "running" || lang.state === "pending" || lang.state === "not_run"
+          ? undefined
+          : lang.endTs,
+    };
+  });
 
-  // If no languages detected yet but running
+  // If no languages detected yet but running, show an initializing row.
   if (items.length === 0 && isRunning && logs.length > 1) {
     items.push({ label: "Initializing", status: "running", startTs: logs[0]?.ts });
   }
@@ -232,10 +226,14 @@ interface StepProgressProps {
   logs: LogLine[];
   isRunning: boolean;
   exitCode: number | null;
+  enabledLanguages?: string[];
 }
 
-export function StepProgress({ stepId, logs, isRunning, exitCode }: StepProgressProps) {
-  const items = useMemo(() => parseProgress(stepId, logs, isRunning), [stepId, logs, isRunning]);
+export function StepProgress({ stepId, logs, isRunning, exitCode, enabledLanguages }: StepProgressProps) {
+  const items = useMemo(
+    () => parseProgress(stepId, logs, isRunning, exitCode, enabledLanguages),
+    [stepId, logs, isRunning, exitCode, enabledLanguages]
+  );
 
   // Tick counter to force re-render every second for live timers
   const [, setTick] = useState(0);

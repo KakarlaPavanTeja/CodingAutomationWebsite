@@ -236,9 +236,23 @@ def main():
             language_results.append(test_res)
 
         all_results[lang] = language_results
-        
+
+        # Additive, machine-readable end-of-language marker for the UI parser.
+        if global_error_occurred:
+            _outcome = "halted"
+        elif passed_count < len(language_results) or len(language_results) < len(testcases):
+            _outcome = "failed"
+        else:
+            _outcome = "passed"
+        print(
+            f"[EXEC_EVENT] lang_end name={lang} total={len(testcases)} "
+            f"processed={len(language_results)} passed={passed_count} outcome={_outcome}",
+            flush=True,
+        )
+
         if global_error_occurred:
             print(f"\n🚨 Halting execution for all remaining languages due to error in {lang.upper()}.")
+            print(f"[EXEC_EVENT] run_halted after={lang}", flush=True)
             break
 
     # 5. Final Summary
@@ -270,6 +284,7 @@ def main():
 
     # 6. Generate Summary Report
     generate_summary_report(all_results, testcases)
+    print("[EXEC_EVENT] run_end", flush=True)
 
 def generate_summary_report(results, testcases):
     """Generates a markdown summary report."""

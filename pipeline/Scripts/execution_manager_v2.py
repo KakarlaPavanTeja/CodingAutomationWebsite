@@ -354,6 +354,25 @@ def _print_progress(
     print(" | ".join(parts), flush=True)
 
 
+def _emit_lang_end(lang, total, processed, passed, halted):
+    """Additive, machine-readable end-of-language marker for the UI parser.
+
+    Lets the frontend mark a language as terminal (and distinguish a halt from a
+    normal completion) without changing any execution behaviour.
+    """
+    if halted:
+        outcome = "halted"
+    elif passed < processed or processed < total:
+        outcome = "failed"
+    else:
+        outcome = "passed"
+    print(
+        f"[EXEC_EVENT] lang_end name={lang} total={total} "
+        f"processed={processed} passed={passed} outcome={outcome}",
+        flush=True,
+    )
+
+
 def _print_error_table(all_results):
     headers = ["Language", "Test", "Order", "Status", "Error"]
     rows = []
@@ -949,8 +968,10 @@ def run_all_tests_nonfunction(base_dir=None, selected_lang=None):
         emit_language_results("execute_tests", "Reference Solution", 0, lang, language_results)
         _print_language_results_table(lang, language_results)
         print(f"{lang}: passed {passed_count}/{len(language_results)}")
+        _emit_lang_end(lang, len(testcases), len(language_results), passed_count, global_error_occurred)
         if global_error_occurred:
             print(f"Halting remaining languages due to error in {lang}.")
+            print(f"[EXEC_EVENT] run_halted after={lang}")
             break
 
     write_execution_results_file(
@@ -1184,8 +1205,10 @@ def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
         emit_language_results("execute_tests", "Reference Solution", 0, lang, language_results)
         _print_language_results_table(lang, language_results)
         print(f"{lang}: passed {passed_count}/{len(language_results)}")
+        _emit_lang_end(lang, len(testcases), len(language_results), passed_count, global_error_occurred)
         if global_error_occurred:
             print(f"Halting remaining languages due to error in {lang}.")
+            print(f"[EXEC_EVENT] run_halted after={lang}")
             break
 
     write_execution_results_file(
@@ -1271,6 +1294,7 @@ def main():
     _print_error_table(all_results)
     print(f"All passed: {all_passed}")
     print(f"Total testcases processed: {len(testcases)}")
+    print("[EXEC_EVENT] run_end", flush=True)
 
 
 if __name__ == "__main__":

@@ -169,6 +169,7 @@ export function StepCard({
             logs={stepState.logs}
             isRunning={isRunning}
             exitCode={stepState.exitCode}
+            enabledLanguages={isExecution ? stepState.enabledLanguages : undefined}
           />
 
           {/* Execution results (only for execute steps) */}
@@ -176,6 +177,8 @@ export function StepCard({
             <ExecutionResults
               logs={stepState.logs}
               isRunning={isRunning}
+              exitCode={stepState.exitCode}
+              enabledLanguages={stepState.enabledLanguages}
             />
           )}
 
