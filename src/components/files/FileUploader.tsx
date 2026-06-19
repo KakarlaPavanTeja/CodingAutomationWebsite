@@ -237,7 +237,7 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
               <span className="text-sm font-medium">Difficulty</span>
               <div className="flex gap-1.5">
                 {([
-                  { id: "", label: "None" },
+                  { id: "", label: "AI's choice" },
                   { id: "easy", label: "Easy" },
                   { id: "medium", label: "Medium" },
                   { id: "hard", label: "Hard" },
