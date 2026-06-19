@@ -198,6 +198,7 @@ def _interpret(result, expected_output):
         "memory_mb": None,
         "status": None,
         "error": None,
+        "expected": expected_output,
     }
     if not result:
         test_res["status"] = "API_ERROR"
@@ -231,6 +232,8 @@ def _interpret(result, expected_output):
     stderr_entry = next((o for o in output_entries if o.get("output_type") == "STDERR"), None)
     actual = _decode_output_contents(stdout_entry)
     stderr = _decode_output_contents(stderr_entry)
+    test_res["got"] = actual
+    test_res["stderr"] = stderr
 
     if test_res["status"] == "CORRECT":
         test_res["passed"] = True
@@ -264,6 +267,7 @@ def _run_one(base_dir, mode, lang, config, prepared_code, driver, node_h,
         order = tc.get("order", i + 1)
         expected_output = (tc.get("output") or "").strip()
 
+        result = None
         try:
             if mode == "function":
                 files_payload = _build_files_payload(config, prepared_code, driver, node_h)
@@ -285,6 +289,9 @@ def _run_one(base_dir, mode, lang, config, prepared_code, driver, node_h,
 
         test_res["test_index"] = i + 1
         test_res["order"] = order
+        test_res.setdefault("input", tc.get("input", ""))
+        test_res.setdefault("expected", expected_output)
+        test_res.setdefault("input_s3_used", bool(result.get("_input_s3_used")) if result else False)
         language_results.append(test_res)
         emit_tc_result(STEP, label, index, lang, test_res)
 

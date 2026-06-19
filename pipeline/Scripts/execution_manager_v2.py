@@ -257,6 +257,35 @@ def _safe_text(value, max_len=80):
     return text
 
 
+# Max characters kept per IO field (input/expected/got/stderr) in emitted
+# results. Newlines are preserved (unlike _safe_text) so the frontend can show
+# the real multi-line testcase IO. Override with EXEC_RESULT_IO_CAP.
+_IO_CAP = int(os.environ.get("EXEC_RESULT_IO_CAP", "4000"))
+
+
+def _cap_text(value, max_len=_IO_CAP):
+    if value is None:
+        return ""
+    text = str(value)
+    if len(text) > max_len:
+        return text[:max_len] + f"\n… [truncated, {len(text)} chars total]"
+    return text
+
+
+def _io_fields(test_res):
+    """Compact, capped IO fields for an emitted/persisted result record.
+
+    Output S3 URLs are intentionally omitted (outputs are inline base64); the
+    input is included even when it was uploaded to S3 (input_s3_used flag)."""
+    return {
+        "input": _cap_text(test_res.get("input")),
+        "expected": _cap_text(test_res.get("expected")),
+        "got": _cap_text(test_res.get("got")),
+        "stderr": _cap_text(test_res.get("stderr")),
+        "inputS3": bool(test_res.get("input_s3_used")),
+    }
+
+
 def _format_seconds(value):
     return f"{value:.6f}s" if isinstance(value, (int, float)) else "N/A"
 
@@ -371,7 +400,7 @@ def _result_record(step, solution_label, solution_index, lang, test_res):
     status = test_res.get("status")
     if not status:
         status = "CORRECT" if test_res.get("passed") else "ERROR"
-    return {
+    rec = {
         "step": step,
         "sol": solution_label,
         "si": solution_index,
@@ -384,6 +413,8 @@ def _result_record(step, solution_label, solution_index, lang, test_res):
         "mem": test_res.get("memory_mb"),
         "detail": test_res.get("error") or "",
     }
+    rec.update(_io_fields(test_res))
+    return rec
 
 
 def emit_tc_result(step, solution_label, solution_index, lang, test_res):
@@ -437,6 +468,7 @@ def write_execution_results_file(base_dir, step, question_id, solutions):
                             "time": t.get("api_time"),
                             "memory": t.get("memory_mb"),
                             "detail": t.get("error") or "",
+                            **_io_fields(t),
                         }
                         for t in tests
                     ],
@@ -818,6 +850,8 @@ def run_all_tests_nonfunction(base_dir=None, selected_lang=None):
                 "input_s3_used": bool(result.get("_input_s3_used")) if result else False,
                 "output_s3_used": bool(result.get("_output_s3_used")) if result else False,
                 "s3_error": (result.get("_s3_error") or "") if result else "",
+                "input": tc.get("input", ""),
+                "expected": expected_output,
             }
 
             if not result:
@@ -874,6 +908,8 @@ def run_all_tests_nonfunction(base_dir=None, selected_lang=None):
             stderr_entry = next((o for o in output_entries if o.get("output_type") == "STDERR"), None)
             actual_output = _decode_output_contents(stdout_entry)
             stderr_text = _decode_output_contents(stderr_entry)
+            test_res["got"] = actual_output
+            test_res["stderr"] = stderr_text
 
             if test_res["status"] == "CORRECT":
                 test_res["passed"] = True
@@ -1016,6 +1052,8 @@ def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
                 "input_s3_used": bool(result.get("_input_s3_used")) if result else False,
                 "output_s3_used": bool(result.get("_output_s3_used")) if result else False,
                 "s3_error": (result.get("_s3_error") or "") if result else "",
+                "input": tc.get("input", ""),
+                "expected": expected_output,
             }
 
             if not result:
@@ -1099,6 +1137,8 @@ def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
             stderr_entry = next((o for o in output_entries if o.get("output_type") == "STDERR"), None)
             actual_output = _decode_output_contents(stdout_entry)
             stderr_text = _decode_output_contents(stderr_entry)
+            test_res["got"] = actual_output
+            test_res["stderr"] = stderr_text
 
             if test_res["status"] == "CORRECT":
                 test_res["passed"] = True

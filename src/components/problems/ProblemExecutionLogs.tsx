@@ -36,6 +36,11 @@ type TcRecord = {
   time: number | null;
   mem: number | null;
   detail: string;
+  input?: string;
+  expected?: string;
+  got?: string;
+  stderr?: string;
+  inputS3?: boolean;
 };
 
 type StepKey = "execute_tests" | "execute_editorial";
@@ -140,12 +145,55 @@ function groupByStep(records: TcRecord[], step: StepKey): SolutionGroup[] {
   return groups;
 }
 
+function IoSection({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "error";
+}) {
+  return (
+    <div>
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <pre
+        className={cn(
+          "max-h-64 overflow-auto rounded-md bg-muted/60 p-2 text-[11px] leading-relaxed whitespace-pre-wrap break-words",
+          tone === "error" && "text-red-600 dark:text-red-400",
+        )}
+      >
+        {value}
+      </pre>
+    </div>
+  );
+}
+
 function TestcaseRow({ rec }: { rec: TcRecord }) {
   const [open, setOpen] = useState(false);
-  const hasDetail = !rec.passed && !!rec.detail;
+  const hasIo =
+    !!rec.input || !!rec.expected || !!rec.got || !!rec.stderr || !!rec.detail;
+  const hasDetail = hasIo;
 
   const download = () => {
-    const blob = new Blob([rec.detail || ""], { type: "text/plain" });
+    const sections: string[] = [
+      `Step: ${rec.step}`,
+      `Solution: ${rec.sol}`,
+      `Language: ${rec.lang}`,
+      `Testcase: ${tcLabel(rec)}`,
+      `Status: ${rec.status}`,
+      `Passed: ${rec.passed ? "yes" : "no"}`,
+      `Time: ${fmtTime(rec.time)}`,
+      `Memory: ${fmtMem(rec.mem)}`,
+    ];
+    if (rec.input) sections.push(`\n--- Input${rec.inputS3 ? " (uploaded to S3)" : ""} ---\n${rec.input}`);
+    if (rec.expected) sections.push(`\n--- Expected Output ---\n${rec.expected}`);
+    if (rec.got) sections.push(`\n--- Actual Output ---\n${rec.got}`);
+    if (rec.stderr) sections.push(`\n--- Stderr ---\n${rec.stderr}`);
+    if (rec.detail) sections.push(`\n--- Detail ---\n${rec.detail}`);
+    const blob = new Blob([sections.join("\n")], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -185,15 +233,24 @@ function TestcaseRow({ rec }: { rec: TcRecord }) {
         </span>
       </button>
       {open && hasDetail && (
-        <div className="px-3 pb-2">
-          <div className="mb-1 flex justify-end">
+        <div className="space-y-2 px-3 pb-3">
+          <div className="flex justify-end">
             <Button variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={download}>
               <Download className="mr-1 h-3 w-3" /> Download
             </Button>
           </div>
-          <pre className="max-h-64 overflow-auto rounded-md bg-muted/60 p-2 text-[11px] leading-relaxed whitespace-pre-wrap break-words">
-            {rec.detail}
-          </pre>
+          {rec.input ? (
+            <IoSection
+              label={rec.inputS3 ? "Input (uploaded to S3)" : "Input"}
+              value={rec.input}
+            />
+          ) : null}
+          {rec.expected ? <IoSection label="Expected Output" value={rec.expected} /> : null}
+          {rec.got ? <IoSection label="Actual Output" value={rec.got} /> : null}
+          {rec.stderr ? <IoSection label="Stderr" value={rec.stderr} tone="error" /> : null}
+          {rec.detail && !rec.input && !rec.expected && !rec.got ? (
+            <IoSection label="Detail" value={rec.detail} />
+          ) : null}
         </div>
       )}
     </div>
