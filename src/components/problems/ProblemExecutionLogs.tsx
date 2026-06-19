@@ -60,6 +60,74 @@ const STEP_META: { key: StepKey; stepId: (qt: string) => string; title: string; 
   },
 ];
 
+const PERSISTED_FILENAME: Record<StepKey, string> = {
+  execute_tests: "execution_results.json",
+  execute_editorial: "editorial_execution_results.json",
+};
+
+type PersistedTc = {
+  testcase?: number | null;
+  order?: number | null;
+  status?: string;
+  passed?: boolean;
+  time?: number | null;
+  memory?: number | null;
+  detail?: string;
+  input?: string;
+  expected?: string;
+  got?: string;
+  stderr?: string;
+  inputS3?: boolean;
+};
+
+type PersistedResults = {
+  step?: string;
+  solutions?: {
+    label?: string;
+    index?: number;
+    languages?: {
+      language?: string;
+      testcases?: PersistedTc[];
+    }[];
+  }[];
+};
+
+function normalizePersisted(data: PersistedResults, step: StepKey): TcRecord[] {
+  const out: TcRecord[] = [];
+  for (const sol of data.solutions || []) {
+    const si = typeof sol.index === "number" ? sol.index : 0;
+    const solLabel = sol.label || "";
+    for (const lang of sol.languages || []) {
+      const langName = lang.language || "";
+      for (const t of lang.testcases || []) {
+        out.push({
+          step,
+          sol: solLabel,
+          si,
+          lang: langName,
+          tc: t.testcase ?? null,
+          order: t.order ?? null,
+          status: t.status || "",
+          passed: !!t.passed,
+          time: t.time ?? null,
+          mem: t.memory ?? null,
+          detail: t.detail || "",
+          input: t.input,
+          expected: t.expected,
+          got: t.got,
+          stderr: t.stderr,
+          inputS3: t.inputS3,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function recKey(r: TcRecord): string {
+  return `${r.step}|${r.si}|${r.lang}|${r.order ?? "_"}|${r.tc ?? "_"}`;
+}
+
 function parseSentinelLines(content: string): TcRecord[] {
   const out: TcRecord[] = [];
   if (!content) return out;
@@ -355,7 +423,8 @@ export function ProblemExecutionLogs({ problemId, questionType, isActive }: Prob
     inFlight.current = true;
     setRefreshing(true);
     try {
-      const all: TcRecord[] = [];
+      // Live-log records (available while a step is running) keyed for merge.
+      const merged = new Map<string, TcRecord>();
       for (const meta of STEP_META) {
         const stepId = meta.stepId(questionType);
         try {
@@ -364,12 +433,32 @@ export function ProblemExecutionLogs({ problemId, questionType, isActive }: Prob
           );
           if (!res.ok) continue;
           const data = await res.json();
-          all.push(...parseSentinelLines(data.content || ""));
+          for (const rec of parseSentinelLines(data.content || "")) {
+            merged.set(recKey(rec), rec);
+          }
         } catch {
           // ignore per-step fetch error
         }
       }
-      setRecords(all);
+      // Persisted Outputs files are the source of truth after a run completes;
+      // they overwrite live-log records when present.
+      for (const meta of STEP_META) {
+        try {
+          const res = await fetch(
+            `/api/files/read?problemId=${encodeURIComponent(problemId)}&path=${encodeURIComponent(PERSISTED_FILENAME[meta.key])}&subfolder=outputs`,
+          );
+          if (!res.ok) continue;
+          const data = await res.json();
+          if (!data.content) continue;
+          const parsed = JSON.parse(data.content) as PersistedResults;
+          for (const rec of normalizePersisted(parsed, meta.key)) {
+            merged.set(recKey(rec), rec);
+          }
+        } catch {
+          // ignore per-step persisted-file error (missing / malformed)
+        }
+      }
+      setRecords([...merged.values()]);
       setLastUpdated(Date.now());
     } finally {
       inFlight.current = false;
