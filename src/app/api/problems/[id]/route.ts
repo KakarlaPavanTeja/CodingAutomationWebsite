@@ -1,34 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
-import { getSession } from "@/lib/auth/server";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { db } from "@/lib/db";
 import { problems, pipelineRuns } from "@/lib/db/schema";
-import { getProfileRoleById } from "@/lib/db/queries";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const session = await getSession();
-  const user = session ? { id: session.userId, email: session.email } : null;
 
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  // Owner, admin, or any member the problem is shared with may view it.
+  const auth = await requireProblemAccess(id);
+  if (auth.error) return auth.error;
 
   const problemRows = await db.select().from(problems).where(eq(problems.id, id)).limit(1);
   const problem = problemRows[0];
 
   if (!problem) {
     return NextResponse.json({ error: "Problem not found" }, { status: 404 });
-  }
-
-  const profile = await getProfileRoleById(user.id);
-
-  if (problem.createdBy !== user.id && profile?.role !== "admin") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const runs = await db

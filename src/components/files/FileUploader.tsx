@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MemberPicker } from "@/components/problems/MemberAccess";
 import { cn } from "@/lib/utils";
 
 interface FileUploaderProps {
@@ -52,6 +53,7 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
   const [scenarioLevel, setScenarioLevel] = useState<"none" | "light" | "moderate" | "heavy">("none");
   const [difficulty, setDifficulty] = useState<"" | "easy" | "medium" | "hard">("");
   const [score, setScore] = useState("");
+  const [sharedMemberIds, setSharedMemberIds] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploaded, setUploaded] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +94,9 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
     formData.append("scenarioLevel", scenarioLevel);
     if (difficulty) formData.append("difficulty", difficulty);
     if (score.trim()) formData.append("score", score.trim());
+    for (const memberId of sharedMemberIds) {
+      formData.append("memberIds", memberId);
+    }
 
     // Problem description
     if (problemInputMode === "paste" && problemText.trim()) {
@@ -272,6 +277,14 @@ export function FileUploader({ onUploadComplete }: FileUploaderProps) {
                 className="w-28"
               />
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-sm">Give access to members <span className="text-muted-foreground font-normal">(optional)</span></Label>
+            <MemberPicker selected={sharedMemberIds} onChange={setSharedMemberIds} />
+            <p className="text-[11px] text-muted-foreground">
+              Selected members will be able to open and fully work on this problem.
+            </p>
           </div>
         </div>
 

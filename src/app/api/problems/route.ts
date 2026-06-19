@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { desc, eq, ne, and } from "drizzle-orm";
+import { desc, eq, ne, and, or, inArray } from "drizzle-orm";
 import { getSession } from "@/lib/auth/server";
 import { db } from "@/lib/db";
-import { problems, profiles } from "@/lib/db/schema";
+import { problems, profiles, problemAccess } from "@/lib/db/schema";
 import { getProfileRoleById } from "@/lib/db/queries";
 
 export async function GET() {
@@ -16,9 +16,21 @@ export async function GET() {
   const profile = await getProfileRoleById(user.id);
   const isAdmin = profile?.role === "admin";
 
+  // Non-admins see problems they own OR problems explicitly shared with them.
+  const sharedProblemIds = db
+    .select({ id: problemAccess.problemId })
+    .from(problemAccess)
+    .where(eq(problemAccess.memberId, user.id));
+
   const baseFilter = isAdmin
     ? ne(problems.status, "deleted")
-    : and(ne(problems.status, "deleted"), eq(problems.createdBy, user.id));
+    : and(
+        ne(problems.status, "deleted"),
+        or(
+          eq(problems.createdBy, user.id),
+          inArray(problems.id, sharedProblemIds),
+        ),
+      );
 
   const rows = await db
     .select({

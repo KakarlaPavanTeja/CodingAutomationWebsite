@@ -21,6 +21,7 @@ import {
   Code,
   BookOpen,
   ListChecks,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,10 +29,12 @@ import { ProblemPipeline } from "@/components/problems/ProblemPipeline";
 import { ProblemOutputs } from "@/components/problems/ProblemOutputs";
 import { ProblemEditorial } from "@/components/problems/ProblemEditorial";
 import { ProblemExecutionLogs } from "@/components/problems/ProblemExecutionLogs";
+import { ManageAccessDialog } from "@/components/problems/MemberAccess";
 import { cn } from "@/lib/utils";
 
 type Problem = {
   id: string;
+  created_by?: string;
   name: string;
   question_type: string;
   structure_type?: string;
@@ -116,7 +119,10 @@ export default function ProblemDetailPage() {
   const [editScore, setEditScore] = useState<string>("");
   const [savingMeta, setSavingMeta] = useState(false);
   const [metaError, setMetaError] = useState<string | null>(null);
+  const [showShareDialog, setShowShareDialog] = useState(false);
   const isAdmin = profile?.role === "admin";
+  const isOwner = !!problem?.created_by && problem.created_by === profile?.id;
+  const canManageAccess = isAdmin || isOwner;
 
   const startEditMeta = () => {
     setEditDifficulty(problem?.difficulty || "");
@@ -327,13 +333,29 @@ export default function ProblemDetailPage() {
             )}
           </div>
         </div>
-        <a href={`/api/files/download?problemId=${problem.id}`}>
-          <Button variant="outline" size="sm">
-            <Download className="mr-2 h-4 w-4" />
-            Download
-          </Button>
-        </a>
+        <div className="flex items-center gap-2">
+          {canManageAccess && (
+            <Button variant="outline" size="sm" onClick={() => setShowShareDialog(true)}>
+              <Users className="mr-2 h-4 w-4" />
+              Manage access
+            </Button>
+          )}
+          <a href={`/api/files/download?problemId=${problem.id}`}>
+            <Button variant="outline" size="sm">
+              <Download className="mr-2 h-4 w-4" />
+              Download
+            </Button>
+          </a>
+        </div>
       </div>
+
+      {canManageAccess && (
+        <ManageAccessDialog
+          problemId={problem.id}
+          open={showShareDialog}
+          onClose={() => setShowShareDialog(false)}
+        />
+      )}
 
       {/* Tabs */}
       <div className="border-b">

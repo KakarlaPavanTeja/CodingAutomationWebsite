@@ -128,6 +128,29 @@ export const problems = pgTable(
   }),
 );
 
+export const problemAccess = pgTable(
+  "problem_access",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    problemId: uuid("problem_id")
+      .notNull()
+      .references(() => problems.id, { onDelete: "cascade" }),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    grantedBy: uuid("granted_by").references(() => profiles.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    problemMemberIdx: uniqueIndex("problem_access_problem_member_idx").on(
+      t.problemId,
+      t.memberId,
+    ),
+    problemIdx: index("problem_access_problem_idx").on(t.problemId),
+    memberIdx: index("problem_access_member_idx").on(t.memberId),
+  }),
+);
+
 export const pipelineRuns = pgTable(
   "pipeline_runs",
   {
@@ -242,6 +265,8 @@ export type Profile = typeof profiles.$inferSelect;
 export type NewProfile = typeof profiles.$inferInsert;
 export type Problem = typeof problems.$inferSelect;
 export type NewProblem = typeof problems.$inferInsert;
+export type ProblemAccess = typeof problemAccess.$inferSelect;
+export type NewProblemAccess = typeof problemAccess.$inferInsert;
 export type PipelineRun = typeof pipelineRuns.$inferSelect;
 export type PipelineState = typeof pipelineStates.$inferSelect;
 export type PipelineLog = typeof pipelineLogs.$inferSelect;

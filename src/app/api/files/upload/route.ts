@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { getSession } from "@/lib/auth/server";
 import { db } from "@/lib/db";
-import { problems } from "@/lib/db/schema";
+import { problems, problemAccess, profiles } from "@/lib/db/schema";
 import { uploadInputFiles, uploadSharedInputs } from "@/lib/storage-sync";
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 const ALLOWED_SOLUTION_EXTS = new Set([".py", ".cpp", ".java", ".js"]);
@@ -160,6 +163,37 @@ export async function POST(request: NextRequest) {
     .update(problems)
     .set({ storagePath: `problems/${problemId}` })
     .where(eq(problems.id, problemId));
+
+  // Optional: grant access to selected members at creation time.
+  const rawMemberIds = formData.getAll("memberIds").map((m) => String(m));
+  const memberIds = Array.from(
+    new Set(rawMemberIds.filter((m) => UUID_RE.test(m) && m !== user.id)),
+  ).slice(0, 200);
+
+  if (memberIds.length > 0) {
+    const validMembers = await db
+      .select({ id: profiles.id })
+      .from(profiles)
+      .where(
+        and(
+          inArray(profiles.id, memberIds),
+          eq(profiles.status, "active"),
+          ne(profiles.id, user.id),
+        ),
+      );
+    if (validMembers.length > 0) {
+      await db
+        .insert(problemAccess)
+        .values(
+          validMembers.map((m) => ({
+            problemId,
+            memberId: m.id,
+            grantedBy: user.id,
+          })),
+        )
+        .onConflictDoNothing();
+    }
+  }
 
   return NextResponse.json({ uploaded, problemId });
 }

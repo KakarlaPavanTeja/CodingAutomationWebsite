@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useProblems, type Problem } from "@/lib/problems-context";
+import { ManageAccessDialog } from "@/components/problems/MemberAccess";
 
 const STATUS_STYLES: Record<string, string> = {
   completed: "bg-green-500/10 text-green-700 dark:text-green-400",
@@ -16,6 +17,7 @@ export default function AdminProblemsPage() {
   const { problems, loading, removeLocally } = useProblems();
   const [showAll, setShowAll] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Problem | null>(null);
+  const [shareTarget, setShareTarget] = useState<Problem | null>(null);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [filterStatus, setFilterStatus] = useState("all");
@@ -195,12 +197,20 @@ export default function AdminProblemsPage() {
                   {new Date(p.created_at).toLocaleDateString()}
                 </td>
                 <td className="px-4 py-3">
-                  <button
-                    onClick={() => { setDeleteTarget(p); setDeleteReason(""); }}
-                    className="text-xs text-red-500 hover:text-red-700 font-medium transition-colors"
-                  >
-                    Delete
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setShareTarget(p)}
+                      className="text-xs text-primary hover:underline font-medium transition-colors"
+                    >
+                      Share
+                    </button>
+                    <button
+                      onClick={() => { setDeleteTarget(p); setDeleteReason(""); }}
+                      className="text-xs text-red-500 hover:text-red-700 font-medium transition-colors"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -218,6 +228,15 @@ export default function AdminProblemsPage() {
             {showAll ? "Show recent 5" : `View all ${filteredProblems.length} problems`}
           </button>
         </div>
+      )}
+
+      {/* Manage Access Dialog */}
+      {shareTarget && (
+        <ManageAccessDialog
+          problemId={shareTarget.id}
+          open={!!shareTarget}
+          onClose={() => setShareTarget(null)}
+        />
       )}
 
       {/* Delete Dialog */}
