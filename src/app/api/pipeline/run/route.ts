@@ -29,7 +29,13 @@ import type { RunRequest, PipelineMode, QuestionType, StepId } from "@/types/pip
  *    returns a 404 HTML page, the latter (if even set) targets the *dev*
  *    workspace, so every cost row silently degrades to "local only" and never
  *    reaches the production database.
- *  - In the dev workspace → the dev domain.
+ *  - In the dev workspace → the loopback (`127.0.0.1:<port>`). The spawned
+ *    Python runs on the same machine as this server and shares the same dev
+ *    database, so a local POST is both correct and reliable. Routing through the
+ *    public dev domain instead sends the request out to Replit's proxy and back;
+ *    whenever that proxy is not actively serving (cold proxy, mid-restart,
+ *    sleep) it returns the "This app isn't live yet" 404 HTML splash, which
+ *    every LLM-using step then logs as `internal insert failed (404)`.
  *
  * An explicit INTERNAL_API_URL always wins for manual overrides.
  */
@@ -43,11 +49,9 @@ function resolveInternalApiUrl(): string {
     if (appUrl) return appUrl;
     const firstDomain = process.env.REPLIT_DOMAINS?.split(",")[0]?.trim();
     if (firstDomain) return `https://${firstDomain}`;
-  } else if (process.env.REPLIT_DEV_DOMAIN) {
-    return `https://${process.env.REPLIT_DEV_DOMAIN}`;
   }
 
-  return "http://127.0.0.1:5000";
+  return `http://127.0.0.1:${process.env.PORT || 5000}`;
 }
 
 export async function POST(request: NextRequest) {
