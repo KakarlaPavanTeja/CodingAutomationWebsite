@@ -110,6 +110,17 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     needsMode: true,
     prerequisite: "package_platform",
   },
+  {
+    id: "execute_editorial",
+    label: "Execute Editorial Solutions",
+    description: "Run every editorial approach against the testcases in each language (informational — never blocks)",
+    script: "Scripts/editorial_execution_manager.py",
+    subSteps: [],
+    hasLanguageSelector: true,
+    hasTestcaseCount: false,
+    needsMode: false,
+    prerequisite: "generate_editorial",
+  },
 ];
 
 export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode): StepId[] {
@@ -123,6 +134,7 @@ export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode)
     steps.push("package_platform");
     steps.push("generate_editorial");
     steps.push("prepare_platform_json");
+    steps.push("execute_editorial");
     return steps;
   } else {
     const steps: StepId[] = [
@@ -135,6 +147,7 @@ export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode)
     steps.push("package_platform");
     steps.push("generate_editorial");
     steps.push("prepare_platform_json");
+    steps.push("execute_editorial");
     return steps;
   }
 }
@@ -172,7 +185,11 @@ export function buildCommand(
   }
 
   if (config.hasLanguageSelector && languages.length > 0) {
-    if (stepId === "execute_tests_function" || stepId === "execute_tests_nonfunction") {
+    if (
+      stepId === "execute_tests_function" ||
+      stepId === "execute_tests_nonfunction" ||
+      stepId === "execute_editorial"
+    ) {
       // These scripts take languages as positional args
       args.push(...languages);
     } else {

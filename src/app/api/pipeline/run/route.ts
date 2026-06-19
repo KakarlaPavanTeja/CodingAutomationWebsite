@@ -239,6 +239,9 @@ export async function POST(request: NextRequest) {
       // weightage from it.
       PIPELINE_OWNER_DIFFICULTY: ownerDifficulty,
       PIPELINE_OWNER_SCORE: ownerScore,
+      // Question type so editorial_execution_manager can pick function vs
+      // non-function execution without re-deriving it from disk state.
+      PIPELINE_QUESTION_TYPE: storedQuestionType || "",
       // Base URL the Python pipeline uses to POST cost/usage back to this same
       // app (`/api/internal/llm-usage`). It MUST resolve to THIS environment's
       // own running instance — in the deployment to the deployment, in dev to

@@ -5,6 +5,7 @@ import mimetypes
 import re
 import sys
 import uuid
+from datetime import datetime, timezone
 
 import requests
 
@@ -345,6 +346,114 @@ def _print_error_table(all_results):
 def _write_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Structured per-testcase result emission (consumed by the "Execution Logs" tab)
+# ---------------------------------------------------------------------------
+#
+# Each testcase result is also printed as a single-line, machine-parseable
+# sentinel record so the frontend can reconstruct an ordered, structured view of
+# every (step -> solution/approach -> language -> testcase) outcome straight from
+# the live pipeline logs. The same records back the persisted results file in the
+# problem's Outputs.
+TC_RESULT_SENTINEL = "@@TCRESULT@@"
+
+# step id -> persisted results filename in Outputs/
+_RESULTS_FILENAME = {
+    "execute_tests": "execution_results.json",
+    "execute_editorial": "editorial_execution_results.json",
+}
+
+
+def _result_record(step, solution_label, solution_index, lang, test_res):
+    """Normalize an internal test_res dict into the compact emitted schema."""
+    status = test_res.get("status")
+    if not status:
+        status = "CORRECT" if test_res.get("passed") else "ERROR"
+    return {
+        "step": step,
+        "sol": solution_label,
+        "si": solution_index,
+        "lang": lang,
+        "tc": test_res.get("test_index"),
+        "order": test_res.get("order"),
+        "status": status,
+        "passed": bool(test_res.get("passed")),
+        "time": test_res.get("api_time"),
+        "mem": test_res.get("memory_mb"),
+        "detail": test_res.get("error") or "",
+    }
+
+
+def emit_tc_result(step, solution_label, solution_index, lang, test_res):
+    """Print one sentinel line for a single testcase result. Never raises."""
+    try:
+        rec = _result_record(step, solution_label, solution_index, lang, test_res)
+        print(
+            f"{TC_RESULT_SENTINEL} {json.dumps(rec, ensure_ascii=False, default=str)}",
+            flush=True,
+        )
+    except Exception:
+        pass
+
+
+def emit_language_results(step, solution_label, solution_index, lang, language_results):
+    """Emit one sentinel line per testcase for a completed (solution, language)."""
+    for test_res in language_results or []:
+        emit_tc_result(step, solution_label, solution_index, lang, test_res)
+
+
+def write_execution_results_file(base_dir, step, question_id, solutions):
+    """
+    Persist a structured results file in Outputs/.
+
+    `solutions` is a list of dicts: {"label": str, "index": int,
+    "results": {lang: [test_res, ...]}}. Best-effort — never raises.
+    """
+    try:
+        out = {
+            "step": step,
+            "questionId": question_id,
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "solutions": [],
+        }
+        for sol in solutions:
+            langs_out = []
+            for lang, tests in (sol.get("results") or {}).items():
+                tests = tests or []
+                passed = sum(1 for t in tests if t.get("passed"))
+                langs_out.append({
+                    "language": lang,
+                    "total": len(tests),
+                    "passed": passed,
+                    "failed": len(tests) - passed,
+                    "testcases": [
+                        {
+                            "testcase": t.get("test_index"),
+                            "order": t.get("order"),
+                            "status": t.get("status"),
+                            "passed": bool(t.get("passed")),
+                            "time": t.get("api_time"),
+                            "memory": t.get("memory_mb"),
+                            "detail": t.get("error") or "",
+                        }
+                        for t in tests
+                    ],
+                })
+            out["solutions"].append({
+                "label": sol.get("label"),
+                "index": sol.get("index"),
+                "languages": langs_out,
+            })
+        outputs_dir = os.path.join(base_dir, "Outputs")
+        os.makedirs(outputs_dir, exist_ok=True)
+        filename = _RESULTS_FILENAME.get(step, f"{step}_results.json")
+        path = os.path.join(outputs_dir, filename)
+        _write_json(path, out)
+        print(f"Wrote execution results: {_short_path(path, base_dir)}", flush=True)
+    except Exception as exc:
+        print(f"Warning: failed to write execution results file: {exc}", flush=True)
 
 
 def load_file(path):
@@ -801,11 +910,19 @@ def run_all_tests_nonfunction(base_dir=None, selected_lang=None):
                 break
 
         all_results[lang] = language_results
+        emit_language_results("execute_tests", "Reference Solution", 0, lang, language_results)
         _print_language_results_table(lang, language_results)
         print(f"{lang}: passed {passed_count}/{len(language_results)}")
         if global_error_occurred:
             print(f"Halting remaining languages due to error in {lang}.")
             break
+
+    write_execution_results_file(
+        base_dir,
+        "execute_tests",
+        question_id,
+        [{"label": "Reference Solution", "index": 0, "results": all_results}],
+    )
 
     all_passed = bool(all_results) and all(
         tests and all(t.get("passed") for t in tests) for tests in all_results.values()
@@ -1024,11 +1141,19 @@ def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
                 break
 
         all_results[lang] = language_results
+        emit_language_results("execute_tests", "Reference Solution", 0, lang, language_results)
         _print_language_results_table(lang, language_results)
         print(f"{lang}: passed {passed_count}/{len(language_results)}")
         if global_error_occurred:
             print(f"Halting remaining languages due to error in {lang}.")
             break
+
+    write_execution_results_file(
+        base_dir,
+        "execute_tests",
+        question_id,
+        [{"label": "Reference Solution", "index": 0, "results": all_results}],
+    )
 
     all_passed = bool(all_results) and all(
         tests and all(t.get("passed") for t in tests) for tests in all_results.values()

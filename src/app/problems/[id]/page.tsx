@@ -20,12 +20,14 @@ import {
   FileText,
   Code,
   BookOpen,
+  ListChecks,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ProblemPipeline } from "@/components/problems/ProblemPipeline";
 import { ProblemOutputs } from "@/components/problems/ProblemOutputs";
 import { ProblemEditorial } from "@/components/problems/ProblemEditorial";
+import { ProblemExecutionLogs } from "@/components/problems/ProblemExecutionLogs";
 import { cn } from "@/lib/utils";
 
 type Problem = {
@@ -72,16 +74,18 @@ const STEP_LABELS: Record<string, string> = {
   generate_enrichment: "Generate Enrichment",
   package_platform: "Package for Platform",
   generate_editorial: "Generate Editorial",
+  execute_editorial: "Execute Editorial Solutions",
   prepare_platform_json: "Prepare Platform JSON",
 };
 
-type Tab = "overview" | "pipeline" | "outputs" | "editorial";
+type Tab = "overview" | "pipeline" | "outputs" | "editorial" | "execution-logs";
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "pipeline", label: "Pipeline", icon: Play },
   { id: "outputs", label: "Outputs", icon: FolderOpen },
   { id: "editorial", label: "Editorial", icon: BookOpen },
+  { id: "execution-logs", label: "Execution Logs", icon: ListChecks },
 ];
 
 function formatDuration(start: string, end: string | null): string {
@@ -734,6 +738,14 @@ export default function ProblemDetailPage() {
       {activeTab === "outputs" && <ProblemOutputs problemId={id} />}
 
       {activeTab === "editorial" && <ProblemEditorial problemId={id} problemName={problem.name} />}
+
+      {activeTab === "execution-logs" && (
+        <ProblemExecutionLogs
+          problemId={id}
+          questionType={problem.question_type}
+          isActive={problem.status === "processing" || runs.some((r) => r.status === "running")}
+        />
+      )}
     </div>
   );
 }

@@ -7,6 +7,7 @@ export type StepId =
   | "generate_enrichment"
   | "package_platform"
   | "generate_editorial"
+  | "execute_editorial"
   | "prepare_platform_json";
 
 export type StepStatus = "pending" | "running" | "completed" | "failed";
