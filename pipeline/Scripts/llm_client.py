@@ -18,7 +18,7 @@ OpenAI models, now routed through OpenRouter. Override per purpose via env:
   OPENROUTER_MODEL / OPENAI_MODEL                            (global fallback)
 
   defaults: chat / enrichment = openai/gpt-5.4
-            testcases         = google/gemini-2.5-pro
+            testcases         = openai/gpt-5.5
             code              = openai/gpt-5.3-codex
             editorial         = openai/gpt-5.5
 
@@ -51,18 +51,13 @@ from openai import OpenAI, PermissionDeniedError
 
 # Purpose → default OpenRouter model id.
 #
-# Testcases use Google Gemini 2.5 Pro (not an OpenAI model): the testcase
-# generator runs at the highest reasoning effort, and OpenAI's reasoning models
-# HIDE their reasoning, so during the (long) think phase NOTHING streams over the
-# socket. That silent window outlasts the proxy gateway's idle timeout and the
-# connection is severed mid-stream → empty content. Gemini 2.5 Pro STREAMS its
-# reasoning tokens (on a separate `reasoning` delta field) as it thinks, which
-# keeps the socket warm during the think phase. NOTE: this is necessary but not
-# sufficient — the gateway can STILL sever the stream during a silent pause
-# between the reasoning and content phases, so call_llm also retries severed
-# streams (see the streaming loop / OPENROUTER_STREAM_RETRIES).
+# Testcases use openai/gpt-5.5 at reasoning effort "medium". Severed-stream
+# resilience does NOT depend on the model: call_llm retries severed streams
+# (see the streaming loop / OPENROUTER_STREAM_RETRIES) and, for testcases, has a
+# last-resort lower-effort retry, so OpenAI reasoning models (which hide their
+# reasoning and stream zero bytes during the think phase) are handled there.
 _PURPOSE_DEFAULTS: dict[str, str] = {
-    "testcases": "google/gemini-2.5-pro",
+    "testcases": "openai/gpt-5.5",
     "chat": "openai/gpt-5.4",
     "code": "openai/gpt-5.3-codex",
     "enrichment": "openai/gpt-5.4",
@@ -369,8 +364,8 @@ def _resolve_read_timeout_sec(purpose: str) -> int:
 
 
 _DEFAULT_MAX_TOKENS: dict[str, int] = {
-    # Testcase generation emits a full Python generator script AND runs at the
-    # max reasoning effort on Gemini 2.5 Pro, so the (billed-as-completion)
+    # Testcase generation emits a full Python generator script AND runs with
+    # reasoning effort on openai/gpt-5.5, so the (billed-as-completion)
     # thinking tokens PLUS the visible script body must both fit under the cap —
     # otherwise we hit finish_reason=length and the script is truncated
     # (SyntaxError → empty testcases.json). 80K leaves ample headroom for the max
@@ -429,17 +424,14 @@ def _resolve_reasoning_effort(purpose: str) -> str | None:
         effort = str(raw).strip().lower()
         return effort if effort in _REASONING_EFFORT_ALLOWED else None
     if p == "testcases":
-        # Default "high" — Gemini 2.5 Pro's max thinking budget, for the best
-        # generator quality. Unlike OpenAI's reasoning models (which HIDE their
-        # reasoning and therefore stream ZERO bytes during the think phase),
-        # Gemini 2.5 Pro STREAMS its reasoning tokens as it thinks, which helps
-        # keep the socket warm. That alone is NOT enough: the gateway can still
-        # sever the stream during a silent pause between the reasoning and
-        # content phases, so call_llm retries severed streams at the same effort
-        # (OPENROUTER_STREAM_RETRIES) and, as a last resort for testcases, once
-        # at a lower effort. Override with OPENAI_REASONING_EFFORT_TESTCASES.
+        # Default "medium" for openai/gpt-5.5. OpenAI reasoning models HIDE their
+        # reasoning and stream ZERO bytes during the think phase; the gateway can
+        # sever such a silent stream, so call_llm retries severed streams at the
+        # same effort (OPENROUTER_STREAM_RETRIES) and, as a last resort for
+        # testcases, once at a lower effort. Override with
+        # OPENAI_REASONING_EFFORT_TESTCASES.
         raw = os.environ.get("OPENAI_REASONING_EFFORT_TESTCASES")
-        effort = "high" if raw is None else str(raw).strip().lower()
+        effort = "medium" if raw is None else str(raw).strip().lower()
         return effort if effort in _REASONING_EFFORT_ALLOWED else None
     raw = os.environ.get("OPENAI_REASONING_EFFORT")
     effort = "high" if raw is None else str(raw).strip().lower()
