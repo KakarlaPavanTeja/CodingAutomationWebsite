@@ -47,7 +47,7 @@ STEP 1 — IDENTIFY ALL APPROACHES
 - Identify the problem type (array, string, tree, graph, DP, greedy, etc.).
 - Think through ALL approaches: start with the most naive/brute force, then intermediate optimizations, then the optimal solution(s), plus any alternative optimal approaches.
 - For each approach determine the core technique, its time/space complexity, and its trade-offs.
-- Generate AT LEAST these categories when applicable: a naive/direct solution (often O(n^2) or O(n^3) for array problems), an intermediate optimization (sorting, hash map, two pointers, etc.), and the optimal solution.
+- Cover the FULL spectrum of approaches the problem genuinely supports — these are illustrative categories, NOT a fixed count: a naive/direct solution (often O(n^2) or O(n^3) for array problems), EVERY meaningfully distinct intermediate optimization (sorting, hash map, two pointers, etc. — list each as its own separate solution whenever more than one exists), the optimal solution(s), and any alternative optimal approaches that reach the best complexity by a different technique. The number of solutions is whatever the problem warrants: it may be a single approach, or it may be many. Do NOT cap or pad the count — never stop at a fixed number, and never invent filler approaches just to add more.
 
 SOLUTION NAMING RULES — CRITICAL:
 - NEVER use generic names like "Brute Force", "Better", or "Optimal".
@@ -427,7 +427,7 @@ STEP 5 — GLOBAL FORMATTING RULES
 ═══════════════════════════════════════════════════
 STEP 6 — FINAL CHECKLIST (verify before finishing)
 ═══════════════════════════════════════════════════
-- Identified ALL approaches (naive, intermediate, optimal, alternatives) and the reference solution is one of them?
+- Identified ALL approaches the problem supports (naive, every distinct intermediate optimization, optimal, and alternatives — as many as genuinely exist, with no fixed/capped count) and the reference solution is one of them?
 - Solution names reflect the actual technique, not generic labels?
 - Each solution has all five sections (Intuition, Approach, Pseudocode, Code Implementation, Complexity Analysis)?
 - Intuition is plain English with no code keywords and no backticks? Approach is plain-English bullets within the difficulty length limits?
