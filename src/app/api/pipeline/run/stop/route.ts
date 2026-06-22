@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
-import { getProcessPidAsync } from "@/lib/process-registry";
+import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
 import { requireAuthApi } from "@/lib/auth/server";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { db } from "@/lib/db";
 import { pipelineRuns, pipelineStates, problems } from "@/lib/db/schema";
+import { getProcessPidAsync } from "@/lib/process-registry";
 
 export async function POST(request: NextRequest) {
   const { runId } = await request.json();
@@ -49,21 +50,39 @@ export async function POST(request: NextRequest) {
 
   if (stateRows[0]) {
     const stepStatuses = (stateRows[0].stepStatuses as Record<string, unknown>) || {};
-    stepStatuses[run.stepId] = {
-      status: "failed",
-      exitCode: -1,
-      endTime: Date.now(),
-    };
-    await db
-      .update(pipelineStates)
-      .set({ stepStatuses, updatedAt: new Date() })
-      .where(eq(pipelineStates.problemId, run.problemId));
+    const { parentStepId } = parsePipelineRunStepKey(run.stepId);
+    // Only mark the PARENT failed when stopping the atomic parent run itself.
+    // Stopping one GQ sub-step or one language tile (run.stepId is a composite
+    // "parent__sub" key) must NOT flip the whole parent to failed and discard
+    // its sibling progress — the client patches just that sub-run (P1-C2).
+    const isAtomicParentRun = run.stepId === parentStepId;
+    if (isAtomicParentRun) {
+      stepStatuses[parentStepId] = {
+        status: "failed",
+        exitCode: -1,
+        endTime: Date.now(),
+      };
+      await db
+        .update(pipelineStates)
+        .set({ stepStatuses, updatedAt: new Date() })
+        .where(eq(pipelineStates.problemId, run.problemId));
+    }
   }
 
-  await db
-    .update(problems)
-    .set({ status: "draft", updatedAt: new Date() })
-    .where(and(eq(problems.id, run.problemId), eq(problems.status, "processing")));
+  // Only drop the problem back to "draft" when no other runs are still active.
+  // Stopping one sub-step/language while siblings run must not flip the whole
+  // problem out of "processing" (part of the status-responsiveness fixes).
+  const otherActive = await db
+    .select({ id: pipelineRuns.id })
+    .from(pipelineRuns)
+    .where(and(eq(pipelineRuns.problemId, run.problemId), eq(pipelineRuns.status, "running")))
+    .limit(1);
+  if (otherActive.length === 0) {
+    await db
+      .update(problems)
+      .set({ status: "draft", updatedAt: new Date() })
+      .where(and(eq(problems.id, run.problemId), eq(problems.status, "processing")));
+  }
 
   const pid = await getProcessPidAsync(runId);
   if (pid) {
