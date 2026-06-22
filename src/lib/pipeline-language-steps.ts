@@ -38,16 +38,14 @@ export function getTranslateSubStepsForLanguages(enabledLanguages: string[]): Qu
 }
 
 export function getSplitSubStepsForLanguages(enabledLanguages: string[]): string[] {
-  // Python is the reference solution but still needs driver/solution split for execution.
-  return enabledLanguages.includes("python")
-    ? enabledLanguages
-    : ["python", ...enabledLanguages];
+  // Respect the language selection: Python is split only when it is selected,
+  // like every other language. (Deselecting Python skips it everywhere — req 17.)
+  return enabledLanguages;
 }
 
 export function getExecuteSubStepsForLanguages(enabledLanguages: string[]): string[] {
-  return enabledLanguages.includes("python")
-    ? enabledLanguages
-    : ["python", ...enabledLanguages];
+  // Respect the language selection (see getSplitSubStepsForLanguages).
+  return enabledLanguages;
 }
 
 export function getLangsForStep(stepId: StepId, enabledLanguages: string[]): string[] {

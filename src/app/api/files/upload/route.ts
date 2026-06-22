@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import { and, eq, inArray, ne } from "drizzle-orm";
-import { getSession } from "@/lib/auth/server";
+import { requireAuthApi } from "@/lib/auth/server";
 import { db } from "@/lib/db";
 import { problems, problemAccess, profiles } from "@/lib/db/schema";
-import { uploadInputFiles, uploadSharedInputs } from "@/lib/storage-sync";
+import { uploadInputFiles, uploadOutputFile } from "@/lib/storage-sync";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -19,11 +19,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Request too large. Max 10MB total." }, { status: 413 });
   }
 
-  const session = await getSession();
-  const user = session ? { id: session.userId, email: session.email } : null;
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  // Reject unauthenticated AND inactive accounts (P2-C1, app-wide policy).
+  const auth = await requireAuthApi();
+  if (auth.error) return auth.error;
+  const user = { id: auth.session.userId, email: auth.session.email };
 
   const formData = await request.formData();
   const uploaded: string[] = [];
@@ -35,6 +34,7 @@ export async function POST(request: NextRequest) {
   const rawScenarioLevel = (formData.get("scenarioLevel") as string) || "none";
   const rawDifficulty = (formData.get("difficulty") as string) || "";
   const rawScore = (formData.get("score") as string) || "";
+  const rawCompanies = (formData.get("companies") as string) || "";
 
   // Clamp every client-supplied enum to the values the DB check constraints
   // accept, so a malformed field can't 500 the insert.
@@ -147,11 +147,18 @@ export async function POST(request: NextRequest) {
   try {
     await uploadInputFiles(problemId, filesToUpload);
 
-    const pipelineRoot = process.env.PIPELINE_ROOT || path.join(process.cwd(), "pipeline");
-    const sharedInputsDir =
-      process.env.PIPELINE_SHARED_INPUTS_DIR || path.join(pipelineRoot, "Inputs");
-
-    await uploadSharedInputs(problemId, sharedInputsDir);
+    if (mode === "practice" && rawCompanies.trim()) {
+      // One company per line (matches the UI). Do NOT split on commas — a
+      // single company name may contain a comma, e.g. "Alphabet, Inc." (UI-H2).
+      const companyLines = rawCompanies
+        .split("\n")
+        .map((c) => c.trim())
+        .filter(Boolean);
+      if (companyLines.length > 0) {
+        await uploadOutputFile(problemId, "Companies", companyLines.join("\n") + "\n");
+        uploaded.push("Companies");
+      }
+    }
   } catch (err) {
     return NextResponse.json(
       { error: `Failed to upload files: ${err instanceof Error ? err.message : "Unknown error"}` },

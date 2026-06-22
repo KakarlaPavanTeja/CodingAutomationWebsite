@@ -184,6 +184,14 @@ class TestPreparePlatformJson(unittest.TestCase):
         )
         self.assertTrue(data)  # completed without raising
 
+    def test_parse_companies_splits_on_newlines_only(self):
+        """Company names may contain commas; split only on newlines (UI-H2 / 3A)."""
+        self.assertEqual(
+            ppj.parse_companies("Alphabet, Inc.\nMeta\n  Amazon  "),
+            ["Alphabet, Inc.", "Meta", "Amazon"],
+        )
+        self.assertEqual(ppj.parse_companies(""), [])
+
     def test_nonfunction_detection_falls_back_to_problem_md(self):
         """When PIPELINE_QUESTION_TYPE is unset, problem.md decides kind (P1-C5)."""
         import tempfile

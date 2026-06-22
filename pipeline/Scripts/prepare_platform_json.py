@@ -507,6 +507,14 @@ def parse_tags(s):
     return items
 
 
+def parse_companies(s):
+    """Companies are one-per-line (a single name may contain a comma, e.g.
+    "Alphabet, Inc."), so split ONLY on newlines — unlike parse_tags (UI-H2)."""
+    if not s:
+        return []
+    return [line.strip() for line in s.split("\n") if line.strip()]
+
+
 def format_companies(tags):
     return [{"company_name": c.strip().upper()} for c in tags]
 
@@ -820,7 +828,7 @@ def build_practice_json(lua, container, difficulty, node_based, enabled_langs=No
             "total_score": total_score,
             "question_type": "CODING",
             "question_asked_by_companies_info": format_companies(
-                parse_tags(sec("----------COMPANIES_START----------", "----------COMPANIES_END----------"))
+                parse_companies(sec("----------COMPANIES_START----------", "----------COMPANIES_END----------"))
             ),
             "question": {
                 "difficulty": difficulty,

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getSession } from "@/lib/auth/server";
+import { requireAuthApi } from "@/lib/auth/server";
 import { recordLlmUsage } from "@/lib/record-llm-usage";
 import { cpPrepLimiter, getClientIP } from "@/lib/rate-limit";
 import {
@@ -62,13 +62,11 @@ function sseEncode(event: string, data: unknown): string {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getSession();
-  if (!session) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
+  // Reject unauthenticated AND inactive (pending_approval / deactivated / left)
+  // accounts before any paid LLM work or Python execution (P2-C1).
+  const auth = await requireAuthApi();
+  if (auth.error) return auth.error;
+  const session = auth.session;
 
   if (!process.env.OPENROUTER_API_KEY?.trim()) {
     return new Response(JSON.stringify({ error: "OPENROUTER_API_KEY is not configured" }), {
