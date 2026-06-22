@@ -125,6 +125,10 @@ export const authLimiter = new RateLimiter("auth", 15 * 60 * 1000, 20);
 // 10 password reset requests per hour per IP
 export const passwordResetLimiter = new RateLimiter("pwd_reset", 60 * 60 * 1000, 10);
 
+// 15 CP-prep generations per hour per user (each triggers several Opus calls +
+// subprocess spawns, so this is an expensive endpoint).
+export const cpPrepLimiter = new RateLimiter("cp_prep", 60 * 60 * 1000, 15);
+
 export function getClientIP(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
   if (forwarded) return forwarded;
