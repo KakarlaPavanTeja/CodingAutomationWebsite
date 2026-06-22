@@ -70,7 +70,10 @@ const STATUS_CONFIG: Record<string, { icon: React.ElementType; label: string; cl
 
 const STEP_LABELS: Record<string, string> = {
   generate_question: "Generate Question",
+  generate_brute_force: "Generate Brute Force",
   generate_testcases: "Generate Test Cases",
+  benchmark_testcases: "Benchmark Test Cases",
+  harden_testcases: "Strengthen Test Cases",
   split_code: "Split Code",
   execute_tests_function: "Execute Tests (Function)",
   execute_tests_nonfunction: "Execute Tests (Non-function)",

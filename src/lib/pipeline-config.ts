@@ -25,14 +25,46 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     needsMode: false,
   },
   {
+    id: "generate_brute_force",
+    label: "Generate Brute Force",
+    description: "Create a simple brute-force oracle to cross-validate test cases (dual-oracle)",
+    script: "Scripts/generate_brute_force.py",
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+  },
+  {
     id: "generate_testcases",
     label: "Generate Test Cases",
     description: "Create diverse test cases with configurable count",
-    script: "Scripts/testcase_manager.py",
+    script: "Scripts/testcase_manager_v4.py",
     subSteps: [],
     hasLanguageSelector: false,
     hasTestcaseCount: true,
     needsMode: false,
+  },
+  {
+    id: "benchmark_testcases",
+    label: "Benchmark Test Cases",
+    description: "Measure mutation kill rate and coverage audits (informational)",
+    script: "Scripts/benchmark_suite.py",
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+    prerequisite: "generate_testcases",
+  },
+  {
+    id: "harden_testcases",
+    label: "Strengthen Test Cases",
+    description: "Append targeted cases to kill surviving mutants (manual)",
+    script: "Scripts/harden_suite.py",
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+    prerequisite: "generate_testcases",
   },
   {
     id: "split_code",
@@ -43,6 +75,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: true,
     hasTestcaseCount: false,
     needsMode: false,
+    prerequisite: "generate_testcases",
   },
   {
     id: "execute_tests_function",
@@ -63,6 +96,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: true,
     hasTestcaseCount: false,
     needsMode: false,
+    prerequisite: "generate_testcases",
   },
   {
     id: "generate_enrichment",
@@ -127,7 +161,10 @@ export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode)
   if (questionType === "nonfunction") {
     const steps: StepId[] = [
       "generate_question",
+      "generate_brute_force",
       "generate_testcases",
+      "benchmark_testcases",
+      "harden_testcases",
       "execute_tests_nonfunction",
     ];
     if (mode === "practice") steps.push("generate_enrichment");
@@ -139,7 +176,10 @@ export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode)
   } else {
     const steps: StepId[] = [
       "generate_question",
+      "generate_brute_force",
       "generate_testcases",
+      "benchmark_testcases",
+      "harden_testcases",
       "split_code",
       "execute_tests_function",
     ];
@@ -207,6 +247,21 @@ export function buildCommand(
 
   if (stepId === "execute_tests_nonfunction") {
     args.push("--nonfunction");
+  }
+
+  if (stepId === "benchmark_testcases") {
+    args.push("--no-gate");
+  }
+
+  if (stepId === "harden_testcases") {
+    const minKill = process.env.SUITE_MIN_KILL;
+    const maxRounds = process.env.SUITE_MAX_ROUNDS;
+    if (minKill) {
+      args.push("--min-kill", minKill);
+    }
+    if (maxRounds) {
+      args.push("--max-rounds", maxRounds);
+    }
   }
 
   return { script: config.script, args };

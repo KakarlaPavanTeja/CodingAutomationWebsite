@@ -183,6 +183,31 @@ def parse_difficulty(lua):
 # Exam format (ported from create_cq.py)
 # ---------------------------------------------------------------------------
 
+def normalize_tags(tc):
+    """Carry the v4 subtask/scenario tags through to the platform JSON.
+
+    v4 emits a per-case `tags` list of strings (e.g. ["subtask_3", "stress"]).
+    The platform expects each tag as an object `{"name_enum": "<tag>"}`, so we
+    wrap every tag accordingly. Already-wrapped dict tags are passed through
+    (idempotent). Empty/blank tags are dropped; default to [] when absent.
+    """
+    raw = tc.get("tags", [])
+    if isinstance(raw, str):
+        raw = [raw]
+    elif not isinstance(raw, list):
+        raw = []
+
+    out = []
+    for t in raw:
+        if isinstance(t, dict):
+            name = str(t.get("name_enum", "")).strip()
+        else:
+            name = str(t).strip()
+        if name:
+            out.append({"name_enum": name})
+    return out
+
+
 def exam_parse_test_cases(container):
     test_cases = []
     order_update = 1
@@ -196,7 +221,7 @@ def exam_parse_test_cases(container):
             "evaluation_type": "DEFAULT",
             "display_text": None,
             "criteria": None,
-            "tags": [],
+            "tags": normalize_tags(tc),
             "order": order_update,
         }
         if tc.get("multiple_possible_output"):
@@ -500,7 +525,7 @@ def practice_parse_test_cases(container):
             "evaluation_type": "DEFAULT",
             "display_text": None,
             "criteria": None,
-            "tags": [],
+            "tags": normalize_tags(tc),
             "order": tc["order"],
         }
         if is_multiple_output:

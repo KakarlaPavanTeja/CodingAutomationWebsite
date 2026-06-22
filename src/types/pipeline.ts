@@ -1,6 +1,9 @@
 export type StepId =
   | "generate_question"
+  | "generate_brute_force"
   | "generate_testcases"
+  | "benchmark_testcases"
+  | "harden_testcases"
   | "split_code"
   | "execute_tests_function"
   | "execute_tests_nonfunction"

@@ -239,7 +239,16 @@ def main():
                                 if key == "weightage": tc[key] = 5
                                 elif key == "order": tc[key] = idx
                                 else: tc[key] = "" # fallback for input/output
-                        
+
+                        # Preserve the v4 subtask/scenario tags so they survive
+                        # into the platform JSON. Normalize to a list of strings.
+                        raw_tags = tc.get("tags", [])
+                        if isinstance(raw_tags, str):
+                            raw_tags = [raw_tags]
+                        elif not isinstance(raw_tags, list):
+                            raw_tags = []
+                        tc["tags"] = [str(t) for t in raw_tags]
+
                         # Fix order if incorrect
                         if tc["order"] != idx:
                             tc["order"] = idx

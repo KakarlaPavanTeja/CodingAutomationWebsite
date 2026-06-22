@@ -34,6 +34,7 @@ EDITORIAL_PROMPT = r"""You are a DSA Editorial Generator — a world-class Data 
 - The PROBLEM STATEMENT (and, when present, examples and constraints).
 - The REFERENCE SOLUTION CODE for one or more languages (C++, Python, Java, JavaScript/Node.js) — the pipeline-generated solution.
 - When available, the per-language DRIVER CODE (the harness that reads input and calls the solution). Driver code may be absent for non-function problems — then rely on the solution code alone.
+- When available, a BRUTE-FORCE REFERENCE SOLUTION (Python) — a deliberately simple, exhaustive solution used by the pipeline to validate test cases. When it is provided, you MUST include it as the FIRST/naive approach in your editorial, presented faithfully (same method/logic, translated into all four languages, named after the technique it actually uses — never "Brute Force"). It is a reference for the naive approach, NOT something to copy verbatim or treat as optimal. If it is absent, derive the naive approach yourself as usual.
 
 Use the solution and driver code to confirm the EXACT method name, parameter names, parameter order, parameter types, and return type. Never copy the driver harness into your output.
 
@@ -456,7 +457,12 @@ _LANG_LABELS = [
 ]
 
 
-def build_user_message(statement: str, solutions: dict, drivers: dict | None = None) -> str:
+def build_user_message(
+    statement: str,
+    solutions: dict,
+    drivers: dict | None = None,
+    brute_force_code: str | None = None,
+) -> str:
     """
     Assemble the per-problem USER message from the loaded inputs.
 
@@ -469,6 +475,9 @@ def build_user_message(statement: str, solutions: dict, drivers: dict | None = N
                    cpp, python, java, nodejs.
         drivers:   optional {lang_key -> driver source code}. Absent / empty for
                    non-function problems.
+        brute_force_code: optional Python brute-force solution (the pipeline's
+                   validation oracle). When present, it is presented to the model
+                   as the naive approach to include faithfully in the editorial.
     """
     drivers = drivers or {}
     parts: list[str] = []
@@ -506,6 +515,18 @@ def build_user_message(statement: str, solutions: dict, drivers: dict | None = N
         parts.append(
             "\n\n# DRIVER CODE\n(none — this is a non-function problem; match "
             "names and signatures from the solution code only)"
+        )
+
+    brute = (brute_force_code or "").strip()
+    if brute:
+        parts.append(
+            "\n\n# BRUTE-FORCE REFERENCE SOLUTION (Python — the pipeline's "
+            "validation oracle)\n"
+            "Include this as the FIRST/naive approach in the editorial, presented "
+            "faithfully (same logic, translated to all four languages, named after "
+            "the technique it uses). Reuse the same method name/signature as the "
+            "reference solution above.\n"
+            f"\n## Python\n```python\n{brute}\n```"
         )
 
     return "".join(parts)

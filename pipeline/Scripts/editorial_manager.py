@@ -139,6 +139,18 @@ def generate_editorial():
               "'Outputs/generatedFullCode/'. Run 'generate_full_question.py' first.")
         return 1
 
+    # Brute-force oracle (optional): when present, the editorial presents it as
+    # the naive approach. Written by the `generate_brute_force` step.
+    brute_force_code = ""
+    for name in ("BRUTE_FORCE.py", "BRUTE.py"):
+        brute_force_code = load_file(os.path.join(full_code_dir, name))
+        if brute_force_code.strip():
+            print(f"Loaded brute-force reference solution: {name}")
+            break
+    if not brute_force_code.strip():
+        print("No brute-force reference solution found "
+              "(editorial will derive the naive approach itself).")
+
     print(f"Loaded solution code for: {', '.join(sorted(solutions))}")
     if drivers:
         print(f"Loaded driver code for: {', '.join(sorted(drivers))}")
@@ -148,7 +160,7 @@ def generate_editorial():
     # 3. Build the per-problem user message and call the editorial model.
     #    EDITORIAL_PROMPT is the constant cached system prefix; all variable
     #    content goes in the user message.
-    user_message = build_user_message(statement, solutions, drivers)
+    user_message = build_user_message(statement, solutions, drivers, brute_force_code)
 
     # Let the model decide how much "thinking" this problem needs (A/B/C ->
     # off/medium/high), unless an env override forces a fixed level.

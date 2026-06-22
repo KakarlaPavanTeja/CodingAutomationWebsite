@@ -62,6 +62,7 @@ _PURPOSE_DEFAULTS: dict[str, str] = {
     "code": "openai/gpt-5.3-codex",
     "enrichment": "openai/gpt-5.4",
     "editorial": "openai/gpt-5.5",
+    "harden": "openai/gpt-5.5",
 }
 
 _ENV_SUFFIX = {
@@ -70,6 +71,7 @@ _ENV_SUFFIX = {
     "code": "CODE",
     "enrichment": "ENRICHMENT",
     "editorial": "EDITORIAL",
+    "harden": "HARDEN",
 }
 
 _REASONING_EFFORT_ALLOWED = frozenset(
@@ -412,8 +414,12 @@ def _resolve_max_tokens(purpose: str) -> int:
 
 def _resolve_reasoning_effort(purpose: str) -> str | None:
     p = _canonical_purpose(purpose)
-    if p not in {"chat", "testcases", "editorial"}:
+    if p not in {"chat", "testcases", "editorial", "harden"}:
         return None
+    if p == "harden":
+        raw = os.environ.get("OPENAI_REASONING_EFFORT_HARDEN")
+        effort = "medium" if raw is None else str(raw).strip().lower()
+        return effort if effort in _REASONING_EFFORT_ALLOWED else None
     if p == "editorial":
         # Editorial reasoning is OFF by default — the 100K cap is budgeted for
         # the (long) visible editorial. Enable it explicitly via

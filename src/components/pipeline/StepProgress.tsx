@@ -42,6 +42,20 @@ function parseProgress(
     return extractSteps(steps, logs, isRunning);
   }
 
+  if (stepId === "benchmark_testcases") {
+    const steps = [
+      { key: "bench", label: "Running Benchmark", patterns: [/Benchmark Report|Mutation kill rate/i], done: [/Gate \(min_kill/i] },
+    ];
+    return extractSteps(steps, logs, isRunning);
+  }
+
+  if (stepId === "harden_testcases") {
+    const steps = [
+      { key: "harden", label: "Hardening Suite", patterns: [/Harden round/i], done: [/Target kill rate|Appended.*case/i, /Gate \(min_kill/i] },
+    ];
+    return extractSteps(steps, logs, isRunning);
+  }
+
   if (stepId === "split_code") {
     const steps = [
       { key: "split", label: "Splitting Code Files", patterns: [/CODE SPLITTER|Processing/i], done: [/Code splitting completed/i] },
