@@ -19,6 +19,14 @@ export type QuestionType = "function" | "nonfunction";
 
 export type PipelineMode = "practice" | "exam";
 
+/**
+ * Whether a step calls the LLM:
+ *  - "llm"         → always makes one or more LLM calls
+ *  - "none"        → pure local execution, never calls the LLM
+ *  - "conditional" → only calls the LLM under certain conditions
+ */
+export type LlmUsage = "llm" | "none" | "conditional";
+
 export interface SubStep {
   id: string;
   label: string;
@@ -41,6 +49,8 @@ export interface PipelineStepConfig {
   hasLanguageSelector: boolean;
   hasTestcaseCount: boolean;
   needsMode: boolean;
+  /** Whether the step calls the LLM (always / never / conditionally). */
+  llmUsage: LlmUsage;
   /**
    * Explicit prerequisite step. When set, this step becomes runnable as soon as
    * the named step completes, instead of depending on the immediately-previous

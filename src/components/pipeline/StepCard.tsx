@@ -9,7 +9,40 @@ import { ExecutionResults } from "./ExecutionResults";
 import { LogStream } from "./LogStream";
 import { getStepConfig, LANGUAGES } from "@/lib/pipeline-config";
 import { cn } from "@/lib/utils";
-import type { StepState, StepId } from "@/types/pipeline";
+import type { StepState, StepId, LlmUsage } from "@/types/pipeline";
+
+const LLM_BADGE: Record<LlmUsage, { label: string; title: string; className: string }> = {
+  llm: {
+    label: "LLM",
+    title: "This step always calls the LLM (incurs token cost).",
+    className: "bg-violet-500/10 text-violet-600 dark:text-violet-300 border-violet-500/20",
+  },
+  conditional: {
+    label: "LLM (conditional)",
+    title: "This step only calls the LLM under certain conditions (otherwise it runs purely locally).",
+    className: "bg-amber-500/10 text-amber-600 dark:text-amber-300 border-amber-500/20",
+  },
+  none: {
+    label: "No LLM",
+    title: "Pure local execution — this step never calls the LLM.",
+    className: "bg-zinc-500/10 text-zinc-500 dark:text-zinc-400 border-zinc-500/20",
+  },
+};
+
+function LlmBadge({ usage }: { usage: LlmUsage }) {
+  const cfg = LLM_BADGE[usage];
+  return (
+    <span
+      title={cfg.title}
+      className={cn(
+        "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none shrink-0",
+        cfg.className
+      )}
+    >
+      {cfg.label}
+    </span>
+  );
+}
 
 interface StepCardProps {
   stepNumber: number;
@@ -94,7 +127,10 @@ export function StepCard({
               )}
             </span>
             <div>
-              <h3 className="font-semibold text-sm">{config.label}</h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-semibold text-sm">{config.label}</h3>
+                <LlmBadge usage={config.llmUsage} />
+              </div>
               <p className="text-xs text-muted-foreground">{config.description}</p>
             </div>
           </div>

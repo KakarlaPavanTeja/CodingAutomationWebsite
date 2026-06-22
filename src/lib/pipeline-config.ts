@@ -23,6 +23,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: true,
     hasTestcaseCount: false,
     needsMode: false,
+    llmUsage: "llm",
   },
   {
     id: "generate_brute_force",
@@ -33,6 +34,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: false,
     hasTestcaseCount: false,
     needsMode: false,
+    llmUsage: "llm",
   },
   {
     id: "generate_testcases",
@@ -43,26 +45,29 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: false,
     hasTestcaseCount: true,
     needsMode: false,
+    llmUsage: "llm",
   },
   {
     id: "benchmark_testcases",
     label: "Benchmark Test Cases",
-    description: "Measure mutation kill rate and coverage audits (informational)",
+    description: "Checks how strong your test cases are: it secretly injects small bugs into the solution and verifies the tests catch them. Read-only — it reports a score and never changes your tests.",
     script: "Scripts/benchmark_suite.py",
     subSteps: [],
     hasLanguageSelector: false,
     hasTestcaseCount: false,
     needsMode: false,
+    llmUsage: "none",
   },
   {
     id: "harden_testcases",
     label: "Strengthen Test Cases",
-    description: "Append targeted cases to kill surviving mutants (manual)",
+    description: "Strengthens a weak suite: finds bugs your current tests miss and automatically adds new test cases that catch them, until the kill-rate target is reached.",
     script: "Scripts/harden_suite.py",
     subSteps: [],
     hasLanguageSelector: false,
     hasTestcaseCount: false,
     needsMode: false,
+    llmUsage: "conditional",
   },
   {
     id: "split_code",
@@ -73,6 +78,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: true,
     hasTestcaseCount: false,
     needsMode: false,
+    llmUsage: "llm",
   },
   {
     id: "execute_tests_function",
@@ -83,6 +89,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: true,
     hasTestcaseCount: false,
     needsMode: false,
+    llmUsage: "none",
   },
   {
     id: "execute_tests_nonfunction",
@@ -93,6 +100,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: true,
     hasTestcaseCount: false,
     needsMode: false,
+    llmUsage: "none",
   },
   {
     id: "generate_enrichment",
@@ -107,6 +115,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: false,
     hasTestcaseCount: false,
     needsMode: false,
+    llmUsage: "llm",
   },
   {
     id: "package_platform",
@@ -117,6 +126,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: false,
     hasTestcaseCount: false,
     needsMode: true,
+    llmUsage: "none",
   },
   {
     id: "generate_editorial",
@@ -127,6 +137,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: false,
     hasTestcaseCount: false,
     needsMode: false,
+    llmUsage: "llm",
     prerequisite: "package_platform",
   },
   {
@@ -138,6 +149,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: false,
     hasTestcaseCount: false,
     needsMode: true,
+    llmUsage: "none",
     prerequisite: "package_platform",
   },
   {
@@ -149,6 +161,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: true,
     hasTestcaseCount: false,
     needsMode: false,
+    llmUsage: "none",
     prerequisite: "generate_editorial",
   },
 ];

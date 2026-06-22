@@ -559,8 +559,9 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
 
   // Auto-run driver: scan the whole queue and launch every step whose
   // prerequisite has completed and that isn't already running. Steps still
-  // waiting on an in-flight prerequisite stay queued; steps whose prerequisite
-  // failed (or will never run) are dropped so the queue always drains.
+  // waiting on a prerequisite that is running, queued ahead, or being retried
+  // by this same Run All stay queued; steps whose prerequisite has truly failed
+  // (and is not being retried) are dropped so the queue always drains.
   useEffect(() => {
     if (runAllQueue.length === 0) return;
 
@@ -583,13 +584,17 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         const prevStatus = stepStates.get(prereq)?.status;
         if (prevStatus === "completed") {
           // ready to run
-        } else if (prevStatus === "running" || (prevStatus === "pending" && alive.has(prereq))) {
-          // Prerequisite is in flight or still queued ahead — keep waiting.
+        } else if (prevStatus === "running" || alive.has(prereq)) {
+          // Prerequisite is running, queued ahead, or about to be (re)launched
+          // in this same pass (it's `alive`) — keep waiting. This also covers a
+          // prerequisite that is currently `failed` but is being retried by this
+          // Run All, so chained steps aren't wrongly dropped on a re-run.
           remaining.push(id);
           alive.add(id);
           continue;
         } else {
-          // Prerequisite failed / dropped / missing — skip this step.
+          // Prerequisite failed and is NOT being retried (not in this batch), or
+          // is otherwise unreachable — skip this step so the queue still drains.
           continue;
         }
       }
