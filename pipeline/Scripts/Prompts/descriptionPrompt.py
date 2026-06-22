@@ -638,3 +638,170 @@ Your response MUST END immediately after the **Output Format** section.
     - `null` represents a null node.
 """
     return prompt
+
+
+def get_nonfunction_structure_only_prompt(problem_name, question_type, user_code):
+    """Structure-only (scenario_level == "none") pass for NON-function problems.
+
+    Like `get_structure_only_prompt` it keeps the four pillars (scenario, names,
+    examples, constraints) unchanged and only rebuilds the prose/structure — but
+    it must NEVER emit a **Your Task** section (req 5: non-function descriptions
+    have no Your Task). Section order follows clear picture.md for non-function:
+    Problem Statement -> Input Format -> Output Format -> Constraints -> Examples.
+    """
+    prompt = f"""You are an expert technical content writer for a coding interview platform.
+This is a **non-function-based** (full-program / stdin-stdout) problem. There is NO function signature and NO **Your Task** section.
+
+**YOUR OBJECTIVE:**
+REBUILD the given problem statement into a clean, clear, well-structured, professional description.
+Rewrite the descriptive prose for clarity — but keep the problem's identity intact.
+
+**WHAT YOU MUST NOT CHANGE (FOUR PILLARS — HIGHEST PRIORITY):**
+1. **Scenario / framing** — Keep the SAME context. If the original is direct/technical, keep it technical; if it has a story, keep that same story.
+2. **Variable names** — Keep the EXACT original variable names. Do NOT rename or invent new names.
+3. **Examples** — Keep the SAME examples: identical input values, identical output values, identical explanatory facts. You MAY clean wording, but every number/string stays the same.
+4. **Constraints** — Keep the SAME constraint bounds and values exactly.
+
+**CRITICAL — NOTATION NORMALIZATION:**
+The rendered page does NOT support LaTeX/MathJax. Convert all math notation to clean plain text. Remove `$...$`, `\\(...\\)`, `\\[...\\]`; replace `\\le`/`\\leq` → `≤`, `\\ge`/`\\geq` → `≥`, `\\times` → `×`, `\\cdot` → `·`, `\\ldots`/`\\dots` → `...`; keep exponents as `10^9 + 7`. There must be ZERO backslash-LaTeX commands left.
+
+**SOURCE OF TRUTH FOR I/O FORMAT (reference ONLY — do NOT change variables, examples, or constraints):**
+```
+{user_code}
+```
+
+**OUTPUT FORMAT RULES:**
+1. **NO ATX HEADINGS** of any level (no `#`, `##`, ...). Section titles use bold `**Title:**` only.
+2. **NO horizontal dividers** (`---`, `***`, `___`).
+3. **NO markdown tables.** Convert any table to a bullet list preserving every value.
+4. Do NOT wrap the whole output in code fences.
+5. Do NOT include a "Problem Statement" title — start directly with the description text.
+6. Use `**` for section titles: **Input Format**, **Output Format**, **Constraints**, **Example 1:**, **Example 2:**, **Input:**, **Output:**, **Explanation:**. (There is NO **Your Task** section.)
+7. Leave exactly ONE BLANK LINE after every section title.
+8. Add a blank line BETWEEN every bullet point.
+10. Code fences are bare ``` with no language identifier.
+
+**FORBIDDEN:**
+- Do NOT include a **Your Task** section or any function-signature / "complete the function" wording.
+- Do NOT mention completing a named function.
+
+**REQUIRED SECTIONS (in this exact order):**
+
+**Problem Statement**
+- Start immediately with the rebuilt description text (no title line). Break into short lines per rule/objective.
+
+**Input Format**
+- Title: **Input Format** then a blank line. Bullet points describing stdin line-by-line, consistent with the ORIGINAL examples and the `USER CODE`. Keep original variable names.
+
+**Output Format**
+- Title: **Output Format** then a blank line. Bullet points describing stdout, consistent with the ORIGINAL examples and `USER CODE`.
+- State explicitly that the result is **printed** to standard output (full-program style). Do NOT start bullets with the word "Print".
+
+**Constraints**
+- Present the ORIGINAL constraints as bullet points with backticks and normalized notation (e.g. `5 ≤ |s| ≤ 10^5`). Do NOT change any values.
+
+**Examples**
+- Keep the SAME examples as the original (same number, same values). Re-format into this exact layout:
+
+    **Example 1:**
+
+    **Input:**
+
+    ```
+    ...
+    ```
+
+    **Output:**
+
+    ```
+    ...
+    ```
+
+    **Explanation:**
+
+    - Explanation text here.
+
+**FINAL CONFLICT-RESOLUTION RULE:** If any instruction conflicts with the FOUR PILLARS, the FOUR PILLARS WIN.
+{_node_type_addon(question_type)}
+"""
+    return prompt
+
+
+def get_nonfunction_description_prompt(problem_name, question_type, user_code, scenario_level="moderate"):
+    """Non-function problems: no Your Task; section order per clear picture.md."""
+    if scenario_level == "none":
+        return get_nonfunction_structure_only_prompt(problem_name, question_type, user_code)
+
+    rephrasing = ""
+    if scenario_level == "light":
+        rephrasing = "**REPHRASING WITH LIGHT SCENARIO:** Add minimal real-world context (1-2 sentences)."
+    elif scenario_level == "moderate":
+        rephrasing = "**REPHRASING WITH MODERATE SCENARIO:** Create a distinct scenario leading to the same I/O program."
+    elif scenario_level == "heavy":
+        rephrasing = "**REPHRASING WITH HEAVY SCENARIO:** Rich narrative framing the stdin/stdout program."
+
+    return f"""You are an expert technical content writer for a coding interview platform.
+This is a **non-function-based** (full-program / stdin-stdout) problem. There is NO function signature and NO **Your Task** section.
+
+**SOURCE OF TRUTH FOR I/O FORMAT:**
+Use the `USER CODE` below as the absolute source of truth for **Input Format** and **Output Format**.
+
+**USER CODE:**
+```
+{user_code}
+```
+
+{rephrasing}
+
+**CRITICAL: DO NOT COPY EXAMPLES** from the input problem. Invent exactly 2 new valid examples.
+
+**REQUIRED SECTIONS (in this exact order):**
+1. **Problem Statement** — start directly with prose (no section title line)
+2. **Input Format**
+3. **Output Format**
+4. **Constraints**
+5. **Examples** — exactly 2 examples with Input/Output/Explanation
+
+**FORBIDDEN:**
+- Do NOT include **Your Task** or any function-signature section
+- Do NOT mention completing a named function
+- Do NOT use `###`, `---`, or ATX headings
+- Do NOT copy input examples verbatim
+
+**FORMATTING:**
+- Use `**` for section titles: **Input Format**, **Output Format**, **Constraints**, **Example 1:**, etc.
+- One blank line after each section title
+- Backticks for literal values
+- Arrays with spaces after commas: `[1, 2, 3]`
+- Code fences in examples: bare ``` with no language tag
+
+**Input Format / Output Format:**
+- Describe stdin/stdout line-by-line based on USER CODE
+- State explicitly whether output is printed or returned (usually printed for full programs)
+
+**Constraints:**
+- Explicit numeric bounds with inequalities, e.g. `1 ≤ n ≤ 10^5`
+
+**Examples format:**
+
+    **Example 1:**
+
+    **Input:**
+
+    ```
+    ...
+    ```
+
+    **Output:**
+
+    ```
+    ...
+    ```
+
+    **Explanation:**
+
+    - ...
+
+End immediately after Example 2 — no extra sections.
+{_node_type_addon(question_type)}
+"""
