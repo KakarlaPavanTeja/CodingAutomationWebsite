@@ -1,6 +1,21 @@
-"use client"
+"use client";
 
-import * as React from "react"
+import * as React from "react";
+
+interface CollapsibleContextValue {
+  open: boolean;
+  onToggle: () => void;
+}
+
+const CollapsibleContext = React.createContext<CollapsibleContextValue | null>(null);
+
+function useCollapsible() {
+  const ctx = React.useContext(CollapsibleContext);
+  if (!ctx) {
+    throw new Error("Collapsible components must be used within <Collapsible>");
+  }
+  return ctx;
+}
 
 interface CollapsibleProps {
   open?: boolean;
@@ -9,29 +24,27 @@ interface CollapsibleProps {
   className?: string;
 }
 
-function Collapsible({ open, onOpenChange, children, className }: CollapsibleProps) {
+function Collapsible({ open = false, onOpenChange, children, className }: CollapsibleProps) {
+  const onToggle = React.useCallback(() => {
+    onOpenChange?.(!open);
+  }, [open, onOpenChange]);
+
   return (
-    <div data-state={open ? "open" : "closed"} className={className}>
-      {React.Children.map(children, (child) => {
-        if (React.isValidElement(child)) {
-          return React.cloneElement(child as React.ReactElement<{ open?: boolean; onToggle?: () => void }>, {
-            open,
-            onToggle: () => onOpenChange?.(!open),
-          });
-        }
-        return child;
-      })}
-    </div>
+    <CollapsibleContext.Provider value={{ open, onToggle }}>
+      <div data-state={open ? "open" : "closed"} className={className}>
+        {children}
+      </div>
+    </CollapsibleContext.Provider>
   );
 }
 
 function CollapsibleTrigger({
   children,
   className,
-  open,
-  onToggle,
   ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { open?: boolean; onToggle?: () => void }) {
+}: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  const { open, onToggle } = useCollapsible();
+
   return (
     <button
       type="button"
@@ -48,10 +61,13 @@ function CollapsibleTrigger({
 function CollapsibleContent({
   children,
   className,
-  open,
-}: { children: React.ReactNode; className?: string; open?: boolean; onToggle?: () => void }) {
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const { open } = useCollapsible();
   if (!open) return null;
   return <div className={className}>{children}</div>;
 }
 
-export { Collapsible, CollapsibleTrigger, CollapsibleContent }
+export { Collapsible, CollapsibleTrigger, CollapsibleContent };
