@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { GlobalConfig } from "@/components/pipeline/GlobalConfig";
 import { StepCard } from "@/components/pipeline/StepCard";
-import { getWorkflowSteps, getPrerequisiteStep } from "@/lib/pipeline-config";
+import { getWorkflowSteps, getPrerequisiteStep, getQuestionGenerationSteps } from "@/lib/pipeline-config";
 import { usePipeline } from "@/lib/pipeline-context";
+import type { StepId, StepLlmUsageStats } from "@/types/pipeline";
 import { Loader2, PlayCircle, StopCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -37,9 +38,36 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
     savePipelineState,
   } = usePipeline();
 
+  const [stepUsage, setStepUsage] = useState<Partial<Record<StepId, StepLlmUsageStats>>>({});
+
+  const fetchStepUsage = useCallback(() => {
+    fetch(`/api/pipeline/usage?problemId=${encodeURIComponent(problemId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.usage) setStepUsage(data.usage);
+      })
+      .catch(() => {});
+  }, [problemId]);
+
   useEffect(() => {
     loadProblemState(problemId);
   }, [problemId, loadProblemState]);
+
+  useEffect(() => {
+    if (stateLoading) return;
+    fetchStepUsage();
+  }, [stateLoading, fetchStepUsage]);
+
+  // Poll usage while any step is running; refresh once when all finish.
+  useEffect(() => {
+    if (!isAnyRunning) {
+      fetchStepUsage();
+      return;
+    }
+    fetchStepUsage();
+    const interval = setInterval(fetchStepUsage, 5000);
+    return () => clearInterval(interval);
+  }, [isAnyRunning, fetchStepUsage]);
 
   // Notify parent when a step starts or finishes so it can refetch problem status
   const prevRunning = useRef(isAnyRunning);
@@ -51,6 +79,7 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
   }, [isAnyRunning, onStatusChange]);
 
   const workflowSteps = getWorkflowSteps(questionType, mode);
+  const questionGenStepIds = new Set(getQuestionGenerationSteps(questionType));
 
   const allCompleted =
     workflowSteps.length > 0 &&
@@ -143,24 +172,49 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
           const state = stepStates.get(stepId);
           if (!state) return null;
 
-          const prereq = getPrerequisiteStep(stepId, workflowSteps);
+          const prereq = getPrerequisiteStep(stepId, workflowSteps, questionType);
           const previousCompleted =
             prereq === null ||
             stepStates.get(prereq)?.status === "completed";
 
+          const showQuestionGenHeader =
+            questionGenStepIds.has(stepId) &&
+            (index === 0 || !questionGenStepIds.has(workflowSteps[index - 1]));
+          const showPipelineHeader =
+            !questionGenStepIds.has(stepId) &&
+            index > 0 &&
+            questionGenStepIds.has(workflowSteps[index - 1]);
+
           return (
-            <StepCard
-              key={stepId}
-              stepNumber={index + 1}
-              stepState={state}
-              previousCompleted={previousCompleted}
-              onRun={runStep}
-              onStop={stopStep}
-              onUpdateLanguages={(langs) => {
-                updateStepState(stepId, { enabledLanguages: langs });
-                savePipelineState();
-              }}
-            />
+            <div key={stepId} className="space-y-3">
+              {showQuestionGenHeader && (
+                <div className="pt-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Question generation
+                  </p>
+                  <p className="text-xs text-muted-foreground/80 mt-0.5">
+                    Steps after description can run in parallel when you use Run All.
+                  </p>
+                </div>
+              )}
+              {showPipelineHeader && (
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground pt-1">
+                  Test &amp; package pipeline
+                </p>
+              )}
+              <StepCard
+                stepNumber={index + 1}
+                stepState={state}
+                llmUsageStats={stepUsage[stepId]}
+                previousCompleted={previousCompleted}
+                onRun={runStep}
+                onStop={stopStep}
+                onUpdateLanguages={(langs) => {
+                  updateStepState(stepId, { enabledLanguages: langs });
+                  savePipelineState();
+                }}
+              />
+            </div>
           );
         })}
       </div>

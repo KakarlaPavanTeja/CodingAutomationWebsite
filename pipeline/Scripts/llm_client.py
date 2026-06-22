@@ -63,6 +63,7 @@ _PURPOSE_DEFAULTS: dict[str, str] = {
     "enrichment": "openai/gpt-5.4",
     "editorial": "openai/gpt-5.5",
     "harden": "openai/gpt-5.5",
+    "wrong_solutions": "anthropic/claude-sonnet-4.5",
 }
 
 _ENV_SUFFIX = {
@@ -72,6 +73,7 @@ _ENV_SUFFIX = {
     "enrichment": "ENRICHMENT",
     "editorial": "EDITORIAL",
     "harden": "HARDEN",
+    "wrong_solutions": "WRONG_SOLUTIONS",
 }
 
 _REASONING_EFFORT_ALLOWED = frozenset(
@@ -382,6 +384,7 @@ _DEFAULT_MAX_TOKENS: dict[str, int] = {
     # If reasoning effort is ever enabled for editorial, the hidden reasoning
     # tokens are billed against this same budget — this cap leaves room for both.
     "editorial": 100000,
+    "wrong_solutions": 48000,
 }
 
 

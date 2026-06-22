@@ -9,23 +9,26 @@ import { ExecutionResults } from "./ExecutionResults";
 import { LogStream } from "./LogStream";
 import { getStepConfig, LANGUAGES } from "@/lib/pipeline-config";
 import { cn } from "@/lib/utils";
-import type { StepState, StepId, LlmUsage } from "@/types/pipeline";
+import type { StepState, StepId, LlmUsage, StepLlmUsageStats } from "@/types/pipeline";
 
 const LLM_BADGE: Record<LlmUsage, { label: string; title: string; className: string }> = {
   llm: {
-    label: "LLM",
+    label: "Uses LLM",
     title: "This step always calls the LLM (incurs token cost).",
-    className: "bg-violet-500/10 text-violet-600 dark:text-violet-300 border-violet-500/20",
+    className:
+      "bg-violet-500/25 text-violet-700 dark:text-violet-200 border-violet-500/50 ring-1 ring-violet-500/20",
   },
   conditional: {
-    label: "LLM (conditional)",
+    label: "LLM if needed",
     title: "This step only calls the LLM under certain conditions (otherwise it runs purely locally).",
-    className: "bg-amber-500/10 text-amber-600 dark:text-amber-300 border-amber-500/20",
+    className:
+      "bg-amber-500/25 text-amber-800 dark:text-amber-200 border-amber-500/50 ring-1 ring-amber-500/20",
   },
   none: {
     label: "No LLM",
     title: "Pure local execution — this step never calls the LLM.",
-    className: "bg-zinc-500/10 text-zinc-500 dark:text-zinc-400 border-zinc-500/20",
+    className:
+      "bg-emerald-500/20 text-emerald-800 dark:text-emerald-200 border-emerald-500/45 ring-1 ring-emerald-500/15",
   },
 };
 
@@ -35,7 +38,7 @@ function LlmBadge({ usage }: { usage: LlmUsage }) {
     <span
       title={cfg.title}
       className={cn(
-        "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none shrink-0",
+        "inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-semibold leading-none shrink-0 tracking-wide",
         cfg.className
       )}
     >
@@ -44,10 +47,103 @@ function LlmBadge({ usage }: { usage: LlmUsage }) {
   );
 }
 
+function formatTokens(n: number): string {
+  return n.toLocaleString();
+}
+
+function formatCost(n: number): string {
+  if (n >= 1) return `$${n.toFixed(2)}`;
+  if (n >= 0.01) return `$${n.toFixed(3)}`;
+  if (n > 0) return `$${n.toFixed(4)}`;
+  return "$0.00";
+}
+
+function formatModelLabel(models: string[]): string {
+  if (models.length === 0) return "—";
+  const short = (m: string) => m.replace(/^(openai|google|anthropic)\//, "");
+  if (models.length === 1) return short(models[0]);
+  return `${short(models[0])} +${models.length - 1}`;
+}
+
+function StepLlmUsageBar({
+  llmUsage,
+  stats,
+  stepStatus,
+}: {
+  llmUsage: LlmUsage;
+  stats?: StepLlmUsageStats;
+  stepStatus: StepState["status"];
+}) {
+  if (llmUsage === "none") return null;
+
+  const hasRun = stepStatus !== "pending";
+  if (!hasRun && !stats) return null;
+
+  if (!stats || stats.callCount === 0) {
+    if (stepStatus === "completed" || stepStatus === "failed") {
+      return (
+        <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+          <span className="rounded-md border border-border/60 bg-muted/30 px-2 py-1">
+            No LLM calls on last run
+          </span>
+        </div>
+      );
+    }
+    if (stepStatus === "running") {
+      return (
+        <div className="mt-2 text-xs text-muted-foreground animate-pulse">
+          Waiting for LLM usage…
+        </div>
+      );
+    }
+    return null;
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      <UsagePill label="Model" value={formatModelLabel(stats.models)} title={stats.models.join(", ")} />
+      <UsagePill label="Input" value={formatTokens(stats.promptTokens)} />
+      <UsagePill label="Output" value={formatTokens(stats.completionTokens)} />
+      <UsagePill label="Cost" value={formatCost(stats.costUsd)} highlight />
+      {stats.callCount > 1 && (
+        <UsagePill label="Calls" value={String(stats.callCount)} />
+      )}
+    </div>
+  );
+}
+
+function UsagePill({
+  label,
+  value,
+  title,
+  highlight,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+  highlight?: boolean;
+}) {
+  return (
+    <span
+      title={title}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs",
+        highlight
+          ? "border-violet-500/40 bg-violet-500/15 text-violet-800 dark:text-violet-200 font-semibold"
+          : "border-border/60 bg-muted/40 text-foreground"
+      )}
+    >
+      <span className="text-muted-foreground font-medium">{label}</span>
+      <span className="tabular-nums">{value}</span>
+    </span>
+  );
+}
+
 interface StepCardProps {
   stepNumber: number;
   stepState: StepState;
   previousCompleted: boolean;
+  llmUsageStats?: StepLlmUsageStats;
   onRun: (state: StepState) => void;
   onStop?: (stepId: StepId) => void;
   onUpdateLanguages?: (languages: string[]) => void;
@@ -67,6 +163,7 @@ export function StepCard({
   onRun,
   onStop,
   onUpdateLanguages,
+  llmUsageStats,
 }: StepCardProps) {
   const config = getStepConfig(stepState.id);
   const [showRawLogs, setShowRawLogs] = useState(false);
@@ -132,6 +229,11 @@ export function StepCard({
                 <LlmBadge usage={config.llmUsage} />
               </div>
               <p className="text-xs text-muted-foreground">{config.description}</p>
+              <StepLlmUsageBar
+                llmUsage={config.llmUsage}
+                stats={llmUsageStats}
+                stepStatus={stepState.status}
+              />
             </div>
           </div>
           <div className="flex items-center gap-2">

@@ -23,21 +23,72 @@ function parseProgress(
   const lines = logs.map((l) => l.line);
   const items: ProgressItem[] = [];
 
-  if (stepId === "generate_question") {
-    const steps = [
-      { key: "description", label: "Generating Description", patterns: [/STEP 1:.*Description/i], done: [/✓ Description created/i, /Skipping Step 1/i] },
-      { key: "codes", label: "Translating Code", patterns: [/STEP 2:.*Naming|STEP 3:.*Converting/i], done: [/✓ Solutions saved/i, /Skipping Step 3/i] },
-      { key: "titles", label: "Generating Titles", patterns: [/STEP 5a:.*Titles/i], done: [/✓ Titles generated/i, /Skipping Step 5a/i] },
-      { key: "difficulty", label: "Estimating Difficulty", patterns: [/STEP 5b:.*Difficulty/i], done: [/✓ Difficulty generated/i, /Skipping Step 5b/i] },
-      { key: "topics", label: "Classifying Topics", patterns: [/STEP 6:.*Topics/i], done: [/✓ Topics generated/i, /Skipping Step 6/i] },
-    ];
+  const questionGenProgress = (patterns: RegExp[], done: RegExp[], label: string): ProgressItem[] => {
+    const steps = [{ key: "main", label, patterns, done }];
     return extractSteps(steps, logs, isRunning);
+  };
+
+  if (stepId === "generate_description") {
+    return questionGenProgress(
+      [/STEP: Description Creation/i],
+      [/✓ Description created/i],
+      "Generating Description"
+    );
+  }
+  if (stepId === "enforce_naming") {
+    return questionGenProgress(
+      [/STEP: Naming Enforcement/i],
+      [/✓ Given code updated|skipping function-signature/i],
+      "Enforcing Naming"
+    );
+  }
+  if (stepId === "generate_titles") {
+    return questionGenProgress([/STEP: Generating Titles/i], [/✓ Titles generated/i], "Generating Titles");
+  }
+  if (stepId === "generate_difficulty") {
+    return questionGenProgress(
+      [/STEP: Generating Difficulty/i],
+      [/✓ Difficulty generated|owner-set difficulty/i],
+      "Estimating Difficulty"
+    );
+  }
+  if (stepId === "generate_topics") {
+    return questionGenProgress([/STEP: Generating Topics/i], [/✓ Topics generated/i], "Classifying Topics");
+  }
+  if (stepId === "translate_cpp") {
+    return questionGenProgress(
+      [/Converting to C\+\+/i],
+      [/✓ Solutions saved/i],
+      "Translating to C++"
+    );
+  }
+  if (stepId === "translate_java") {
+    return questionGenProgress(
+      [/Converting to Java/i],
+      [/✓ Solutions saved/i],
+      "Translating to Java"
+    );
+  }
+  if (stepId === "translate_nodejs") {
+    return questionGenProgress(
+      [/Converting to Node\.js/i],
+      [/✓ Solutions saved/i],
+      "Translating to Node.js"
+    );
   }
 
   if (stepId === "generate_testcases") {
     const steps = [
       { key: "generate", label: "Calling LLM for Test Cases", patterns: [/LLM call in progress|Calling LLM to generate/i], done: [/LLM call completed|saved test case generator/i] },
       { key: "run", label: "Running Generator & Validating", patterns: [/Running.*\.py/i], done: [/Successfully generated testcases|Moved testcases\.json/i] },
+    ];
+    return extractSteps(steps, logs, isRunning);
+  }
+
+  if (stepId === "generate_wrong_solutions") {
+    const steps = [
+      { key: "llm", label: "Calling Claude for Wrong Solutions", patterns: [/Calling LLM \(Claude\)/i], done: [/Successfully saved \d+ wrong solution/i] },
+      { key: "save", label: "Saving wrong_solutions/*.py", patterns: [/Saved .*\.py/i], done: [/Successfully saved \d+ wrong solution/i] },
     ];
     return extractSteps(steps, logs, isRunning);
   }

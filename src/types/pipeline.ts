@@ -1,7 +1,15 @@
 export type StepId =
-  | "generate_question"
+  | "generate_description"
+  | "enforce_naming"
+  | "generate_titles"
+  | "generate_difficulty"
+  | "generate_topics"
+  | "translate_cpp"
+  | "translate_java"
+  | "translate_nodejs"
   | "generate_brute_force"
   | "generate_testcases"
+  | "generate_wrong_solutions"
   | "benchmark_testcases"
   | "harden_testcases"
   | "split_code"
@@ -93,4 +101,13 @@ export interface OutputFile {
   size: number;
   modifiedAt: string;
   isDirectory: boolean;
+}
+
+/** Aggregated LLM usage for a step's most recent run */
+export interface StepLlmUsageStats {
+  promptTokens: number;
+  completionTokens: number;
+  costUsd: number;
+  models: string[];
+  callCount: number;
 }

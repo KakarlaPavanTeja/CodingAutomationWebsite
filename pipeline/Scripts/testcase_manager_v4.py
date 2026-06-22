@@ -201,7 +201,7 @@ def _retry_fix_script(script_path: str, first_error: str) -> None:
             "testcase_generation_retry",
             model=retry_usage.get("model", "unknown"),
             purpose="testcases",
-            step_id="create_testcases",
+            step_id="generate_testcases",
             cost=retry_usage.get("cost", 0.0),
         )
     except Exception as retry_err:
@@ -342,7 +342,7 @@ def main():
             "testcase_generation",
             model=usage.get("model", "unknown"),
             purpose="testcases",
-            step_id="create_testcases",
+            step_id="generate_testcases",
             cost=usage.get("cost", 0.0),
         )
 

@@ -140,6 +140,254 @@ If any instruction above ever conflicts with the FOUR PILLARS (scenario, variabl
     return prompt
 
 
+def _get_rephrasing_mode(scenario_level: str) -> str:
+    """Scenario-level rephrasing instructions shared by split description prompts."""
+    if scenario_level == "light":
+        return """
+**REPHRASING WITH LIGHT SCENARIO:**
+- Add a subtle real-world context to frame the problem, but keep it minimal (1-2 sentences max).
+- The core problem description should remain mostly technical and algorithmic.
+- Use the context only to introduce the variables naturally, then shift to direct problem language.
+- Example: Instead of "Given an array of integers", say "A sensor array records `n` readings. Given these readings as a sequence `values`..." then proceed technically.
+- Do NOT build an elaborate story. The scenario is just a thin wrapper to make variables feel grounded.
+- **Vary themes**: Use diverse contexts (sensors, logs, inventories, schedules, measurements — NOT always space themes).
+- Example transformations:
+  * "array of numbers" → "sequence of readings", "list of recorded values"
+  * "find indices" → "locate the positions", "identify which entries"
+  * "target sum" → "desired total", "target threshold"
+"""
+    if scenario_level == "moderate":
+        return """
+**REPHRASING WITH MODERATE SCENARIO:**
+- Create a NEW scenario/story completely different from typical examples.
+- **Vary themes**: Use diverse contexts (Banking, Nature/Science, Games, Technology, Social - NOT always space themes).
+- The scenario should naturally lead to the same algorithmic problem.
+- Keep it concise - don't over-elaborate.
+- Example transformations:
+  * "array of numbers" → "sequence of measurements", "list of scores", "collection of readings"
+  * "find indices" → "locate positions", "identify locations", "determine placements"
+  * "target sum" → "desired total", "goal value", "required amount"
+"""
+    if scenario_level == "heavy":
+        return """
+**REPHRASING WITH HEAVY/IMMERSIVE SCENARIO:**
+- Create a rich, detailed narrative scenario that fully disguises the underlying algorithm.
+- Build a vivid, engaging story world with specific characters, settings, or situations.
+- The reader should feel immersed in the scenario before realizing it maps to an algorithmic challenge.
+- **Vary themes**: Use creative, diverse contexts — fantasy worlds, detective investigations, cooking competitions, archaeological expeditions, space missions, wildlife research, city planning, etc.
+- Every technical element should be naturally mapped to the story:
+  * "array of numbers" → "the ancient scroll contains a sequence of rune power levels"
+  * "find indices" → "identify which runes in the sequence"
+  * "target sum" → "the ritual requires a combined power of exactly"
+  * "return true/false" → "determine whether the expedition can succeed"
+- The scenario should be 3-5 sentences of narrative context before the actual task description.
+- Make the problem feel like a puzzle within the story, not a math problem with a coat of paint.
+"""
+    return ""
+
+
+def _get_naming_requirements() -> str:
+    return """
+**NAMING REQUIREMENTS (ALWAYS APPLY):**
+
+**CRITICAL - YOU MUST CHANGE THESE:**
+- **Function Name**: Generate a NEW camelCase name different from these common ones:
+  * FORBIDDEN: twoSum, findPair, searchPair, getPair, findIndices, getIndices
+  * GOOD: locatePairPositions, findMatchingElements, identifyTargetPair, seekElementPair
+
+- **Variable Names in Description**: You MUST use DIFFERENT names from standard examples:
+  * FORBIDDEN: nums, arr, array, target, sum
+  * For array/list: Use "elements", "values", "data", "sequence", "collection", "items"
+  * For target/goal: Use "goal", "required", "desired", "expected", "threshold"
+  * For size: Keep as single letter `n` or `m` (this is OK)
+
+- **Consistency**: Use your NEW chosen names consistently in every section you write.
+"""
+
+
+def _get_io_truth_context(user_code: str) -> str:
+    return f"""
+**SOURCE OF TRUTH FOR I/O FORMAT:**
+You MUST use the `USER CODE` provided below as the absolute SOURCE OF TRUTH for input/output behavior.
+
+**USER CODE:**
+```cpp
+{user_code}
+```
+
+**INSTRUCTION UPDATE:**
+1. Carefully analyze the ENTITY of the `USER CODE`, including any `main` function or top-level input reading logic (e.g., `cin`, `scanf`, `input()`, `fs.readFileSync`).
+2. If the code explicitly reads a variable (like a length `n` or `m`) before reading a collection/array, you MUST include that variable in examples and formats.
+3. If the code reads the collection/array directly (e.g., using `JSON.parse` or `getline` without an explicit size count), then you MUST NOT include a size variable.
+4. Your output must reflect EXACTLY what the `USER CODE` prints or returns as the final result of execution.
+5. Do NOT blindly copy the input/output format text from the original problem description text if it conflicts with how the `USER CODE` actually reads/writes data.
+6. **STRICT COMPLEX TYPE FORMATTING**: Any arrays, strings, or matrices mentioned MUST follow the exact input representation expected by the `USER CODE`.
+
+**CRITICAL: DO NOT mention time/space complexity constraints in the description.**
+"""
+
+
+def _node_type_addon(question_type: str) -> str:
+    if question_type.lower() == "node":
+        return """
+**For Node-Based Questions:**
+- The first line contains space-separated values representing the nodes.
+- `null` represents a null node.
+"""
+    return ""
+
+
+def get_description_prose_prompt(problem_name, question_type, user_code, scenario_level="moderate"):
+    """Step 1a: problem statement / scenario only — establishes names for later steps."""
+    rephrasing_mode = _get_rephrasing_mode(scenario_level)
+    return f"""You are an expert technical content writer for a coding interview platform.
+{_get_io_truth_context(user_code)}
+
+**YOUR OBJECTIVE:**
+Write ONLY the **problem statement prose** for a rephrased coding question. Use NEW variable and function names.
+
+{rephrasing_mode}
+{_get_naming_requirements()}
+
+**FORBIDDEN PHRASES (DO NOT USE):**
+- "Given an array of integers"
+- "return indices of"
+- "find two numbers"
+- "add up to target"
+- "You may assume"
+- "return the answer in any order"
+
+**OUTPUT RULES:**
+1. Do NOT use `###`, `---`, or ATX headings.
+2. Do NOT include a "Problem Statement" title — start directly with the description text.
+3. Do NOT write Examples, Your Task, Constraints, Input Format, or Output Format.
+4. Use backticks for literal values in prose.
+5. Break text into short lines with blank lines between distinct rules or objectives.
+6. End after the problem statement prose — nothing else.
+
+**At the very end**, on its own lines, emit a machine-readable naming block so later steps stay consistent:
+
+**Naming Block:**
+- function: `yourChosenFunctionName`
+- variables: `name1`, `name2`, ...
+{_node_type_addon(question_type)}
+"""
+
+
+def get_description_examples_prompt(problem_prose, question_type, user_code):
+    """Step 1b: two fresh examples using names from the prose step."""
+    return f"""You are an expert technical content writer for a coding interview platform.
+{_get_io_truth_context(user_code)}
+
+**PROBLEM STATEMENT (already written — use the SAME variable/function names):**
+{problem_prose}
+
+**YOUR OBJECTIVE:**
+Write ONLY the **Examples** section (exactly 2 examples). Do NOT rewrite the problem statement.
+
+**CRITICAL RULES:**
+- **ABSOLUTELY NO COPYING** from the original input problem text.
+- Invent completely new numbers, arrays, strings, and outputs.
+- Provide exactly 2 examples — no more, no fewer.
+- Use the SAME naming as the problem statement above.
+- Format arrays with spaces after commas: `[1, 2, 3]` not `[1,2,3]`.
+- Use backticks for literals in explanations.
+- Do NOT use language tags after code fences — bare ``` only.
+
+**OUTPUT FORMAT (follow exactly, including blank lines):**
+
+    **Example 1:**
+
+    **Input:**
+
+    ```
+    ...
+    ```
+
+    **Output:**
+
+    ```
+    ...
+    ```
+
+    **Explanation:**
+
+    - ...
+
+    **Example 2:**
+
+    **Input:**
+
+    ```
+    ...
+    ```
+
+    **Output:**
+
+    ```
+    ...
+    ```
+
+    **Explanation:**
+
+    - ...
+
+Your response MUST contain ONLY the two examples — no other sections.
+{_node_type_addon(question_type)}
+"""
+
+
+def get_description_spec_prompt(problem_prose, examples_text, question_type, user_code):
+    """Step 1c: Your Task, Constraints, Input Format, Output Format."""
+    return f"""You are an expert technical content writer for a coding interview platform.
+{_get_io_truth_context(user_code)}
+
+**PROBLEM STATEMENT:**
+{problem_prose}
+
+**EXAMPLES (already written — stay consistent):**
+{examples_text}
+
+**YOUR OBJECTIVE:**
+Write ONLY these four sections, in order: **Your Task**, **Constraints**, **Input Format**, **Output Format**.
+
+**Your Task**
+- Use the function name from the problem statement.
+- Format:
+    **Your Task**
+
+    - Complete the provided `functionName` function that takes `arg` and returns `result`.
+
+**Constraints**
+- Bullet points with backticks.
+- Every numeric range MUST have explicit bounds (e.g. `0 ≤ n ≤ 10^5`).
+- Infer reasonable bounds from the problem and examples if unspecified.
+
+**Input Format**
+- Title: **Input Format** followed by a blank line.
+- Bullet points describing inputs line-by-line, matching `USER CODE` and the examples above.
+
+**Output Format**
+- Title: **Output Format** followed by a blank line.
+- Bullet points describing outputs, matching `USER CODE` and the examples above.
+- State whether the result is **printed** or **returned**, exactly as in `USER CODE`.
+- Do NOT start bullets with the word "Print".
+
+**OUTPUT RULES:**
+1. Do NOT rewrite the problem statement or examples.
+2. Use `**` for section titles with a blank line after each title.
+3. Add a blank line between every bullet point.
+4. Your response MUST END immediately after the **Output Format** section.
+{_node_type_addon(question_type)}
+"""
+
+
+def assemble_description_parts(prose: str, examples: str, spec: str) -> str:
+    """Join the three description LLM outputs into one markdown file."""
+    parts = [p.strip() for p in (prose, examples, spec) if p and p.strip()]
+    return "\n\n".join(parts) + "\n"
+
+
 def get_description_prompt(problem_name, question_type, user_code, scenario_level="moderate"):
     """
     Constructs the system prompt for generating coding question descriptions

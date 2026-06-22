@@ -579,7 +579,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         continue;
       }
 
-      const prereq = getPrerequisiteStep(id, steps);
+      const prereq = getPrerequisiteStep(id, steps, questionType);
       if (prereq) {
         const prevStatus = stepStates.get(prereq)?.status;
         if (prevStatus === "completed") {

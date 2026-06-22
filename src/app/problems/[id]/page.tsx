@@ -69,9 +69,17 @@ const STATUS_CONFIG: Record<string, { icon: React.ElementType; label: string; cl
 };
 
 const STEP_LABELS: Record<string, string> = {
-  generate_question: "Generate Question",
+  generate_description: "Generate Description",
+  enforce_naming: "Enforce Naming",
+  generate_titles: "Generate Titles",
+  generate_difficulty: "Estimate Difficulty",
+  generate_topics: "Classify Topics",
+  translate_cpp: "Translate to C++",
+  translate_java: "Translate to Java",
+  translate_nodejs: "Translate to Node.js",
   generate_brute_force: "Generate Brute Force",
   generate_testcases: "Generate Test Cases",
+  generate_wrong_solutions: "Generate Wrong Solutions",
   benchmark_testcases: "Benchmark Test Cases",
   harden_testcases: "Strengthen Test Cases",
   split_code: "Split Code",

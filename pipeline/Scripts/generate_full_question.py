@@ -200,6 +200,135 @@ def _parse_signature(raw):
     return data
 
 
+LANG_MAP = {
+    'python': 'python_code',
+    'c++': 'cpp_code',
+    'java': 'java_code',
+    'node.js': 'nodejs_code',
+}
+
+LANG_ID_TO_KEY = {
+    'python': 'python_code',
+    'cpp': 'cpp_code',
+    'java': 'java_code',
+    'nodejs': 'nodejs_code',
+}
+
+TARGET_LANGS = {
+    "cpp_code": "C++",
+    "java_code": "Java",
+    "nodejs_code": "Node.js",
+    "python_code": "Python",
+}
+
+FILE_MAPPINGS = {
+    'python_code': 'PYTHON.py',
+    'cpp_code': 'CPP.cpp',
+    'java_code': 'JAVA.java',
+    'nodejs_code': 'NodeJS.js',
+}
+
+NORMALIZED_EXT = {
+    'python': '.py',
+    'c++': '.cpp',
+    'java': '.java',
+    'node.js': '.js',
+}
+
+
+def _current_step_id():
+    return os.environ.get("PIPELINE_STEP_ID") or "generate_question"
+
+
+def _track_llm_usage(usage, label, purpose="chat"):
+    update_usage(
+        usage.get('prompt_tokens', 0),
+        usage.get('completion_tokens', 0),
+        label,
+        model=usage.get('model', 'unknown'),
+        purpose=purpose,
+        step_id=_current_step_id(),
+        cost=usage.get('cost', 0.0),
+    )
+
+
+def _strip_scratchpad(text):
+    return re.sub(r'<scratchpad>.*?</scratchpad>', '', text, flags=re.DOTALL).strip()
+
+
+def _generated_full_code_dir():
+    path = os.path.join(OUTPUT_DIR, 'generatedFullCode')
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _signature_path():
+    return os.path.join(OUTPUT_DIR, 'description_signature.json')
+
+
+def _normalized_source_path(detected_lang):
+    ext = NORMALIZED_EXT.get(detected_lang.lower(), '.txt')
+    return os.path.join(OUTPUT_DIR, f'normalized_source{ext}')
+
+
+def _description_path():
+    return os.path.join(OUTPUT_DIR, 'generated_description.md')
+
+
+def _load_description():
+    path = _description_path()
+    if not os.path.exists(path):
+        return ""
+    with open(path, 'r', encoding='utf-8') as f:
+        return f.read()
+
+
+def _save_description(text):
+    with open(_description_path(), 'w', encoding='utf-8') as f:
+        f.write(text)
+
+
+def _save_signature(signature):
+    if signature:
+        with open(_signature_path(), 'w', encoding='utf-8') as f:
+            json.dump(signature, f, indent=2)
+
+
+def _load_signature():
+    path = _signature_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _save_normalized_source(code, detected_lang):
+    path = _normalized_source_path(detected_lang)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(code)
+
+
+def _load_normalized_source(detected_lang, fallback):
+    path = _normalized_source_path(detected_lang)
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+    return fallback
+
+
+def _save_solution_file(lang_key, code):
+    filename = FILE_MAPPINGS.get(lang_key)
+    if not filename:
+        return
+    out_path = os.path.join(_generated_full_code_dir(), filename)
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write(code)
+
+
 def detect_user_solution():
     """Find user's solution file in Inputs/ directory"""
     extensions = {
@@ -218,279 +347,246 @@ def detect_user_solution():
     print("Please provide one of: solution.py, solution.cpp, Solution.java, solution.js")
     sys.exit(1)
 
+def run_description_step(problem_name, structure_type, scenario_level, problem_content, user_code, detected_lang):
+    print("\n" + "=" * 60)
+    print("STEP: Description Creation")
+    print("=" * 60)
+
+    desc_prompt = get_description_prompt(problem_name, structure_type, user_code, scenario_level)
+    desc_response, desc_usage = call_llm(desc_prompt, problem_content, purpose="chat")
+    desc_response = _strip_scratchpad(desc_response)
+    if scenario_level == "none":
+        desc_response = normalize_renderer_safe(desc_response)
+
+    _track_llm_usage(desc_usage, f"{problem_name}_description")
+    _save_description(desc_response)
+    _save_solution_file('python_code', user_code)
+    print(f"✓ Description created and saved to {_description_path()}")
+    print(f"✓ Baseline solution saved to generatedFullCode/PYTHON.py")
+
+
+def run_naming_step(problem_name, structure_type, question_kind, user_code, detected_lang):
+    print("\n" + "=" * 60)
+    print("STEP: Naming Enforcement")
+    print("=" * 60)
+
+    if question_kind == "nonfunction":
+        print("ℹ Non-function problem — skipping function-signature naming enforcement.")
+        return
+
+    from Prompts.signatureExtractionPrompt import get_signature_extraction_prompt
+
+    desc_response = _load_description()
+    if not desc_response.strip():
+        print("⚠ No description available — cannot extract a canonical signature.")
+        return
+
+    sig_prompt = get_signature_extraction_prompt(desc_response)
+    sig_response, sig_usage = call_llm(sig_prompt, "", purpose="chat")
+    _track_llm_usage(sig_usage, f"{problem_name}_signature")
+    description_signature = _parse_signature(sig_response)
+
+    if not description_signature:
+        print("⚠ Could not extract a function signature from the description; skipping rename.")
+        return
+
+    print(f"Enforcing function name: {description_signature.get('function_name')}")
+    refactor_prompt = get_normalization_prompt(
+        user_code, detected_lang, description_signature, desc_response, structure_type
+    )
+    renamed_code, refactor_usage = call_llm(refactor_prompt, "", purpose="chat")
+    _track_llm_usage(refactor_usage, f"{problem_name}_refactor")
+
+    if renamed_code.strip().startswith("```"):
+        renamed_code = renamed_code.strip().split('\n', 1)[1].rsplit('\n', 1)[0].strip()
+    renamed_code = clean_generated_code(renamed_code, detected_lang)
+
+    _save_signature(description_signature)
+    _save_normalized_source(renamed_code, detected_lang)
+    _save_solution_file('python_code', renamed_code)
+    print("✓ Given code updated with description naming and normalization")
+
+
+def run_titles_step(problem_name):
+    print("\n" + "=" * 60)
+    print("STEP: Generating Titles")
+    print("=" * 60)
+
+    desc_response = _load_description()
+    if not desc_response.strip():
+        print("Error: no description found. Run generate_description first.")
+        sys.exit(1)
+
+    title_prompt = get_title_prompt(desc_response)
+    title_response, title_usage = call_llm(title_prompt, "", purpose="chat")
+    _track_llm_usage(title_usage, f"{problem_name}_titles")
+
+    titles_path = os.path.join(OUTPUT_DIR, 'generated_titles.txt')
+    with open(titles_path, 'w', encoding='utf-8') as f:
+        f.write(title_response)
+    print("✓ Titles generated")
+
+
+def run_difficulty_step(problem_name):
+    print("\n" + "=" * 60)
+    print("STEP: Generating Difficulty")
+    print("=" * 60)
+
+    desc_response = _load_description()
+    if not desc_response.strip():
+        print("Error: no description found. Run generate_description first.")
+        sys.exit(1)
+
+    diff_path = os.path.join(OUTPUT_DIR, 'generated_difficulty.txt')
+    owner_difficulty = os.environ.get("PIPELINE_OWNER_DIFFICULTY", "").strip().lower()
+    if owner_difficulty in ("easy", "medium", "hard"):
+        with open(diff_path, 'w', encoding='utf-8') as f:
+            f.write(owner_difficulty)
+        print(f"✓ Using owner-set difficulty (final): {owner_difficulty}")
+        return
+
+    diff_prompt = get_difficulty_prompt(desc_response)
+    diff_response, diff_usage = call_llm(diff_prompt, "", purpose="chat")
+    _track_llm_usage(diff_usage, f"{problem_name}_difficulty")
+    with open(diff_path, 'w', encoding='utf-8') as f:
+        f.write(diff_response.strip())
+    print("✓ Difficulty generated")
+
+
+def run_topics_step(problem_name, user_code, detected_lang):
+    print("\n" + "=" * 60)
+    print("STEP: Generating Topics")
+    print("=" * 60)
+
+    desc_response = _load_description()
+    if not desc_response.strip():
+        print("Error: no description found. Run generate_description first.")
+        sys.exit(1)
+
+    topics_list_path = os.path.join(INPUT_DIR, 'topics_list.txt')
+    if not os.path.exists(topics_list_path):
+        print(f"Warning: {topics_list_path} not found. Skipping topic generation.")
+        return
+
+    with open(topics_list_path, 'r', encoding='utf-8') as f:
+        topics_list_content = f.read()
+
+    working_code = _load_normalized_source(detected_lang, user_code)
+    topics_prompt = get_topics_prompt(desc_response, working_code, topics_list_content)
+    topics_response, topics_usage = call_llm(topics_prompt, "", purpose="chat")
+    _track_llm_usage(topics_usage, f"{problem_name}_topics")
+
+    topics_out_path = os.path.join(OUTPUT_DIR, 'generated_topics.json')
+    try:
+        clean_topics = topics_response.strip()
+        if clean_topics.startswith("```"):
+            clean_topics = clean_topics.split('\n', 1)[1].rsplit('\n', 1)[0].strip()
+        topic_data = json.loads(clean_topics)
+        with open(topics_out_path, 'w', encoding='utf-8') as f:
+            json.dump(topic_data, f, indent=4)
+        print(f"✓ Topics generated and saved to {topics_out_path}")
+    except Exception as e:
+        print(f"Warning: Failed to parse generated topics JSON. {e}")
+
+
+def run_translate_step(problem_name, structure_type, user_code, detected_lang, selected_langs):
+    print("\n" + "=" * 60)
+    print("STEP: Converting to Other Languages")
+    print("=" * 60)
+
+    desc_response = _load_description()
+    if not desc_response.strip():
+        print("Error: no description found. Run generate_description first.")
+        sys.exit(1)
+
+    working_code = _load_normalized_source(detected_lang, user_code)
+    description_signature = _load_signature()
+    user_lang_key = LANG_MAP.get(detected_lang.lower(), 'python_code')
+    selected_keys = {LANG_ID_TO_KEY.get(l, '') for l in selected_langs}
+
+    _save_solution_file(user_lang_key, working_code)
+
+    for key, lang in TARGET_LANGS.items():
+        if key == user_lang_key:
+            continue
+        if key not in selected_keys:
+            print(f"  ⏭ Skipping {lang} (not selected)")
+            continue
+        print(f"  - Converting to {lang}...")
+        conv_prompt = get_conversion_prompt(
+            lang, working_code, structure_type, description_signature, desc_response
+        )
+        conv_response, conv_usage = call_llm(conv_prompt, "", purpose="code")
+        _track_llm_usage(conv_usage, f"{problem_name}_convert_{lang}", purpose="code")
+
+        clean_code = conv_response.strip()
+        if clean_code.startswith("```"):
+            clean_code = clean_code.split('\n', 1)[1].rsplit('\n', 1)[0].strip()
+        clean_code = clean_generated_code(clean_code, lang)
+        _save_solution_file(key, clean_code)
+
+    print(f"✓ Solutions saved to {_generated_full_code_dir()}")
+
+
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Generate full question with selective steps")
-    parser.add_argument("--steps", default="description,naming,codes,titles,difficulty,topics",
-                        help="Comma-separated steps to run: description,naming,codes,titles,difficulty,topics")
-    parser.add_argument("--langs", default="python,cpp,java,nodejs",
-                        help="Comma-separated languages for code translation: python,cpp,java,nodejs")
+    parser = argparse.ArgumentParser(description="Generate question content (one operation per invocation)")
+    parser.add_argument(
+        "--steps",
+        required=True,
+        help="Operation to run: description, naming, titles, difficulty, topics, codes",
+    )
+    parser.add_argument(
+        "--langs",
+        default="python,cpp,java,nodejs",
+        help="Comma-separated languages for code translation: python,cpp,java,nodejs",
+    )
     args = parser.parse_args()
-    selected_steps = [s.strip() for s in args.steps.split(",")]
+    selected_steps = {s.strip() for s in args.steps.split(",") if s.strip()}
     selected_langs = [l.strip().lower() for l in args.langs.split(",")]
 
     print("=" * 60)
-    print("CODE-CENTRIC QUESTION GENERATOR (LEAN WORKFLOW)")
+    print("CODE-CENTRIC QUESTION GENERATOR")
     print("=" * 60)
-    print(f"Selected steps: {selected_steps}")
-    print(f"Selected languages: {selected_langs}")
+    print(f"Selected steps: {sorted(selected_steps)}")
+    if "codes" in selected_steps:
+        print(f"Selected languages: {selected_langs}")
 
-    # Step 0: Load inputs
     problem_path = os.path.join(INPUT_DIR, 'problem.md')
     problem_name, structure_type, question_kind, scenario_level, problem_content = parse_problem_md(problem_path)
-    
+
     solution_path, detected_lang = detect_user_solution()
     print(f"\n📋 Problem: {problem_name} ({structure_type}, {question_kind})")
     print(f"🎭 Scenario Level: {scenario_level}")
     print(f"💻 User Code: {os.path.basename(solution_path)} ({detected_lang})")
-    
-    with open(solution_path, 'r') as f:
+
+    with open(solution_path, 'r', encoding='utf-8') as f:
         user_code = f.read()
 
-    # Step 1: Description Creation
-    desc_path = os.path.join(OUTPUT_DIR, 'generated_description.md')
     if "description" in selected_steps:
-        print("\n" + "=" * 60)
-        print("STEP 1: Description Creation")
-        print("=" * 60)
-
-        desc_prompt = get_description_prompt(problem_name, structure_type, user_code, scenario_level)
-        desc_response, desc_usage = call_llm(desc_prompt, problem_content, purpose="chat")
-
-        desc_response = re.sub(r'<scratchpad>.*?</scratchpad>', '', desc_response, flags=re.DOTALL).strip()
-
-        # For the "none" scenario, the platform's custom renderer cannot display
-        # ATX headings, horizontal rules, language-tagged code fences, or tables.
-        # Guarantee renderer-safe output deterministically regardless of model drift.
-        if scenario_level == "none":
-            desc_response = normalize_renderer_safe(desc_response)
-
-        update_usage(
-            desc_usage.get('prompt_tokens', 0),
-            desc_usage.get('completion_tokens', 0),
-            f"{problem_name}_description",
-            model=desc_usage.get('model', 'unknown'),
-            purpose="chat",
-            step_id="generate_question",
-            cost=desc_usage.get('cost', 0.0),
+        run_description_step(
+            problem_name, structure_type, scenario_level, problem_content, user_code, detected_lang
         )
 
-        with open(desc_path, 'w') as f:
-            f.write(desc_response)
-        print(f"✓ Description created and saved to {desc_path}")
-    else:
-        print("\n⏭ Skipping Step 1: Description Creation")
-        if os.path.exists(desc_path):
-            with open(desc_path, 'r') as f:
-                desc_response = f.read()
-        else:
-            desc_response = ""
+    if "naming" in selected_steps:
+        run_naming_step(problem_name, structure_type, question_kind, user_code, detected_lang)
 
-    # Step 2: Naming Enforcement (Renaming)
-    #
-    # This step extracts ONE canonical function signature from the description and
-    # normalizes the source code to it. That signature is then handed to every
-    # language conversion in Step 3, which is the ONLY thing that keeps function
-    # and parameter names identical across C++/Python/Java/Node.js. It therefore
-    # MUST run whenever code translation runs — otherwise each language is named
-    # independently by its own LLM call (and drifts, e.g. Python snake_case).
-    #
-    # Non-function problems have no single solving function — the user code
-    # reads stdin and prints stdout as a whole program. Extracting/forcing a
-    # function signature would corrupt them, so naming enforcement only runs
-    # for function problems. description_signature stays None otherwise, which
-    # also makes Step 3 translate the whole program verbatim (no signature
-    # override).
-    description_signature = None
-    run_naming = (
-        ("naming" in selected_steps or "codes" in selected_steps)
-        and question_kind == "function"
-    )
-    if question_kind == "nonfunction":
-        print("\nℹ Non-function problem — skipping function-signature naming enforcement.")
-    if run_naming:
-        print("\n" + "=" * 60)
-        print("STEP 2: Naming Enforcement")
-        print("=" * 60)
-
-        from Prompts.signatureExtractionPrompt import get_signature_extraction_prompt
-
-        if not desc_response.strip():
-            print("⚠ No description available — cannot extract a canonical signature. "
-                  "Function names may differ across languages.")
-        else:
-            sig_prompt = get_signature_extraction_prompt(desc_response)
-            sig_response, sig_usage = call_llm(sig_prompt, "", purpose="chat")
-            update_usage(sig_usage.get('prompt_tokens', 0), sig_usage.get('completion_tokens', 0), f"{problem_name}_signature", model=sig_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=sig_usage.get('cost', 0.0))
-
-            description_signature = _parse_signature(sig_response)
-
-        if description_signature:
-            print(f"Enforcing function name: {description_signature.get('function_name')}")
-            refactor_prompt = get_normalization_prompt(user_code, detected_lang, description_signature, desc_response, structure_type)
-            renamed_code, refactor_usage = call_llm(refactor_prompt, "", purpose="chat")
-            update_usage(refactor_usage.get('prompt_tokens', 0), refactor_usage.get('completion_tokens', 0), f"{problem_name}_refactor", model=refactor_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=refactor_usage.get('cost', 0.0))
-
-            if renamed_code.strip().startswith("```"):
-                renamed_code = renamed_code.strip().split('\n', 1)[1].rsplit('\n', 1)[0].strip()
-            user_code = clean_generated_code(renamed_code, detected_lang)
-            print("✓ Given code updated with description naming and normalization")
-        else:
-            print("⚠ Could not extract a function signature from the description; "
-                  "skipping rename. Translated languages may use inconsistent names.")
-    else:
-        print("\n⏭ Skipping Step 2: Naming Enforcement")
-
-    # Step 3: Convert to Other Languages
-    lang_map = {
-        'python': 'python_code',
-        'c++': 'cpp_code',
-        'java': 'java_code',
-        'node.js': 'nodejs_code'
-    }
-
-    # Map selected_langs IDs to internal keys
-    lang_id_to_key = {
-        'python': 'python_code',
-        'cpp': 'cpp_code',
-        'java': 'java_code',
-        'nodejs': 'nodejs_code'
-    }
-
-    solutions = {}
-    user_lang_key = lang_map.get(detected_lang.lower(), 'python_code')
-    solutions[user_lang_key] = user_code
-
-    if "codes" in selected_steps:
-        print("\n" + "=" * 60)
-        print("STEP 3: Converting to Other Languages")
-        print("=" * 60)
-
-        target_langs = {
-            "cpp_code": "C++",
-            "java_code": "Java",
-            "nodejs_code": "Node.js",
-            "python_code": "Python"
-        }
-
-        # Filter to only selected languages
-        selected_keys = set(lang_id_to_key.get(l, '') for l in selected_langs)
-
-        for key, lang in target_langs.items():
-            if key == user_lang_key: continue
-            if key not in selected_keys:
-                print(f"  ⏭ Skipping {lang} (not selected)")
-                continue
-            print(f"  - Converting to {lang}...")
-            conv_prompt = get_conversion_prompt(lang, user_code, structure_type, description_signature, desc_response)
-            conv_response, conv_usage = call_llm(conv_prompt, "", purpose="code")
-            update_usage(conv_usage.get('prompt_tokens', 0), conv_usage.get('completion_tokens', 0), f"{problem_name}_convert_{lang}", model=conv_usage.get('model', 'unknown'), purpose="code", step_id="generate_question", cost=conv_usage.get('cost', 0.0))
-
-            clean_code = conv_response.strip()
-            if clean_code.startswith("```"):
-                clean_code = clean_code.split('\n', 1)[1].rsplit('\n', 1)[0].strip()
-
-            clean_code = clean_generated_code(clean_code, lang)
-            solutions[key] = clean_code
-    else:
-        print("\n⏭ Skipping Step 3: Code Translation")
-
-    # Step 4: Finalizing Solutions
-    print("\n" + "=" * 60)
-    print("STEP 4: Finalizing Solutions")
-    print("=" * 60)
-    
-    generated_full_code_dir = os.path.join(OUTPUT_DIR, 'generatedFullCode')
-    os.makedirs(generated_full_code_dir, exist_ok=True)
-    
-    file_mappings = {
-        'python_code': 'PYTHON.py',
-        'cpp_code': 'CPP.cpp',
-        'java_code': 'JAVA.java',
-        'nodejs_code': 'NodeJS.js'
-    }
-    
-    for key, filename in file_mappings.items():
-        if key in solutions:
-            file_path = os.path.join(generated_full_code_dir, filename)
-            with open(file_path, 'w') as f:
-                f.write(solutions[key])
-                
-    print(f"✓ Solutions saved to {generated_full_code_dir}")
-
-    # Step 5: Generate Title & Difficulty
     if "titles" in selected_steps:
-        print("\n" + "=" * 60)
-        print("STEP 5a: Generating Titles")
-        print("=" * 60)
-
-        title_prompt = get_title_prompt(desc_response)
-        title_response, title_usage = call_llm(title_prompt, "", purpose="chat")
-        update_usage(title_usage.get('prompt_tokens', 0), title_usage.get('completion_tokens', 0), f"{problem_name}_titles", model=title_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=title_usage.get('cost', 0.0))
-        titles_path = os.path.join(OUTPUT_DIR, 'generated_titles.txt')
-        with open(titles_path, 'w') as f:
-            f.write(title_response)
-        print(f"✓ Titles generated")
-    else:
-        print("\n⏭ Skipping Step 5a: Title Generation")
+        run_titles_step(problem_name)
 
     if "difficulty" in selected_steps:
-        print("\n" + "=" * 60)
-        print("STEP 5b: Generating Difficulty")
-        print("=" * 60)
+        run_difficulty_step(problem_name)
 
-        diff_path = os.path.join(OUTPUT_DIR, 'generated_difficulty.txt')
-        # The problem owner's difficulty is FINAL: if they set one, use it
-        # verbatim and skip the LLM estimation entirely.
-        owner_difficulty = os.environ.get("PIPELINE_OWNER_DIFFICULTY", "").strip().lower()
-        if owner_difficulty in ("easy", "medium", "hard"):
-            with open(diff_path, 'w') as f:
-                f.write(owner_difficulty)
-            print(f"✓ Using owner-set difficulty (final): {owner_difficulty}")
-        else:
-            diff_prompt = get_difficulty_prompt(desc_response)
-            diff_response, diff_usage = call_llm(diff_prompt, "", purpose="chat")
-            update_usage(diff_usage.get('prompt_tokens', 0), diff_usage.get('completion_tokens', 0), f"{problem_name}_difficulty", model=diff_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=diff_usage.get('cost', 0.0))
-            with open(diff_path, 'w') as f:
-                f.write(diff_response.strip())
-            print(f"✓ Difficulty generated")
-    else:
-        print("\n⏭ Skipping Step 5b: Difficulty Estimation")
-
-    # Step 6: Generate Topics
     if "topics" in selected_steps:
-        print("\n" + "=" * 60)
-        print("STEP 6: Generating Topics")
-        print("=" * 60)
+        run_topics_step(problem_name, user_code, detected_lang)
 
-        topics_list_path = os.path.join(INPUT_DIR, 'topics_list.txt')
-        if os.path.exists(topics_list_path):
-            with open(topics_list_path, 'r') as f:
-                topics_list_content = f.read()
+    if "codes" in selected_steps:
+        run_translate_step(problem_name, structure_type, user_code, detected_lang, selected_langs)
 
-            topics_prompt = get_topics_prompt(desc_response, user_code, topics_list_content)
-            topics_response, topics_usage = call_llm(topics_prompt, "", purpose="chat")
-            update_usage(topics_usage.get('prompt_tokens', 0), topics_usage.get('completion_tokens', 0), f"{problem_name}_topics", model=topics_usage.get('model', 'unknown'), purpose="chat", step_id="generate_question", cost=topics_usage.get('cost', 0.0))
-
-            topics_out_path = os.path.join(OUTPUT_DIR, 'generated_topics.json')
-            try:
-                clean_topics = topics_response.strip()
-                if clean_topics.startswith("```"):
-                    clean_topics = clean_topics.split('\n', 1)[1].rsplit('\n', 1)[0].strip()
-                topic_data = json.loads(clean_topics)
-                with open(topics_out_path, 'w') as f:
-                    json.dump(topic_data, f, indent=4)
-                print(f"✓ Topics generated and saved to {topics_out_path}")
-            except Exception as e:
-                print(f"Warning: Failed to parse generated topics JSON. {e}")
-        else:
-            print(f"Warning: {topics_list_path} not found. Skipping topic generation.")
-    else:
-        print("\n⏭ Skipping Step 6: Topics Classification")
-        
     print("\n" + "=" * 60)
-    print("✅ SUCCESS! Generation completed.")
+    print("✅ SUCCESS! Step completed.")
     print("=" * 60)
+
 
 if __name__ == "__main__":
     main()

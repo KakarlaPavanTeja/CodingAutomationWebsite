@@ -7,24 +7,108 @@ export const LANGUAGES = [
   { id: "nodejs", label: "Node.js", defaultEnabled: true },
 ];
 
-export const STEP_CONFIGS: PipelineStepConfig[] = [
+const QUESTION_GEN_SCRIPT = "Scripts/generate_full_question.py";
+
+const QUESTION_GENERATION_STEPS: PipelineStepConfig[] = [
   {
-    id: "generate_question",
-    label: "Generate Question",
-    description: "Create description, translate code to multiple languages, generate titles, difficulty, and topics",
-    script: "Scripts/generate_full_question.py",
-    subSteps: [
-      { id: "description", label: "Description", description: "Generate problem description", defaultEnabled: true },
-      { id: "codes", label: "Code Translation", description: "Translate solution to all languages", defaultEnabled: true },
-      { id: "titles", label: "Titles", description: "Generate title options", defaultEnabled: true },
-      { id: "difficulty", label: "Difficulty", description: "Estimate difficulty level", defaultEnabled: true },
-      { id: "topics", label: "Topics", description: "Classify problem topics", defaultEnabled: true },
-    ],
-    hasLanguageSelector: true,
+    id: "generate_description",
+    label: "Generate Description",
+    description: "Create the full problem description in a single LLM call",
+    script: QUESTION_GEN_SCRIPT,
+    subSteps: [],
+    hasLanguageSelector: false,
     hasTestcaseCount: false,
     needsMode: false,
     llmUsage: "llm",
   },
+  {
+    id: "enforce_naming",
+    label: "Enforce Naming",
+    description: "Extract the function signature from the description and normalize source code naming",
+    script: QUESTION_GEN_SCRIPT,
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+    llmUsage: "llm",
+    prerequisite: "generate_description",
+  },
+  {
+    id: "generate_titles",
+    label: "Generate Titles",
+    description: "Generate title options for the problem",
+    script: QUESTION_GEN_SCRIPT,
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+    llmUsage: "llm",
+    prerequisite: "generate_description",
+  },
+  {
+    id: "generate_difficulty",
+    label: "Estimate Difficulty",
+    description: "Estimate the problem difficulty level",
+    script: QUESTION_GEN_SCRIPT,
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+    llmUsage: "llm",
+    prerequisite: "generate_description",
+  },
+  {
+    id: "generate_topics",
+    label: "Classify Topics",
+    description: "Classify problem topics from the topics list",
+    script: QUESTION_GEN_SCRIPT,
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+    llmUsage: "llm",
+    prerequisite: "generate_description",
+  },
+  {
+    id: "translate_cpp",
+    label: "Translate to C++",
+    description: "Translate the Python solution to C++",
+    script: QUESTION_GEN_SCRIPT,
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+    llmUsage: "llm",
+    prerequisite: "enforce_naming",
+  },
+  {
+    id: "translate_java",
+    label: "Translate to Java",
+    description: "Translate the Python solution to Java",
+    script: QUESTION_GEN_SCRIPT,
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+    llmUsage: "llm",
+    prerequisite: "enforce_naming",
+  },
+  {
+    id: "translate_nodejs",
+    label: "Translate to Node.js",
+    description: "Translate the Python solution to Node.js",
+    script: QUESTION_GEN_SCRIPT,
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+    llmUsage: "llm",
+    prerequisite: "enforce_naming",
+  },
+];
+
+export const STEP_CONFIGS: PipelineStepConfig[] = [
+  ...QUESTION_GENERATION_STEPS,
   {
     id: "generate_brute_force",
     label: "Generate Brute Force",
@@ -44,6 +128,18 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     subSteps: [],
     hasLanguageSelector: false,
     hasTestcaseCount: true,
+    needsMode: false,
+    llmUsage: "llm",
+  },
+  {
+    id: "generate_wrong_solutions",
+    label: "Generate Wrong Solutions",
+    description:
+      "Create plausible incorrect Python solutions for the wrong-approach benchmark gate (B2). Uses Claude Sonnet 4.5 via OpenRouter.",
+    script: "Scripts/generate_wrong_solutions.py",
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
     needsMode: false,
     llmUsage: "llm",
   },
@@ -166,39 +262,39 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
   },
 ];
 
+/** Question-generation steps that can run in parallel once their prerequisite is met. */
+export function getQuestionGenerationSteps(questionType: QuestionType): StepId[] {
+  const steps: StepId[] = ["generate_description"];
+  if (questionType === "function") {
+    steps.push("enforce_naming");
+  }
+  steps.push("generate_titles", "generate_difficulty", "generate_topics");
+  steps.push("translate_cpp", "translate_java", "translate_nodejs");
+  return steps;
+}
+
 export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode): StepId[] {
+  const afterGeneration: StepId[] = [
+    "generate_brute_force",
+    "generate_testcases",
+    "generate_wrong_solutions",
+    "benchmark_testcases",
+    "harden_testcases",
+  ];
+
   if (questionType === "nonfunction") {
-    const steps: StepId[] = [
-      "generate_question",
-      "generate_brute_force",
-      "generate_testcases",
-      "benchmark_testcases",
-      "harden_testcases",
-      "execute_tests_nonfunction",
-    ];
+    const steps: StepId[] = [...getQuestionGenerationSteps(questionType), ...afterGeneration];
+    steps.push("execute_tests_nonfunction");
     if (mode === "practice") steps.push("generate_enrichment");
-    steps.push("package_platform");
-    steps.push("generate_editorial");
-    steps.push("prepare_platform_json");
-    steps.push("execute_editorial");
-    return steps;
-  } else {
-    const steps: StepId[] = [
-      "generate_question",
-      "generate_brute_force",
-      "generate_testcases",
-      "benchmark_testcases",
-      "harden_testcases",
-      "split_code",
-      "execute_tests_function",
-    ];
-    if (mode === "practice") steps.push("generate_enrichment");
-    steps.push("package_platform");
-    steps.push("generate_editorial");
-    steps.push("prepare_platform_json");
-    steps.push("execute_editorial");
+    steps.push("package_platform", "generate_editorial", "prepare_platform_json", "execute_editorial");
     return steps;
   }
+
+  const steps: StepId[] = [...getQuestionGenerationSteps(questionType), ...afterGeneration];
+  steps.push("split_code", "execute_tests_function");
+  if (mode === "practice") steps.push("generate_enrichment");
+  steps.push("package_platform", "generate_editorial", "prepare_platform_json", "execute_editorial");
+  return steps;
 }
 
 export function getStepConfig(stepId: StepId): PipelineStepConfig {
@@ -207,17 +303,45 @@ export function getStepConfig(stepId: StepId): PipelineStepConfig {
 
 /**
  * Returns the step that must complete before `stepId` can run, given a workflow.
- * If the step declares an explicit `prerequisite`, that is used; otherwise it
- * falls back to the immediately-previous step in the workflow array. Returns
- * `null` when the step has no prerequisite (e.g. the first step).
+ * If the step declares an explicit `prerequisite`, that is used (with adjustments
+ * for question type); otherwise it falls back to the immediately-previous step in
+ * the workflow array. Returns `null` when the step has no prerequisite.
  */
-export function getPrerequisiteStep(stepId: StepId, workflowSteps: StepId[]): StepId | null {
+export function getPrerequisiteStep(
+  stepId: StepId,
+  workflowSteps: StepId[],
+  questionType?: QuestionType
+): StepId | null {
+  // Non-function problems skip naming — translations depend on description only.
+  if (
+    questionType === "nonfunction" &&
+    (stepId === "translate_cpp" || stepId === "translate_java" || stepId === "translate_nodejs")
+  ) {
+    return "generate_description";
+  }
+
+  if (stepId === "generate_brute_force") {
+    return questionType === "function" ? "enforce_naming" : "generate_description";
+  }
+
   const config = getStepConfig(stepId);
   if (config.prerequisite) return config.prerequisite;
+
   const index = workflowSteps.indexOf(stepId);
   if (index <= 0) return null;
   return workflowSteps[index - 1];
 }
+
+const QUESTION_STEP_ARGS: Partial<Record<StepId, string[]>> = {
+  generate_description: ["--steps", "description"],
+  enforce_naming: ["--steps", "naming"],
+  generate_titles: ["--steps", "titles"],
+  generate_difficulty: ["--steps", "difficulty"],
+  generate_topics: ["--steps", "topics"],
+  translate_cpp: ["--steps", "codes", "--langs", "cpp"],
+  translate_java: ["--steps", "codes", "--langs", "java"],
+  translate_nodejs: ["--steps", "codes", "--langs", "nodejs"],
+};
 
 export function buildCommand(
   stepId: StepId,
@@ -229,6 +353,12 @@ export function buildCommand(
   const config = getStepConfig(stepId);
   const args: string[] = [];
 
+  const questionArgs = QUESTION_STEP_ARGS[stepId];
+  if (questionArgs) {
+    args.push(...questionArgs);
+    return { script: config.script, args };
+  }
+
   if (config.subSteps.length > 0 && subSteps.length > 0) {
     args.push("--steps", subSteps.join(","));
   }
@@ -239,7 +369,6 @@ export function buildCommand(
       stepId === "execute_tests_nonfunction" ||
       stepId === "execute_editorial"
     ) {
-      // These scripts take languages as positional args
       args.push(...languages);
     } else {
       args.push("--langs", languages.join(","));
