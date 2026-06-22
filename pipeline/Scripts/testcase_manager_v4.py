@@ -161,14 +161,33 @@ def _python_executable() -> str:
     return candidate if os.path.exists(candidate) else "python3"
 
 
+def _script_timeout_sec() -> int:
+    """Wall-clock cap for running the GENERATED test-case script (default 600s).
+
+    This is separate from the LLM read timeout (1800s for testcases, in
+    llm_client). It bounds only the LOCAL execution of the generated script, so
+    a runaway generation loop fails into the retry path instead of hanging.
+    Override with TESTCASE_SCRIPT_TIMEOUT_SEC for unusually heavy dual-oracle
+    generation (e.g. very large counts at max constraints).
+    """
+    raw = os.environ.get("TESTCASE_SCRIPT_TIMEOUT_SEC", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return 600
+
+
 def _run_generator(script_path: str):
+    timeout_sec = _script_timeout_sec()
     try:
         return subprocess.run(
             [_python_executable(), script_path],
-            capture_output=True, text=True, timeout=600,
+            capture_output=True, text=True, timeout=timeout_sec,
         )
     except subprocess.TimeoutExpired:
-        print("Error: Test case generator script timed out after 10 minutes.")
+        print(f"Error: Test case generator script timed out after {timeout_sec} seconds.")
         sys.exit(1)
 
 
