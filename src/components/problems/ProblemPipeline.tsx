@@ -6,6 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { GlobalConfig } from "@/components/pipeline/GlobalConfig";
 import { StepCard } from "@/components/pipeline/StepCard";
+import { QuestionGenerationGraph } from "@/components/pipeline/QuestionGenerationGraph";
 import { getWorkflowSteps, getPrerequisiteStep, getQuestionGenerationSteps } from "@/lib/pipeline-config";
 import { usePipeline } from "@/lib/pipeline-context";
 import type { StepId, StepLlmUsageStats } from "@/types/pipeline";
@@ -39,6 +40,16 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
   } = usePipeline();
 
   const [stepUsage, setStepUsage] = useState<Partial<Record<StepId, StepLlmUsageStats>>>({});
+  const [selectedGraphStepId, setSelectedGraphStepId] = useState<StepId | null>(null);
+  const stepCardRefs = useRef<Partial<Record<StepId, HTMLDivElement | null>>>({});
+
+  const scrollToStep = useCallback((stepId: StepId) => {
+    setSelectedGraphStepId(stepId);
+    const el = stepCardRefs.current[stepId];
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, []);
 
   const fetchStepUsage = useCallback(() => {
     fetch(`/api/pipeline/usage?problemId=${encodeURIComponent(problemId)}`)
@@ -80,6 +91,8 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
 
   const workflowSteps = getWorkflowSteps(questionType, mode);
   const questionGenStepIds = new Set(getQuestionGenerationSteps(questionType));
+  const questionGenSteps = workflowSteps.filter((id) => questionGenStepIds.has(id));
+  const downstreamSteps = workflowSteps.filter((id) => !questionGenStepIds.has(id));
 
   const allCompleted =
     workflowSteps.length > 0 &&
@@ -167,43 +180,78 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
         <Separator className="flex-1" />
       </div>
 
+      <QuestionGenerationGraph
+        questionType={questionType}
+        stepStates={stepStates}
+        stepUsage={stepUsage}
+        selectedStepId={selectedGraphStepId}
+        onSelectStep={scrollToStep}
+      />
+
       <div className="space-y-4">
-        {workflowSteps.map((stepId, index) => {
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Step details
+        </p>
+
+        {questionGenSteps.map((stepId, index) => {
           const state = stepStates.get(stepId);
           if (!state) return null;
 
           const prereq = getPrerequisiteStep(stepId, workflowSteps, questionType);
           const previousCompleted =
-            prereq === null ||
-            stepStates.get(prereq)?.status === "completed";
-
-          const showQuestionGenHeader =
-            questionGenStepIds.has(stepId) &&
-            (index === 0 || !questionGenStepIds.has(workflowSteps[index - 1]));
-          const showPipelineHeader =
-            !questionGenStepIds.has(stepId) &&
-            index > 0 &&
-            questionGenStepIds.has(workflowSteps[index - 1]);
+            prereq === null || stepStates.get(prereq)?.status === "completed";
 
           return (
-            <div key={stepId} className="space-y-3">
-              {showQuestionGenHeader && (
-                <div className="pt-1">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Question generation
-                  </p>
-                  <p className="text-xs text-muted-foreground/80 mt-0.5">
-                    Steps after description can run in parallel when you use Run All.
-                  </p>
-                </div>
-              )}
-              {showPipelineHeader && (
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground pt-1">
-                  Test &amp; package pipeline
-                </p>
-              )}
+            <div
+              key={stepId}
+              ref={(el) => {
+                stepCardRefs.current[stepId] = el;
+              }}
+              className={
+                selectedGraphStepId === stepId
+                  ? "rounded-xl ring-2 ring-blue-500/40 ring-offset-2 ring-offset-background"
+                  : undefined
+              }
+            >
               <StepCard
                 stepNumber={index + 1}
+                stepState={state}
+                llmUsageStats={stepUsage[stepId]}
+                previousCompleted={previousCompleted}
+                onRun={runStep}
+                onStop={stopStep}
+                onUpdateLanguages={(langs) => {
+                  updateStepState(stepId, { enabledLanguages: langs });
+                  savePipelineState();
+                }}
+              />
+            </div>
+          );
+        })}
+
+        {downstreamSteps.length > 0 && (
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground pt-2">
+            Test &amp; package pipeline
+          </p>
+        )}
+
+        {downstreamSteps.map((stepId, index) => {
+          const state = stepStates.get(stepId);
+          if (!state) return null;
+
+          const prereq = getPrerequisiteStep(stepId, workflowSteps, questionType);
+          const previousCompleted =
+            prereq === null || stepStates.get(prereq)?.status === "completed";
+
+          return (
+            <div
+              key={stepId}
+              ref={(el) => {
+                stepCardRefs.current[stepId] = el;
+              }}
+            >
+              <StepCard
+                stepNumber={questionGenSteps.length + index + 1}
                 stepState={state}
                 llmUsageStats={stepUsage[stepId]}
                 previousCompleted={previousCompleted}
