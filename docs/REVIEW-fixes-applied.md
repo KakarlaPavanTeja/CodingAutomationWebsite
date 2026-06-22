@@ -72,10 +72,10 @@ Your two plans' work was **uncommitted** when I started. I branched from that st
 - **P1-C1 / P1-H5-status:** "problem only reaches `completed` after `prepare_platform_json`" is the **intended** model (final plan §4.4). Re-running a non-final step → `processing` is by design. No change needed; the *responsiveness* you want comes from the other status fixes above + verifying rerun-invalidation.
 - **P1-C3 (recompute "filter"):** `pipeline-language-steps.ts:115` is a redundant identity expression, not a behavior bug (`required === enabledLangs`). I left it.
 
-### Need a product decision (your call)
-- **P2-C1** — cp-prep uses `getSession()` (no account-status check). This **matches the plan and your `files/upload` route** (also `getSession`). Deciding whether deactivated/pending users should be blocked is an **app-wide** policy choice. If yes, I'll switch both routes to `requireAuthApi`.
-- **P1-M7** — split/execute force-prepend Python even when Python is deselected. Is Python a mandatory reference language? If yes, current behavior is correct; if no, I'll respect deselection.
-- **UI-H2** — companies textbox: UI says "one per line" but the server splits on `\n` **and** commas (`/[\n,]+/`), and the Python `parse_tags` also splits on commas. Fixing cleanly means changing **both** TS + Python consistently — I didn't want to half-fix it. Tell me the intended rule (newline-only?) and I'll do both.
+### Product decisions — RESOLVED & implemented (commit `13d9b3d`)
+- **P2-C1 → decided 1A:** cp-prep **and** files/upload now use `requireAuthApi`, so deactivated / pending_approval / left accounts are rejected app-wide.
+- **P1-M7 → decided 2B:** Python is no longer force-included; it is split/executed **only when selected** (and works normally when selected). ⚠️ **Manual test needed:** run a function-based pipeline with **Python deselected** and confirm C++/Java/Node execution still completes — I can't verify the Python-execution path headless.
+- **UI-H2 → decided 3A:** companies split on **newlines only** end-to-end (upload route + new `parse_companies()` for the COMPANIES section). Topics/default-tags keep comma support (they're comma-joined internally).
 
 ### Need the running app + your eyes (UI behavior I can't verify headless)
 - **P1-H3** — stopping→stopped→Run-after-3s state machine. Requires adding `stopping`/`stopped` to `StepStatus` (touches 27 render sites: colors, labels, "is terminal" logic) + a 3s timer. A half-wired enum would make complaint #3 *worse*, so I left it for a session where you can watch it.
