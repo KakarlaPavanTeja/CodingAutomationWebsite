@@ -136,7 +136,8 @@ def harden_round(
     use_llm: bool,
 ) -> tuple[list[dict], dict, bool]:
     """One harden round. Returns (new_cases_added, b1_result, improved)."""
-    b1 = run_mutation_benchmark(optimal_code, test_cases, timeout=timeout)
+    print("  Measuring current kill rate...", flush=True)
+    b1 = run_mutation_benchmark(optimal_code, test_cases, timeout=timeout, progress=True)
     if b1["kill_rate"] >= min_kill:
         return [], b1, False
 
@@ -149,10 +150,12 @@ def harden_round(
     new_cases: list[dict] = []
 
     # Free fuzz-harden
+    print(f"  {len(survivors)} survivor(s) - fuzzing for killer cases...", flush=True)
     fuzzed = fuzz_kill_survivors(
         optimal_code, test_cases, survivors, mutant_map,
-        brute_code=brute_code, description=description, timeout=timeout,
+        brute_code=brute_code, description=description, timeout=timeout, progress=True,
     )
+    print(f"  Fuzz found {len(fuzzed)} killer case(s)", flush=True)
     for fc in fuzzed:
         max_n = parse_constraint_max_n(description)
         n_val = parse_primary_n(fc["input"])
@@ -168,7 +171,8 @@ def harden_round(
 
     if new_cases:
         test_cases.extend(new_cases)
-        b1_after = run_mutation_benchmark(optimal_code, test_cases, timeout=timeout)
+        print("  Re-measuring kill rate after fuzz...", flush=True)
+        b1_after = run_mutation_benchmark(optimal_code, test_cases, timeout=timeout, progress=True)
         if b1_after["kill_rate"] >= min_kill:
             return new_cases, b1_after, True
         survivors = b1_after.get("survivors", [])
@@ -184,6 +188,7 @@ def harden_round(
     from llm_client import call_llm
     from usage_tracker import update_usage
 
+    print(f"  Calling LLM to target {len(survivors)} survivor(s)...", flush=True)
     system_prompt, user_prompt = get_harden_prompt(description, survivors, len(test_cases))
     content, usage = call_llm(system_prompt, user_prompt, purpose="harden")
     update_usage(
@@ -234,8 +239,9 @@ def harden_round(
         test_cases.append(case)
         llm_added += 1
 
-    print(f"Harden round: fuzz={len(fuzzed)} llm_verified={llm_added}")
-    b1_final = run_mutation_benchmark(optimal_code, test_cases, timeout=timeout)
+    print(f"Harden round: fuzz={len(fuzzed)} llm_verified={llm_added}", flush=True)
+    print("  Final re-measure for this round...", flush=True)
+    b1_final = run_mutation_benchmark(optimal_code, test_cases, timeout=timeout, progress=True)
     new_ids = {s["id"] for s in b1_final.get("survivors", [])}
     improved = new_ids != prev_ids or llm_added > 0 or bool(fuzzed)
     return new_cases, b1_final, improved

@@ -433,9 +433,14 @@ def run_mutation_benchmark(
     test_cases: list[dict],
     mutants: list[Mutant] | None = None,
     timeout: float = DEFAULT_RUN_TIMEOUT,
+    progress: bool = False,
 ) -> dict[str, Any]:
     if mutants is None:
         mutants = generate_mutants(optimal_code)
+
+    if progress:
+        print(f"  Generated {len(mutants)} mutant(s); filtering equivalents "
+              f"against {len(test_cases)} case(s)...", flush=True)
 
     random.seed(42)
     fuzz_inputs = [tc.get("input", "") for tc in random.sample(
@@ -443,14 +448,21 @@ def run_mutation_benchmark(
     )] if test_cases else []
 
     non_equivalent: list[Mutant] = []
-    for m in mutants:
+    for i, m in enumerate(mutants):
         if not is_equivalent_mutant(m, optimal_code, test_cases, fuzz_inputs, timeout):
             non_equivalent.append(m)
+        if progress and (i + 1) % 20 == 0:
+            print(f"    filtered {i + 1}/{len(mutants)} "
+                  f"({len(non_equivalent)} non-equivalent so far)", flush=True)
+
+    if progress:
+        print(f"  Testing {len(non_equivalent)} non-equivalent mutant(s) "
+              f"against the suite...", flush=True)
 
     killed: list[str] = []
     survivors: list[dict] = []
 
-    for m in non_equivalent:
+    for idx, m in enumerate(non_equivalent):
         is_killed = False
         for tc in test_cases:
             inp = tc.get("input", "")
@@ -477,6 +489,9 @@ def run_mutation_benchmark(
                 "bug_class": m.bug_class,
                 "diff": m.diff_summary,
             })
+        if progress and (idx + 1) % 20 == 0:
+            print(f"    tested {idx + 1}/{len(non_equivalent)} "
+                  f"({len(killed)} killed)", flush=True)
 
     total = len(non_equivalent)
     kill_rate = (len(killed) / total) if total else 1.0
@@ -680,6 +695,7 @@ def fuzz_kill_survivors(
     description: str = "",
     count: int = 300,
     timeout: float = DEFAULT_RUN_TIMEOUT,
+    progress: bool = False,
 ) -> list[dict]:
     """Generate random/boundary inputs; keep those that kill surviving mutants."""
     if not survivors:
@@ -711,7 +727,9 @@ def fuzz_kill_survivors(
     for n in [1, 2, max(1, cap // 2), cap, max_n if max_n else cap]:
         if n and n <= (max_n or cap):
             candidates.append(n)
-    for _ in range(count):
+    for fi in range(count):
+        if progress and fi and fi % 100 == 0:
+            print(f"    fuzz {fi}/{count} ({len(new_cases)} killer case(s) so far)", flush=True)
         n = random.choice(candidates) if candidates else random.randint(1, cap)
         inp = f"{n}\n" + " ".join(str(random.randint(-1000, 1000)) for _ in range(n))
         if inp in seen_inputs:
@@ -781,16 +799,25 @@ def run_benchmark(
     description = load_text(description_path) if os.path.exists(description_path) else ""
     brute_code = load_text(brute_path) if brute_path else None
 
-    report = BenchmarkReport()
-    report.b1 = run_mutation_benchmark(optimal_code, test_cases, timeout=timeout)
-    report.kill_rate = report.b1["kill_rate"]
+    print(f"Loaded {len(test_cases)} test case(s)"
+          f"{' with brute force' if brute_code else ' (no brute force)'}", flush=True)
 
+    report = BenchmarkReport()
+    print("[B1] Mutation kill rate - generating and testing mutants...", flush=True)
+    report.b1 = run_mutation_benchmark(optimal_code, test_cases, timeout=timeout, progress=True)
+    report.kill_rate = report.b1["kill_rate"]
+    print(f"[B1] kill rate {report.kill_rate:.1%} "
+          f"({report.b1.get('killed', 0)}/{report.b1.get('non_equivalent_total', 0)} killed, "
+          f"{len(report.b1.get('survivors', []))} survivor(s))", flush=True)
+
+    print("[B2] Wrong-approach gate...", flush=True)
     report.b2 = run_wrong_approach_gate(test_cases, timeout=timeout)
     if report.b2.get("hard_fail"):
         report.hard_failures.append(
             f"B2: wrong solution(s) passed: {report.b2.get('failures')}"
         )
 
+    print("[B3] Coverage-shape audit...", flush=True)
     report.b3 = audit_coverage_shape(
         test_cases, description, brute_code=brute_code, advisory_size=advisory_size
     )
@@ -799,6 +826,7 @@ def run_benchmark(
         report.hard_failures.extend(report.b3.get("issues", []))
 
     if brute_code:
+        print("[B4] Differential fuzz vs brute force...", flush=True)
         report.b4 = run_differential_fuzz(optimal_code, brute_code, description, timeout=timeout)
         if report.b4.get("hard_fail"):
             report.hard_failures.append(

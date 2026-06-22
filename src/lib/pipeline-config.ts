@@ -53,7 +53,6 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: false,
     hasTestcaseCount: false,
     needsMode: false,
-    prerequisite: "generate_testcases",
   },
   {
     id: "harden_testcases",
@@ -64,7 +63,6 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: false,
     hasTestcaseCount: false,
     needsMode: false,
-    prerequisite: "generate_testcases",
   },
   {
     id: "split_code",
@@ -75,7 +73,6 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: true,
     hasTestcaseCount: false,
     needsMode: false,
-    prerequisite: "generate_testcases",
   },
   {
     id: "execute_tests_function",
@@ -96,7 +93,6 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasLanguageSelector: true,
     hasTestcaseCount: false,
     needsMode: false,
-    prerequisite: "generate_testcases",
   },
   {
     id: "generate_enrichment",
