@@ -15,8 +15,11 @@ import {
   XCircle,
   ArrowRight,
   BarChart3,
+  Sparkles,
 } from "lucide-react";
 import GuidePage from "@/app/guide/page";
+import { WhatsNewTeaser } from "@/components/whats-new/WhatsNewList";
+import { getRecentFeatures } from "@/lib/whats-new";
 
 const STATUS_ICON: Record<string, React.ElementType> = {
   draft: Clock,
@@ -42,6 +45,8 @@ export default function Home() {
     processing: problems.filter((x) => x.status === "processing").length,
     failed: problems.filter((x) => x.status === "failed").length,
   }), [problems]);
+
+  const recentUpdates = useMemo(() => getRecentFeatures(4), []);
 
   if (authLoading) return null;
 
@@ -156,6 +161,28 @@ export default function Home() {
           </Card>
         )}
       </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              What&apos;s New
+            </CardTitle>
+            <Link href="/whats-new" className="text-sm text-primary hover:underline underline-offset-4">
+              View all updates
+            </Link>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <p className="text-xs text-muted-foreground mb-3">
+            Recent improvements — tap any row to read more.
+          </p>
+          {recentUpdates.map((feature) => (
+            <WhatsNewTeaser key={feature.id} feature={feature} />
+          ))}
+        </CardContent>
+      </Card>
 
       {problems.length > 0 && (
         <div className="space-y-3">

@@ -28,19 +28,22 @@ from Prompts.testcasesprompt_v4 import size_tag as make_size_tag
 from benchmark_suite import (
     DEFAULT_MIN_KILL,
     DEFAULT_RUN_TIMEOUT,
-    derive_size_bucket,
     fuzz_kill_survivors,
     load_testcases,
     load_text,
     normalize,
-    parse_constraint_max_n,
-    parse_primary_n,
     print_report,
     run_benchmark,
     run_mutation_benchmark,
     run_solution,
 )
-from testcase_helpers import reorder_testcases_json_root
+from testcase_helpers import (
+    derive_size_bucket,
+    parse_constraint_max_n,
+    parse_primary_n,
+    reorder_testcases_json_root,
+    sync_size_tags,
+)
 
 
 def _parse_llm_json(content: str) -> list[dict]:
@@ -119,7 +122,9 @@ def _pick_subtask_tag(test_cases: list[dict], bucket: str) -> str:
     return subtask_tag(subtask_n)
 
 
-def _save_testcases(path: str, test_cases: list[dict]):
+def _save_testcases(path: str, test_cases: list[dict], description: str = ""):
+    if description:
+        sync_size_tags(test_cases, description)
     data = [{"test_cases": test_cases}]
     reorder_testcases_json_root(data)
     with open(path, "w", encoding="utf-8") as f:
@@ -277,6 +282,11 @@ def main():
     description = load_text(description_path) if os.path.exists(description_path) else ""
     brute_code = load_text(brute_path) if os.path.exists(brute_path) else None
 
+    tags_fixed = sync_size_tags(test_cases, description)
+    if tags_fixed:
+        print(f"Corrected size_* tags on {tags_fixed} case(s) from derived input sizes.")
+        _save_testcases(testcases_path, test_cases, description)
+
     prev_survivor_key = None
     total_added = 0
 
@@ -300,7 +310,7 @@ def main():
         prev_survivor_key = survivor_key
 
     if total_added:
-        _save_testcases(testcases_path, test_cases)
+        _save_testcases(testcases_path, test_cases, description)
         print(f"Appended {total_added} case(s) to {testcases_path}")
 
     report = run_benchmark(advisory_size=True)

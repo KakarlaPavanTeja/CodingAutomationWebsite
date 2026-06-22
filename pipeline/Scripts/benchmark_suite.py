@@ -35,7 +35,14 @@ from Prompts.testcasesprompt_v4 import (  # noqa: E402
     SIZE_TOLERANCE_PP,
     tier_from_tags,
 )
-from testcase_helpers import detect_problem_type
+from testcase_helpers import (
+    detect_problem_type,
+    derive_size_bucket,
+    parse_constraint_max_n,
+    parse_primary_n,
+    size_tag_from_bucket,
+    tag_size_bucket,
+)
 
 DEFAULT_MIN_KILL = 0.90
 DEFAULT_RUN_TIMEOUT = 10.0
@@ -147,81 +154,6 @@ def load_testcases(path: str | None = None) -> list[dict]:
 def load_text(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
-
-
-def parse_primary_n(inp: str) -> int | None:
-    """Parse primary size n from first line/token of stdin."""
-    if not inp or not inp.strip():
-        return None
-    first_line = inp.strip().split("\n", 1)[0].strip()
-    parts = first_line.split()
-    if not parts:
-        return None
-    try:
-        return int(parts[0])
-    except ValueError:
-        return None
-
-
-def parse_constraint_max_n(description: str) -> int | None:
-    """Best-effort parse of max n from constraints section."""
-    text = description or ""
-    patterns = [
-        r"n\s*≤\s*10\^?(\d+)",
-        r"n\s*<=\s*10\^?(\d+)",
-        r"1\s*≤\s*n\s*≤\s*(\d+)",
-        r"1\s*<=\s*n\s*<=\s*(\d+)",
-        r"n\s*≤\s*(\d+)",
-        r"n\s*<=\s*(\d+)",
-        r"(\d+)\s*≤\s*n",
-        r"(\d+)\s*<=\s*n",
-        r"m\s*≤\s*(\d+)",
-        r"1\s*≤\s*m\s*≤\s*(\d+)",
-    ]
-    best = None
-    for pat in patterns:
-        for m in re.finditer(pat, text, re.IGNORECASE):
-            val = m.group(1)
-            try:
-                if "10^" in pat or "10\\^" in pat:
-                    num = 10 ** int(val)
-                else:
-                    num = int(val)
-                if best is None or num > best:
-                    best = num
-            except ValueError:
-                continue
-    return best
-
-
-def derive_size_bucket(n: int | None, max_n: int | None, inp: str) -> str:
-    """Authoritative size bucket from parsed n vs constraint max N."""
-    if n is None:
-        # degenerate / edge if very short input
-        if inp and len(inp.strip()) < 20:
-            return "edge"
-        return "small"
-    if max_n and n >= max(1, int(0.8 * max_n)):
-        return "large"
-    if n <= 1 or (max_n and n == 1):
-        return "edge"
-    if n <= 20:
-        return "small"
-    if max_n and n >= int(0.5 * max_n):
-        return "large"
-    return "medium"
-
-
-def size_tag_from_bucket(bucket: str) -> str:
-    return f"{SIZE_PREFIX}{bucket}"
-
-
-def tag_size_bucket(tags: list) -> str | None:
-    for t in tags or []:
-        name = t if isinstance(t, str) else str(t.get("name_enum", ""))
-        if name.startswith(SIZE_PREFIX):
-            return name[len(SIZE_PREFIX):]
-    return None
 
 
 # --------------------------------------------------------------------------- #

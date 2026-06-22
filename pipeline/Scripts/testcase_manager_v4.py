@@ -22,6 +22,7 @@ from Prompts.testcasesprompt_v4 import (
 )
 from llm_client import call_llm
 from usage_tracker import update_usage
+from testcase_helpers import detect_problem_type, sync_size_tags_json_root
 
 
 # --------------------------------------------------------------------------- #
@@ -127,30 +128,6 @@ def _reorder_testcases_json_root(data) -> bool:
     if isinstance(data, dict) and "test_cases" in data:
         return _reorder_list(data["test_cases"])
     return False
-
-
-# --------------------------------------------------------------------------- #
-# Problem-type detection (lightweight heuristic for count scaling)
-# --------------------------------------------------------------------------- #
-_TYPE_KEYWORDS = [
-    ("tree", ("tree", "binary tree", "bst", "root", "leaf", "subtree")),
-    ("graph", ("graph", "edge", "vertex", "vertices", "adjacency", "dijkstra", "node and")),
-    ("dp", ("dynamic programming", "subsequence", "minimum cost", "maximum sum",
-            "number of ways", "longest", "partition")),
-    ("sliding_window", ("subarray", "window", "contiguous", "substring of length")),
-    ("string", ("string", "substring", "character", "palindrome", "anagram")),
-    ("math", ("modulo", "prime", "gcd", "factorial", "combinatorial", "number theory")),
-    ("greedy", ("greedy", "interval", "schedule", "activity selection")),
-    ("array", ("array", "list of integers", "nums")),
-]
-
-
-def _detect_problem_type(description: str) -> str:
-    text = (description or "").lower()
-    for type_name, kws in _TYPE_KEYWORDS:
-        if any(kw in text for kw in kws):
-            return type_name
-    return "generic"
 
 
 # --------------------------------------------------------------------------- #
@@ -333,7 +310,7 @@ def main():
     else:
         print(f"No explicit count; target scales by difficulty x type (minimum {MIN_TESTCASES}).")
 
-    problem_type = (args.type or _detect_problem_type(description)).strip().lower()
+    problem_type = (args.type or detect_problem_type(description)).strip().lower()
     print(f"Problem type (for count scaling): {problem_type}")
     print(f"Subtask weight mode: {args.distribution} (split by problem-chosen subtask count {MIN_SUBTASKS}-{MAX_SUBTASKS}).")
 
@@ -392,8 +369,11 @@ def main():
             with open(out_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             did_reorder = _reorder_testcases_json_root(data)
+            tags_fixed = sync_size_tags_json_root(data, description)
             with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
+            if tags_fixed:
+                print(f"Corrected size_* tags on {tags_fixed} case(s) from derived input sizes.")
             if did_reorder:
                 tcs = data[0]["test_cases"] if isinstance(data, list) and data else []
                 if _has_subtask_tags(tcs):

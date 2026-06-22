@@ -2,6 +2,10 @@ import os
 import json
 import shutil
 import re
+import sys
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from testcase_helpers import sync_size_tags_json_root
 
 _BASE = os.environ.get("PIPELINE_BASE_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 OUTPUTS_DIR = os.path.join(_BASE, "Outputs")
@@ -230,6 +234,13 @@ def main():
             if isinstance(testcases_data, list) and len(testcases_data) > 0:
                 container = testcases_data[0]
                 if "test_cases" in container:
+                    desc_path = os.path.join(OUTPUTS_DIR, "generated_description.md")
+                    if os.path.exists(desc_path):
+                        with open(desc_path, "r", encoding="utf-8") as df:
+                            description = df.read()
+                        tags_fixed = sync_size_tags_json_root(testcases_data, description)
+                        if tags_fixed:
+                            print(f"Corrected size_* tags on {tags_fixed} case(s) from derived input sizes.")
                     tc_list = container["test_cases"]
                     print(f"Validating {len(tc_list)} test cases...")
                     for idx, tc in enumerate(tc_list, 1):
