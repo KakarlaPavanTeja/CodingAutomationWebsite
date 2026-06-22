@@ -5,7 +5,6 @@ export interface GraphNodeLayout {
   id: StepId;
   label: string;
   layer: number;
-  /** Index within the layer (left → right). */
   column: number;
   x: number;
   y: number;
@@ -18,21 +17,31 @@ export interface GraphEdge {
   to: StepId;
 }
 
-export interface PipelineGraphLayout {
-  nodes: GraphNodeLayout[];
-  edges: GraphEdge[];
+export interface GraphLayerGroup {
+  layer: number;
+  label: string;
+  x: number;
+  y: number;
   width: number;
   height: number;
 }
 
-const NODE_WIDTH = 148;
-const NODE_HEIGHT = 76;
-const LAYER_GAP_Y = 88;
-const NODE_GAP_X = 20;
-const PADDING_X = 24;
-const PADDING_Y = 20;
+export interface PipelineGraphLayout {
+  nodes: GraphNodeLayout[];
+  edges: GraphEdge[];
+  layerGroups: GraphLayerGroup[];
+  width: number;
+  height: number;
+}
 
-/** Short labels for compact graph nodes. */
+export const GRAPH_NODE_WIDTH = 172;
+export const GRAPH_NODE_HEIGHT = 108;
+const LAYER_GAP_Y = 108;
+const NODE_GAP_X = 16;
+const PADDING_X = 28;
+const PADDING_Y = 36;
+const GROUP_PAD = 14;
+
 const GRAPH_LABELS: Partial<Record<StepId, string>> = {
   generate_description: "Description",
   enforce_naming: "Naming",
@@ -48,10 +57,13 @@ function graphLabel(stepId: StepId): string {
   return GRAPH_LABELS[stepId] ?? getStepConfig(stepId).label;
 }
 
-/**
- * Layered DAG for question-generation steps. Layers are chosen for readability
- * (parallel siblings share a row), not strict topological depth only.
- */
+function layerGroupLabel(layer: number, questionType: QuestionType): string {
+  if (layer === 0) return "";
+  if (questionType === "function" && layer === 1) return "Parallel after description";
+  if (questionType === "function" && layer === 2) return "Parallel after naming";
+  return "Parallel after description";
+}
+
 function assignLayers(stepIds: StepId[], questionType: QuestionType): Map<StepId, number> {
   const layers = new Map<StepId, number>();
 
@@ -75,7 +87,7 @@ function assignLayers(stepIds: StepId[], questionType: QuestionType): Map<StepId
 
 export function buildQuestionGenerationGraph(questionType: QuestionType): PipelineGraphLayout {
   const stepIds = getQuestionGenerationSteps(questionType);
-  const workflowSteps = stepIds; // prerequisites resolved within this subgraph
+  const workflowSteps = stepIds;
   const layers = assignLayers(stepIds, questionType);
 
   const byLayer = new Map<number, StepId[]>();
@@ -93,8 +105,8 @@ export function buildQuestionGenerationGraph(questionType: QuestionType): Pipeli
 
   for (const layer of layerIndices) {
     const ids = byLayer.get(layer)!;
-    const rowWidth = ids.length * NODE_WIDTH + (ids.length - 1) * NODE_GAP_X;
-    const gridWidth = maxColumns * NODE_WIDTH + (maxColumns - 1) * NODE_GAP_X;
+    const rowWidth = ids.length * GRAPH_NODE_WIDTH + (ids.length - 1) * NODE_GAP_X;
+    const gridWidth = maxColumns * GRAPH_NODE_WIDTH + (maxColumns - 1) * NODE_GAP_X;
     const startX = PADDING_X + (gridWidth - rowWidth) / 2;
 
     ids.forEach((id, column) => {
@@ -103,11 +115,32 @@ export function buildQuestionGenerationGraph(questionType: QuestionType): Pipeli
         label: graphLabel(id),
         layer,
         column,
-        x: startX + column * (NODE_WIDTH + NODE_GAP_X),
-        y: PADDING_Y + layer * (NODE_HEIGHT + LAYER_GAP_Y),
-        width: NODE_WIDTH,
-        height: NODE_HEIGHT,
+        x: startX + column * (GRAPH_NODE_WIDTH + NODE_GAP_X),
+        y: PADDING_Y + layer * (GRAPH_NODE_HEIGHT + LAYER_GAP_Y),
+        width: GRAPH_NODE_WIDTH,
+        height: GRAPH_NODE_HEIGHT,
       });
+    });
+  }
+
+  const layerGroups: GraphLayerGroup[] = [];
+  for (const layer of layerIndices) {
+    if (layer === 0) continue;
+    const layerNodes = nodes.filter((n) => n.layer === layer);
+    if (layerNodes.length < 2) continue;
+
+    const minX = Math.min(...layerNodes.map((n) => n.x));
+    const maxX = Math.max(...layerNodes.map((n) => n.x + n.width));
+    const minY = Math.min(...layerNodes.map((n) => n.y));
+    const maxY = Math.max(...layerNodes.map((n) => n.y + n.height));
+
+    layerGroups.push({
+      layer,
+      label: layerGroupLabel(layer, questionType),
+      x: minX - GROUP_PAD,
+      y: minY - GROUP_PAD - 18,
+      width: maxX - minX + GROUP_PAD * 2,
+      height: maxY - minY + GROUP_PAD * 2 + 18,
     });
   }
 
@@ -119,23 +152,22 @@ export function buildQuestionGenerationGraph(questionType: QuestionType): Pipeli
     }
   }
 
-  const gridWidth = maxColumns * NODE_WIDTH + (maxColumns - 1) * NODE_GAP_X;
+  const gridWidth = maxColumns * GRAPH_NODE_WIDTH + (maxColumns - 1) * NODE_GAP_X;
   const maxLayer = Math.max(...layerIndices, 0);
 
   return {
     nodes,
     edges,
+    layerGroups,
     width: gridWidth + PADDING_X * 2,
-    height: PADDING_Y * 2 + (maxLayer + 1) * NODE_HEIGHT + maxLayer * LAYER_GAP_Y,
+    height: PADDING_Y * 2 + (maxLayer + 1) * GRAPH_NODE_HEIGHT + maxLayer * LAYER_GAP_Y,
   };
 }
 
-/** Center-bottom of a node (edge start for downward flow). */
 export function nodeBottomCenter(node: GraphNodeLayout): { x: number; y: number } {
   return { x: node.x + node.width / 2, y: node.y + node.height };
 }
 
-/** Center-top of a node (edge end). */
 export function nodeTopCenter(node: GraphNodeLayout): { x: number; y: number } {
   return { x: node.x + node.width / 2, y: node.y };
 }
