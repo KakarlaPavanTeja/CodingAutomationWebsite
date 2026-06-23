@@ -84,6 +84,7 @@ interface PipelineContextType {
   globalLanguages: string[];
   globalTestcaseCount: number;
   ownerTitle: string;
+  ownerDifficulty: string;
   generateTitleWithAi: boolean;
   defaultTagNames: string;
   stepStates: Map<StepId, StepState>;
@@ -193,6 +194,9 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   const [generateTitleWithAi, setGenerateTitleWithAiRaw] = useState(false);
   const [defaultTagNames, setDefaultTagNamesRaw] = useState("");
   const ownerDifficultyRef = useRef("");
+  // Reactive mirror of ownerDifficultyRef so the wave-graph gate can apply the
+  // difficulty-skip rule (P1-H5). The ref stays for synchronous reads.
+  const [ownerDifficulty, setOwnerDifficultyState] = useState("");
   const [currentProblemId, setCurrentProblemId] = useState<string | null>(null);
   const [stateLoading, setStateLoading] = useState(false);
   const [runAllQueue, setRunAllQueue] = useState<StepId[]>([]);
@@ -473,6 +477,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       if (loadGenerationRef.current !== generation) return;
       const problem = problemData.problem;
       ownerDifficultyRef.current = problem?.difficulty ?? "";
+      setOwnerDifficultyState(problem?.difficulty ?? "");
 
       // Always use question_type and mode from the problem record
       const qt = (problem?.question_type || state?.question_type || "function") as QuestionType;
@@ -1732,6 +1737,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         globalLanguages,
         globalTestcaseCount,
         ownerTitle,
+        ownerDifficulty,
         generateTitleWithAi,
         defaultTagNames,
         stepStates,
