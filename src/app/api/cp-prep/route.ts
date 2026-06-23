@@ -185,6 +185,7 @@ export async function POST(req: NextRequest) {
         const problemTitle = prepInput.title;
 
         const result = await prepProblem(prepInput, {
+          signal: req.signal,
           onProgress,
           onUsage: (usage) => {
             void recordLlmUsage({

@@ -184,6 +184,59 @@ class TestPreparePlatformJson(unittest.TestCase):
         )
         self.assertTrue(data)  # completed without raising
 
+    def test_language_exclusion_across_all_keys(self):
+        """A deselected language is absent from all three per-language keys (items 10/17)."""
+        data = ppj.build_practice_json(
+            MINIMAL_LUA, PRACTICE_CONTAINER, "EASY", node_based=False, enabled_langs=["python", "cpp"]
+        )
+        q = data[0]
+        for key in ("coding_question_details", "language_code_repository_details", "test_case_evaluation_metrics"):
+            langs = {entry["language"] for entry in q[key]}
+            self.assertNotIn("JAVA", langs, f"JAVA leaked into {key}")
+            self.assertNotIn("NODE_JS", langs, f"NODE_JS leaked into {key}")
+
+    def test_python_key_casing_practice_vs_exam(self):
+        """Practice uses PYTHON, exam uses PYTHON39 for the same input (item 11)."""
+        practice = ppj.build_practice_json(
+            MINIMAL_LUA, PRACTICE_CONTAINER, "EASY", node_based=False, enabled_langs=["python"]
+        )
+        exam = ppj.build_exam_json(MINIMAL_LUA, MINIMAL_CONTAINER, "EASY", ["python"])
+        practice_langs = {d["language"] for d in practice[0]["coding_question_details"]}
+        exam_langs = {d["language"] for d in exam[0]["coding_question_details"]}
+        self.assertIn("PYTHON", practice_langs)
+        self.assertNotIn("PYTHON39", practice_langs)
+        self.assertIn("PYTHON39", exam_langs)
+        self.assertNotIn("PYTHON", exam_langs)
+
+    def test_practice_metadata_is_stringified_with_expected_keys(self):
+        """Practice metadata is a JSON string with the enrichment/topics keys (item 12)."""
+        import json as _json
+        data = ppj.build_practice_json(
+            MINIMAL_LUA, PRACTICE_CONTAINER, "EASY", node_based=False, enabled_langs=["python"]
+        )
+        meta = data[0]["question"]["metadata"]
+        self.assertIsInstance(meta, str)
+        parsed = _json.loads(meta)
+        self.assertIn("real_life_example", parsed)
+        self.assertIn("follow_up_questions", parsed)
+        self.assertIn("topics", parsed)
+
+    def test_exam_metadata_is_null_practice_is_not(self):
+        """Exam metadata is None; practice metadata is a string (item 12)."""
+        exam = ppj.build_exam_json(MINIMAL_LUA, MINIMAL_CONTAINER, "EASY", ["python"])
+        practice = ppj.build_practice_json(
+            MINIMAL_LUA, PRACTICE_CONTAINER, "EASY", node_based=False, enabled_langs=["python"]
+        )
+        self.assertIsNone(exam[0]["question"]["metadata"])
+        self.assertIsNotNone(practice[0]["question"]["metadata"])
+
+    def test_score_defaults_by_difficulty(self):
+        """Exam total_score defaults to 20/25/30 for EASY/MEDIUM/HARD (item 2)."""
+        for level, expected in (("EASY", 20), ("MEDIUM", 25), ("HARD", 30)):
+            lua = MINIMAL_LUA.replace("EASY", level)
+            data = ppj.build_exam_json(lua, MINIMAL_CONTAINER, level, ["python"])
+            self.assertEqual(data[0]["total_score"], expected)
+
     def test_parse_companies_splits_on_newlines_only(self):
         """Company names may contain commas; split only on newlines (UI-H2 / 3A)."""
         self.assertEqual(

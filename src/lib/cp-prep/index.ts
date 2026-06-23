@@ -128,6 +128,7 @@ export async function prepProblem(
       model: opts.model,
       messages,
       maxTokens: 8000,
+      signal: opts.signal,
     });
 
     const callUsage = usageFromOpenRouterCompletion(completion, {

@@ -1,7 +1,12 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { cn } from "@/lib/utils";
+import {
+  allExpandableOutputPaths,
+  organizeOutputFiles,
+  type OutputTreeNode,
+} from "@/lib/output-file-groups";
 import type { OutputFile } from "@/types/pipeline";
 
 interface OutputBrowserProps {
@@ -11,91 +16,9 @@ interface OutputBrowserProps {
   problemId?: string | null;
 }
 
-interface TreeNode {
-  name: string;
-  path: string;
-  isDirectory: boolean;
-  size: number;
-  modifiedAt: string;
-  children: TreeNode[];
-}
-
-function buildTree(files: OutputFile[]): TreeNode[] {
-  const root: TreeNode[] = [];
-  const dirMap = new Map<string, TreeNode>();
-
-  // First pass: create all directory nodes
-  for (const file of files) {
-    if (file.isDirectory) {
-      const node: TreeNode = {
-        name: file.name,
-        path: file.path,
-        isDirectory: true,
-        size: 0,
-        modifiedAt: "",
-        children: [],
-      };
-      dirMap.set(file.path, node);
-    }
-  }
-
-  // Second pass: assign directories to parents
-  for (const [dirPath, node] of dirMap) {
-    const parts = dirPath.split("/");
-    if (parts.length === 1) {
-      root.push(node);
-    } else {
-      const parentPath = parts.slice(0, -1).join("/");
-      const parent = dirMap.get(parentPath);
-      if (parent) {
-        parent.children.push(node);
-      } else {
-        root.push(node);
-      }
-    }
-  }
-
-  // Third pass: assign files to their parent directories
-  for (const file of files) {
-    if (file.isDirectory) continue;
-
-    const parts = file.path.split("/");
-    const fileNode: TreeNode = {
-      name: file.name,
-      path: file.path,
-      isDirectory: false,
-      size: file.size,
-      modifiedAt: file.modifiedAt,
-      children: [],
-    };
-
-    if (parts.length === 1) {
-      root.push(fileNode);
-    } else {
-      const parentPath = parts.slice(0, -1).join("/");
-      const parent = dirMap.get(parentPath);
-      if (parent) {
-        parent.children.push(fileNode);
-      } else {
-        root.push(fileNode);
-      }
-    }
-  }
-
-  // Sort: directories first, then files, alphabetical
-  const sortNodes = (nodes: TreeNode[]) => {
-    nodes.sort((a, b) => {
-      if (a.isDirectory && !b.isDirectory) return -1;
-      if (!a.isDirectory && b.isDirectory) return 1;
-      return a.name.localeCompare(b.name);
-    });
-    for (const node of nodes) {
-      if (node.children.length > 0) sortNodes(node.children);
-    }
-  };
-  sortNodes(root);
-
-  return root;
+function countFiles(node: OutputTreeNode): number {
+  if (!node.isDirectory) return 1;
+  return node.children.reduce((sum, child) => sum + countFiles(child), 0);
 }
 
 function getFileIcon(name: string) {
@@ -114,8 +37,11 @@ export function OutputBrowser({ selectedPath, openPaths, onSelectFile, problemId
   const [files, setFiles] = useState<OutputFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+  // Guards against out-of-order responses overwriting newer data (UI-M1).
+  const reqIdRef = useRef(0);
 
   const fetchFiles = useCallback(async () => {
+    const myId = ++reqIdRef.current;
     setLoading(true);
     try {
       const url = problemId
@@ -123,26 +49,25 @@ export function OutputBrowser({ selectedPath, openPaths, onSelectFile, problemId
         : "/api/files/outputs";
       const res = await fetch(url);
       const data = await res.json();
+      if (myId !== reqIdRef.current) return; // a newer fetch superseded this one
       setFiles(data.files || []);
-      const dirs = (data.files || []).filter((f: OutputFile) => f.isDirectory).map((f: OutputFile) => f.path);
-      setExpandedDirs(new Set(dirs));
     } catch {
       // silently fail
     } finally {
-      setLoading(false);
+      if (myId === reqIdRef.current) setLoading(false);
     }
   }, [problemId]);
 
   useEffect(() => {
+    // Reset expansion when switching problems so stale dirs don't persist.
+    setExpandedDirs(new Set());
     fetchFiles();
   }, [fetchFiles]);
 
-  const tree = useMemo(() => buildTree(files), [files]);
+  const tree = useMemo(() => organizeOutputFiles(files), [files]);
 
-  const allDirPaths = useMemo(
-    () => files.filter((f) => f.isDirectory).map((f) => f.path),
-    [files]
-  );
+  const allDirPaths = useMemo(() => allExpandableOutputPaths(tree), [tree]);
+
   const allExpanded = allDirPaths.length > 0 && allDirPaths.every((p) => expandedDirs.has(p));
 
   const toggleDir = (path: string) => {
@@ -212,7 +137,7 @@ function TreeNodeRow({
   onSelectFile,
   problemId,
 }: {
-  node: TreeNode;
+  node: OutputTreeNode;
   depth: number;
   selectedPath: string | null;
   openPaths: Set<string>;
@@ -225,11 +150,17 @@ function TreeNodeRow({
 
   if (node.isDirectory) {
     const isExpanded = expandedDirs.has(node.path);
+    const fileCount = countFiles(node);
+
     return (
       <>
         <button
-          className="flex items-center gap-1 w-full text-left py-[3px] text-[13px] hover:bg-muted/50 transition-colors"
+          className={cn(
+            "flex items-center gap-1 w-full text-left py-[3px] text-[13px] hover:bg-muted/50 transition-colors",
+            node.isGroup && "bg-muted/20 border-b border-border/40"
+          )}
           style={{ paddingLeft }}
+          title={node.description}
           onClick={() => onToggleDir(node.path)}
         >
           <svg
@@ -247,11 +178,43 @@ function TreeNodeRow({
           >
             <path d="m9 18 6-6-6-6" />
           </svg>
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-muted-foreground"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
-          <span className="font-medium truncate">{node.name}</span>
-          <span className="ml-auto text-[10px] text-muted-foreground pr-2">
-            {node.children.filter((c) => !c.isDirectory).length}
+          {node.isGroup ? (
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="shrink-0 text-primary/70"
+            >
+              <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+              <path d="M8 10h8" />
+              <path d="M8 14h5" />
+            </svg>
+          ) : (
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="shrink-0 text-muted-foreground"
+            >
+              <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+            </svg>
+          )}
+          <span className={cn("truncate", node.isGroup ? "font-semibold text-foreground" : "font-medium")}>
+            {node.name}
           </span>
+          <span className="ml-auto text-[10px] text-muted-foreground pr-2">{fileCount}</span>
         </button>
         {isExpanded &&
           node.children.map((child) => (
