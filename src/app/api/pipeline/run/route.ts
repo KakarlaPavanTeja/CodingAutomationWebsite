@@ -323,6 +323,8 @@ export async function POST(request: NextRequest) {
       PIPELINE_USER_ID: userId || "",
       PIPELINE_PROBLEM_ID: safeProblemId,
       PIPELINE_STEP_ID: logStepKey,
+      // Exact run id so usage rows attribute to THIS run, not a time window (P1-M1).
+      PIPELINE_RUN_ID: runId ?? "",
       // Owner-set, FINAL difficulty/score. Empty string means "not set" — the
       // pipeline then falls back to auto-generating difficulty and deriving the
       // weightage from it.

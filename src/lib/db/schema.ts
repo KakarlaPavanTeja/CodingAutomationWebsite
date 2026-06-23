@@ -220,12 +220,16 @@ export const llmUsage = pgTable(
     problemName: text("problem_name"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     stepId: text("step_id"),
+    // Exact pipeline run this usage belongs to (P1-M1). Nullable: legacy rows and
+    // non-pipeline calls have none, and those fall back to time-window matching.
+    runId: uuid("run_id"),
   },
   (t) => ({
     createdAtIdx: index("idx_llm_usage_created_at").on(sql`${t.createdAt} DESC`),
     modelIdx: index("idx_llm_usage_model").on(t.model),
     problemIdx: index("idx_llm_usage_problem_id").on(t.problemId),
     userIdx: index("idx_llm_usage_user_id").on(t.userId),
+    runIdx: index("idx_llm_usage_run_id").on(t.runId),
   }),
 );
 
