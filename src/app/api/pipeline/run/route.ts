@@ -132,12 +132,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid subSteps" }, { status: 400 });
     }
   }
+  // testcaseCount is optional. 0 / unset means "let the generator auto-scale"
+  // (buildCommand omits --count for falsy values), so only a positive number
+  // outside the supported range is actually invalid.
   if (
     testcaseCount !== undefined &&
     testcaseCount !== null &&
     (typeof testcaseCount !== "number" ||
       !Number.isInteger(testcaseCount) ||
-      testcaseCount < 1 ||
+      testcaseCount < 0 ||
       testcaseCount > 1000)
   ) {
     return NextResponse.json({ error: "Invalid testcaseCount" }, { status: 400 });
