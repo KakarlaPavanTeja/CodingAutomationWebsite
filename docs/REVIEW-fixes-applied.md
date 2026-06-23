@@ -3,6 +3,23 @@
 **Branch:** `overnight-bugfixes` (7 commits). **`main` untouched. Not pushed. No PR opened.**
 **Date:** 2026-06-23 (overnight)
 
+## Phase work (done with you available — commits 466a6d0 … c7f6432)
+All seven planned phases are implemented and verified (tsc + 20 Python tests + build green):
+- **Phase 1 (P1-H3):** Stop UX state machine — `stopping → stopped → Run after 3s` (new StepStatus values wired across all status maps). Also fixed P1-M6 (cleanup).
+- **Phase 2 (P1-H5):** wave-graph gate uses the real GQ context + reactive `ownerDifficulty`; complete GQ no longer shows downstream as Locked.
+- **Phase 3 (UI-H4/H5):** stable editorial block keys (source-offset ids) stop caret/selection bleed on structural edits.
+- **Phase 4 (P1-H6, M3):** single `recomputeProblemStatus` derives `problems.status` from run rows in one place; reconcile throttled to 1×/5s.
+- **Phase 5 (P1-H8, H9):** PID-reuse runtime ceiling in reconcile; orchestrator busy-loops have a hard safety deadline.
+- **Phase 6 (P1-M1):** LLM usage attributed by exact `run_id`. **⚠️ REQUIRES `npm run db:push`** (adds the `run_id` column) — see below.
+- **Phase 7 (P2-M3, P2-M5, UI-M1):** cp-prep abort propagation, OutputBrowser stale-response guard, non-Anthropic cost tiers, +6 Python tests.
+
+## ⚠️ ACTION REQUIRED before running the app
+Phase 6 added a `run_id` column to `llm_usage`. **Run `npm run db:push`** (you'll need to, since it touches your DB — I didn't run it). Until then, usage queries will error because `schema.ts` references the new column.
+
+## Still intentionally NOT done (low value / risk without clear benefit)
+- **P1-C3 server-side language enforcement** — client already filters; server enforcement needs the persisted global-config and adds little (the recompute "filter" was a harmless identity, not a bug).
+- **P1-L1** hyphen-title truncation (the `generated_titles.txt` format may intentionally strip a " - suffix" — needs your confirmation), **P1-L2** log-ts cosmetics, **P1-L3** delete dead components (confirm unused first), **UI-M4** de-dupe MarkdownProse (refactor), **UI-M5** editorial default langs (needs visual check), **P2-L2/L3**, **UI-L1/L3**, **L5/L6**.
+
 ## Verification status (what I could run headless)
 - ✅ **TypeScript typecheck** (`npx tsc --noEmit`) — clean.
 - ✅ **Python tests** (`npm run test:json`) — **14/14 pass** (7 original + 7 new I added).
