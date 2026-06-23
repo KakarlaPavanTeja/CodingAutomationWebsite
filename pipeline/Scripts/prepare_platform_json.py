@@ -60,6 +60,10 @@ def encode_code_to_base64(code):
 def get_problem_name():
     """Reconstruct the problem name exactly as `prepare_lua_and_testcases.py` does
     so we can locate the packaged file pair it wrote."""
+    # Match prepare_lua: owner title wins, used verbatim (req 14).
+    owner = os.environ.get("PIPELINE_OWNER_TITLE", "").strip()
+    if owner:
+        return "".join(word.capitalize() for word in owner.split())
     titles_path = os.path.join(OUTPUTS_DIR, "generated_titles.txt")
     if not os.path.exists(titles_path):
         return "ProblemName"
