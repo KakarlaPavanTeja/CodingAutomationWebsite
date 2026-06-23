@@ -22,6 +22,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -511,11 +512,20 @@ def run_mutation_benchmark(
     ))
     opt_cache = build_output_cache(optimal_code, filter_inputs, timeout)
 
-    # Equivalence filter — run mutants concurrently (each is a subprocess).
+    # Equivalence filter — run mutants concurrently (each is a subprocess), with
+    # live progress so a long phase doesn't look frozen.
     eq_workers = _mutant_workers(len(mutants))
+    _eq_done = [0]
+    _eq_lock = threading.Lock()
 
     def _is_equiv(m: Mutant) -> bool:
-        return is_equivalent_mutant(m, filter_inputs, opt_cache, timeout)
+        r = is_equivalent_mutant(m, filter_inputs, opt_cache, timeout)
+        if progress:
+            with _eq_lock:
+                _eq_done[0] += 1
+                if _eq_done[0] % 10 == 0 or _eq_done[0] == len(mutants):
+                    _log_progress("filter", _eq_done[0], len(mutants), "checked")
+        return r
 
     if eq_workers > 1:
         with concurrent.futures.ThreadPoolExecutor(max_workers=eq_workers) as ex:
@@ -569,10 +579,23 @@ def run_mutation_benchmark(
 
     # Kill phase — evaluate mutants concurrently (each is a subprocess). Quick
     # cases first, then stress cases only if still alive (kept inside the worker).
+    _kill_done = [0]
+    _kill_count = [0]
+    _kill_lock = threading.Lock()
+
     def _kill_one(m: Mutant) -> bool:
         is_killed = _evaluate_mutant(m, small_cases, opt_quick_cache)
         if not is_killed and stress_cases:
             is_killed = _evaluate_mutant(m, stress_cases, opt_stress_cache)
+        if progress:
+            with _kill_lock:
+                _kill_done[0] += 1
+                if is_killed:
+                    _kill_count[0] += 1
+                if _kill_done[0] % 10 == 0 or _kill_done[0] == len(non_equivalent):
+                    pct = int(100 * _kill_count[0] / _kill_done[0]) if _kill_done[0] else 0
+                    _log_progress("test", _kill_done[0], len(non_equivalent),
+                                  f"{_kill_count[0]} killed · {pct}% so far")
         return is_killed
 
     kill_workers = _mutant_workers(len(non_equivalent))

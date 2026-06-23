@@ -26,6 +26,7 @@ from Prompts.testcasesprompt_v4 import (
 )
 from Prompts.testcasesprompt_v4 import size_tag as make_size_tag
 from benchmark_suite import (
+    BENCHMARK_RUN_TIMEOUT,
     DEFAULT_MIN_KILL,
     DEFAULT_RUN_TIMEOUT,
     fuzz_kill_survivors,
@@ -257,7 +258,12 @@ def main():
     parser.add_argument("--min-kill", type=float, default=DEFAULT_MIN_KILL)
     parser.add_argument("--max-rounds", type=int, default=int(os.environ.get("SUITE_MAX_ROUNDS", "3")))
     parser.add_argument("--no-llm", action="store_true", help="Fuzz-harden only, skip LLM")
-    parser.add_argument("--timeout", type=float, default=DEFAULT_RUN_TIMEOUT)
+    # Use the tighter benchmark timeout (default 3s) for mutation/fuzz runs: a
+    # mutant that runs much longer than the optimal is looping/pathological and
+    # is treated as killed anyway, so the old 10s default just made looping
+    # mutants waste up to 10s PER input (a single bad mutant could stall the
+    # equivalence filter for minutes). Override with BENCHMARK_RUN_TIMEOUT.
+    parser.add_argument("--timeout", type=float, default=BENCHMARK_RUN_TIMEOUT)
     args = parser.parse_args()
 
     root_dir = os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(
