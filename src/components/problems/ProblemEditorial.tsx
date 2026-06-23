@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import {
@@ -14,13 +14,19 @@ import {
   ChevronDown,
   ChevronUp,
   BookOpen,
+  Play,
+  Square,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { usePipeline } from "@/lib/pipeline-context";
+import { getStepConfig } from "@/lib/pipeline-config";
 
 interface ProblemEditorialProps {
   problemId: string;
   problemName: string;
+  onStatusChange?: () => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -30,10 +36,10 @@ interface ProblemEditorialProps {
 /* tags stay intact across edit → save.                               */
 /* ------------------------------------------------------------------ */
 
-type ProseBlock = { kind: "prose"; text: string };
-type CodeBlockT = { kind: "codeblock"; language: string; code: string };
+type ProseBlock = { kind: "prose"; text: string; id: string };
+type CodeBlockT = { kind: "codeblock"; language: string; code: string; id: string };
 type LangCode = { lang: string; code: string };
-type MultiBlock = { kind: "multilang"; langs: LangCode[] };
+type MultiBlock = { kind: "multilang"; langs: LangCode[]; id: string };
 type Block = ProseBlock | CodeBlockT | MultiBlock;
 
 const BLOCK_RE =
@@ -48,7 +54,10 @@ function parseEditorial(raw: string): Block[] {
   BLOCK_RE.lastIndex = 0;
   while ((m = BLOCK_RE.exec(raw)) !== null) {
     const prose = raw.slice(last, m.index);
-    if (prose) blocks.push({ kind: "prose", text: prose });
+    // Stable id from the source offset: unchanged for blocks before the edit
+    // point, so React keeps caret/selection/expanded state on the right block
+    // even when a structural edit changes the block count (UI-H4/H5).
+    if (prose) blocks.push({ kind: "prose", text: prose, id: `prose-${last}` });
     const tag = m[0];
     if (tag.startsWith("<CodeBlock")) {
       const langMatch = tag.match(/language\s*=\s*"([^"]*)"/);
@@ -73,6 +82,7 @@ function parseEditorial(raw: string): Block[] {
         kind: "codeblock",
         language,
         code: inner.replace(/^\n/, "").replace(/\n\s*$/, ""),
+        id: `code-${m.index}`,
       });
     } else {
       const inner = tag
@@ -84,12 +94,12 @@ function parseEditorial(raw: string): Block[] {
       while ((fm = FENCE_RE.exec(inner)) !== null) {
         langs.push({ lang: (fm[1] || "text").toLowerCase(), code: fm[2].replace(/\n\s*$/, "") });
       }
-      blocks.push({ kind: "multilang", langs });
+      blocks.push({ kind: "multilang", langs, id: `multi-${m.index}` });
     }
     last = m.index + tag.length;
   }
   const tail = raw.slice(last);
-  if (tail) blocks.push({ kind: "prose", text: tail });
+  if (tail) blocks.push({ kind: "prose", text: tail, id: `prose-${last}` });
   return blocks;
 }
 
@@ -448,9 +458,9 @@ function BlockEditor({
         if (b.kind === "prose") {
           return (
             <textarea
-              key={idx}
+              key={b.id}
               value={b.text}
-              onChange={(e) => update(idx, { kind: "prose", text: e.target.value })}
+              onChange={(e) => update(idx, { kind: "prose", text: e.target.value, id: b.id })}
               spellCheck={false}
               rows={Math.min(20, Math.max(3, b.text.split("\n").length))}
               className="w-full resize-y rounded-md border bg-background p-3 font-mono text-[13px] leading-relaxed focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -459,7 +469,7 @@ function BlockEditor({
         }
         if (b.kind === "codeblock") {
           return (
-            <div key={idx} className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2">
+            <div key={b.id} className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2">
               <div className="mb-1 px-1 text-[11px] font-medium uppercase tracking-wider text-amber-600 dark:text-amber-400">
                 CodeBlock · {b.language}
               </div>
@@ -474,7 +484,7 @@ function BlockEditor({
           );
         }
         return (
-          <div key={idx} className="rounded-md border border-blue-500/30 bg-blue-500/5 p-2 space-y-2">
+          <div key={b.id} className="rounded-md border border-blue-500/30 bg-blue-500/5 p-2 space-y-2">
             <div className="px-1 text-[11px] font-medium uppercase tracking-wider text-blue-600 dark:text-blue-400">
               MultiLanguageCodeBlock
             </div>
@@ -503,7 +513,17 @@ function BlockEditor({
 
 /* ------------------------------ Main component ---------------------------- */
 
-export function ProblemEditorial({ problemId, problemName }: ProblemEditorialProps) {
+export function ProblemEditorial({ problemId, problemName, onStatusChange }: ProblemEditorialProps) {
+  const {
+    stepStates,
+    globalLanguages,
+    isAnyRunning,
+    stateLoading,
+    loadProblemState,
+    runStep,
+    stopStep,
+  } = usePipeline();
+
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -512,6 +532,16 @@ export function ProblemEditorial({ problemId, problemName }: ProblemEditorialPro
   const [editing, setEditing] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [copied, setCopied] = useState(false);
+
+  const generateState = stepStates.get("generate_editorial");
+  const executeState = stepStates.get("execute_editorial");
+  const packageState = stepStates.get("package_platform");
+  const genRunning = generateState?.status === "running";
+  const execRunning = executeState?.status === "running";
+
+  useEffect(() => {
+    loadProblemState(problemId);
+  }, [problemId, loadProblemState]);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -542,6 +572,25 @@ export function ProblemEditorial({ problemId, problemName }: ProblemEditorialPro
   useEffect(() => {
     load();
   }, [load]);
+
+  const prevGenStatus = useRef(generateState?.status);
+  useEffect(() => {
+    const status = generateState?.status;
+    if (prevGenStatus.current === "running" && status === "completed") {
+      load();
+      onStatusChange?.();
+    }
+    prevGenStatus.current = status;
+  }, [generateState?.status, load, onStatusChange]);
+
+  const prevExecStatus = useRef(executeState?.status);
+  useEffect(() => {
+    const status = executeState?.status;
+    if (prevExecStatus.current === "running" && status !== "running") {
+      onStatusChange?.();
+    }
+    prevExecStatus.current = status;
+  }, [executeState?.status, onStatusChange]);
 
   const blocks = useMemo(() => parseEditorial(content), [content]);
   const dirty = content !== original;
@@ -587,6 +636,47 @@ export function ProblemEditorial({ problemId, problemName }: ProblemEditorialPro
     URL.revokeObjectURL(url);
   };
 
+  const packageComplete = packageState?.status === "completed";
+  const editorialComplete = generateState?.status === "completed";
+  const canGenerate =
+    packageComplete && !genRunning && !execRunning && generateState?.status !== "running";
+  const canExecute =
+    editorialComplete &&
+    !notFound &&
+    !genRunning &&
+    !execRunning &&
+    executeState?.status !== "running";
+
+  const handleGenerateEditorial = () => {
+    const state = generateState ?? {
+      id: "generate_editorial" as const,
+      status: "pending" as const,
+      logs: [],
+      exitCode: null,
+      startTime: null,
+      endTime: null,
+      enabledSubSteps: getStepConfig("generate_editorial").subSteps
+        .filter((s) => s.defaultEnabled)
+        .map((s) => s.id),
+      enabledLanguages: [],
+      testcaseCount: 0,
+    };
+    runStep(state);
+    onStatusChange?.();
+  };
+
+  const handleExecuteSolutions = () => {
+    const state = executeState;
+    if (!state) return;
+    runStep({ ...state, enabledLanguages: globalLanguages });
+    onStatusChange?.();
+  };
+
+  const handleStopGenerate = () => stopStep("generate_editorial");
+  const handleStopExecute = () => stopStep("execute_editorial");
+
+  const pipelineBusy = stateLoading || isAnyRunning;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center rounded-lg border bg-card py-20">
@@ -608,13 +698,44 @@ export function ProblemEditorial({ problemId, problemName }: ProblemEditorialPro
 
   if (notFound) {
     return (
-      <div className="rounded-lg border bg-card p-10 text-center">
-        <BookOpen className="mx-auto h-10 w-10 text-muted-foreground/40" />
-        <h3 className="mt-3 text-sm font-semibold">No editorial yet</h3>
-        <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-          Run the <span className="font-medium text-foreground">Generate Editorial</span> step (the last step in the
-          Pipeline tab) to produce a complete multi-solution editorial.
-        </p>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
+            <BookOpen className="h-4 w-4 text-primary" />
+            Editorial
+          </h2>
+          <div className="flex items-center gap-1.5">
+            {genRunning ? (
+              <Button size="sm" variant="destructive" className="h-8" onClick={handleStopGenerate}>
+                <Square className="mr-1.5 h-3.5 w-3.5 fill-current" />
+                Stop
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                className="h-8"
+                disabled={!canGenerate || pipelineBusy}
+                onClick={handleGenerateEditorial}
+              >
+                {pipelineBusy && !genRunning ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                Generate Editorial
+              </Button>
+            )}
+          </div>
+        </div>
+        <div className="rounded-lg border bg-card p-10 text-center">
+          <BookOpen className="mx-auto h-10 w-10 text-muted-foreground/40" />
+          <h3 className="mt-3 text-sm font-semibold">No editorial yet</h3>
+          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+            {packageComplete
+              ? "Click Generate Editorial to produce a complete multi-solution editorial."
+              : "Complete Package for Platform in the Pipeline tab first, then generate the editorial here."}
+          </p>
+        </div>
       </div>
     );
   }
@@ -657,6 +778,39 @@ export function ProblemEditorial({ problemId, problemName }: ProblemEditorialPro
               Save
             </Button>
           )}
+          {genRunning ? (
+            <Button size="sm" variant="destructive" className="h-8" onClick={handleStopGenerate}>
+              <Square className="mr-1.5 h-3.5 w-3.5 fill-current" />
+              Stop
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8"
+              disabled={!canGenerate || pipelineBusy}
+              onClick={handleGenerateEditorial}
+            >
+              <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+              Generate Editorial
+            </Button>
+          )}
+          {execRunning ? (
+            <Button size="sm" variant="destructive" className="h-8" onClick={handleStopExecute}>
+              <Square className="mr-1.5 h-3.5 w-3.5 fill-current" />
+              Stop
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              className="h-8"
+              disabled={!canExecute || pipelineBusy}
+              onClick={handleExecuteSolutions}
+            >
+              <Play className="mr-1.5 h-3.5 w-3.5" />
+              Execute Solutions
+            </Button>
+          )}
         </div>
       </div>
 
@@ -666,10 +820,10 @@ export function ProblemEditorial({ problemId, problemName }: ProblemEditorialPro
           <BlockEditor blocks={blocks} onChange={(b) => setContent(serializeBlocks(b))} />
         ) : (
           <div className="max-w-none">
-            {blocks.map((b, idx) => {
-              if (b.kind === "prose") return <MarkdownProse key={idx} text={b.text} />;
-              if (b.kind === "codeblock") return <CodeBlockView key={idx} block={b} />;
-              return <MultiLangView key={idx} block={b} />;
+            {blocks.map((b) => {
+              if (b.kind === "prose") return <MarkdownProse key={b.id} text={b.text} />;
+              if (b.kind === "codeblock") return <CodeBlockView key={b.id} block={b} />;
+              return <MultiLangView key={b.id} block={b} />;
             })}
           </div>
         )}
