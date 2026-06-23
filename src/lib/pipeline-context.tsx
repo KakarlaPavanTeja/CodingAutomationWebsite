@@ -1705,12 +1705,19 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           stepStates,
           questionPhaseComplete
         );
-        const anyBlockingActive = blocking.some(
-          (b) =>
-            alive.has(b) ||
-            stepStates.get(b)?.status === "running"
-        );
-        if (anyBlockingActive) {
+        // Only DROP a queued step if a prerequisite has terminally failed/stopped
+        // and is NOT being retried. A prerequisite that is merely transitioning
+        // (running -> completed, or its status briefly lagging the wave) must keep
+        // the step queued — previously, that transient window dropped the whole
+        // downstream chain and stalled Run All between phases (GQ->testcases,
+        // execute->package, ...).
+        const anyBlockingDead = blocking.some((b) => {
+          const st = stepStates.get(b)?.status;
+          const beingRetried =
+            alive.has(b) || launchingStepsRef.current.has(b) || st === "running";
+          return (st === "failed" || st === "stopped") && !beingRetried;
+        });
+        if (!anyBlockingDead) {
           remaining.push(id);
           alive.add(id);
         }
