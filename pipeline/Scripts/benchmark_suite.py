@@ -810,30 +810,52 @@ def run_differential_fuzz(
     optimal_code: str,
     brute_code: str,
     description: str,
+    test_cases: list[dict] | None = None,
     count: int = BENCHMARK_FUZZ_COUNT,
     timeout: float = BENCHMARK_RUN_TIMEOUT,
 ) -> dict[str, Any]:
-    max_n = parse_constraint_max_n(description) or 100
-    cap = min(max_n, 50)
+    """Cross-check the optimal against the brute force to catch a WRONG optimal.
+
+    Inputs are FORMAT-PRESERVING: the real test cases plus value-perturbations of
+    them. A generic numeric fuzz is only a fallback when no test cases are given —
+    the old generic-only fuzz produced inputs in a fixed "n / array" shape that
+    custom formats (e.g. "n m / values / decays") reject, so every comparison was
+    skipped and B4 passed vacuously, letting a buggy optimal slip through."""
+    inputs: list[str] = []
+    if test_cases:
+        inputs.extend(tc.get("input", "") for tc in test_cases if tc.get("input"))
+        inputs.extend(_perturb_numeric_inputs(test_cases, count))
+    if not inputs:
+        max_n = parse_constraint_max_n(description) or 100
+        cap = min(max_n, 50)
+        random.seed(42)
+        for _ in range(count):
+            n = random.randint(1, max(1, cap))
+            inputs.append(f"{n}\n" + " ".join(str(random.randint(-10, 10)) for _ in range(n)) + "\n0\n")
+
+    # Process in chunks with early-stop + a wall-time cap: a buggy optimal usually
+    # disagrees within the first chunk (stop fast), while a correct optimal must
+    # not run unbounded over a slow brute.
     disagreements = []
-    random.seed(42)
-    # Generate all fuzz inputs first, then run optimal + brute each in ONE batched
-    # process (was 2 subprocess spawns per input). Same seed -> same inputs/results.
-    inputs = []
-    for _ in range(count):
-        n = random.randint(1, max(1, cap))
-        inputs.append(f"{n}\n" + " ".join(str(random.randint(-10, 10)) for _ in range(n)) + "\n0\n")
-    opt_results = run_solutions_batch(optimal_code, inputs, timeout)
-    bru_results = run_solutions_batch(brute_code, inputs, timeout)
-    for inp, (opt_out, s1), (bru_out, s2) in zip(inputs, opt_results, bru_results):
-        if s1 != "ok" or s2 != "ok":
-            continue
-        if normalize(opt_out) != normalize(bru_out):
-            disagreements.append({"input": inp[:200], "optimal": opt_out[:100], "brute": bru_out[:100]})
-            if len(disagreements) >= 5:
-                break
+    ran = 0
+    deadline = time.monotonic() + 30.0
+    chunk = 12
+    for start in range(0, len(inputs), chunk):
+        if time.monotonic() > deadline:
+            break
+        batch = inputs[start:start + chunk]
+        opt_results = run_solutions_batch(optimal_code, batch, timeout)
+        bru_results = run_solutions_batch(brute_code, batch, timeout)
+        ran += len(batch)
+        for inp, (opt_out, s1), (bru_out, s2) in zip(batch, opt_results, bru_results):
+            if s1 != "ok" or s2 != "ok":
+                continue
+            if normalize(opt_out) != normalize(bru_out):
+                disagreements.append({"input": inp[:200], "optimal": opt_out[:100], "brute": bru_out[:100]})
+        if len(disagreements) >= 5:
+            break
     return {
-        "runs": count,
+        "runs": ran,
         "disagreements": disagreements,
         "hard_fail": len(disagreements) > 0,
     }
@@ -942,7 +964,28 @@ def _perturb_numeric_inputs(test_cases: list[dict], count: int, seed: int = 777)
         return []
     rng = random.Random(seed)
     seen = {tc.get("input", "") for tc in test_cases}
+
+    # Observed integer range across all inputs — keep perturbed values IN this
+    # range (and don't introduce a negative if none were seen). Going out of the
+    # problem's value range can create inputs the constraints forbid, where the
+    # optimal and a correct brute may legitimately differ — which would cause
+    # spurious B4 failures. Staying in-distribution keeps inputs valid.
+    observed = []
+    for base in bases:
+        for line in base.split("\n"):
+            for t in line.split():
+                try:
+                    observed.append(int(t))
+                except ValueError:
+                    pass
+    lo = min(observed) if observed else 0
+    hi = max(observed) if observed else 100
     deltas = [1, -1, 2, -2, 3, -3, 5, -5, 10, -10]
+    boundary = [lo, hi, lo + 1, hi - 1, (lo + hi) // 2]
+
+    def _clamp(x: int) -> int:
+        return max(lo, min(hi, x))
+
     out: list[str] = []
     attempts = 0
     while len(out) < count and attempts < count * 8:
@@ -966,9 +1009,8 @@ def _perturb_numeric_inputs(test_cases: list[dict], count: int, seed: int = 777)
                     v = int(toks[j])
                 except ValueError:
                     continue
-                r = rng.random()
-                v2 = v + rng.choice(deltas) if r < 0.7 else (-v if r < 0.85 else rng.choice([0, 1, -1, 1000, -1000]))
-                toks[j] = str(v2)
+                v2 = v + rng.choice(deltas) if rng.random() < 0.7 else rng.choice(boundary)
+                toks[j] = str(_clamp(v2))
                 changed = True
         if not changed:
             continue
@@ -1158,7 +1200,8 @@ def run_benchmark(
         print("[B4] Differential fuzz vs brute force", flush=True)
         _log_detail(f"Generating up to {fuzz_count} random inputs…")
         report.b4 = run_differential_fuzz(
-            optimal_code, brute_code, description, count=fuzz_count, timeout=timeout
+            optimal_code, brute_code, description,
+            test_cases=test_cases, count=fuzz_count, timeout=timeout,
         )
         d = len(report.b4.get("disagreements", []))
         if report.b4.get("hard_fail"):
