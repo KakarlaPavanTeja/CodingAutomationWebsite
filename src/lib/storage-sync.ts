@@ -8,16 +8,19 @@
  *   - Upload final outputs + logs on completion
  *   - Clean up the temp dir afterward
  *
- * The UI (read, save, list, download) reads exclusively from App Storage.
+ * The UI reads from App Storage, with a local `pipeline/problems/<id>/Inputs/`
+ * mirror for dev environments where object storage is unavailable or inputs
+ * were never persisted to the bucket.
  */
 
 import { mkdir, writeFile, readFile, readdir, stat, rm, cp } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 import os from "os";
+import { randomUUID } from "crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { pipelineLogs } from "@/lib/db/schema";
+import { pipelineLogs, pipelineRuns } from "@/lib/db/schema";
 import {
   putObject,
   getObjectBuffer,
@@ -49,6 +52,92 @@ async function walkDir(dir: string, base = ""): Promise<string[]> {
   return results;
 }
 
+function localInputsDir(problemId: string): string {
+  const pipelineRoot = process.env.PIPELINE_ROOT || path.join(process.cwd(), "pipeline");
+  return path.join(pipelineRoot, "problems", problemId, "Inputs");
+}
+
+function localOutputsDir(problemId: string): string {
+  const pipelineRoot = process.env.PIPELINE_ROOT || path.join(process.cwd(), "pipeline");
+  return path.join(pipelineRoot, "problems", problemId, "Outputs");
+}
+
+async function mirrorInputFileLocally(
+  problemId: string,
+  name: string,
+  content: Buffer | string,
+): Promise<void> {
+  const dir = localInputsDir(problemId);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, name), content);
+}
+
+/** Copy every file from a workspace Inputs/ dir into the local mirror. */
+export async function mirrorInputsFromDir(problemId: string, inputsDir: string): Promise<void> {
+  const files = await walkDir(inputsDir);
+  for (const rel of files) {
+    const base = path.basename(rel);
+    if (!isUserProblemInput(base)) continue;
+    try {
+      const content = await readFile(path.join(inputsDir, rel));
+      await mirrorInputFileLocally(problemId, rel, content);
+    } catch {
+      // skip unreadable files
+    }
+  }
+}
+
+/** Pipeline-owned reference files — injected at run time, not user uploads. */
+export const PIPELINE_REFERENCE_INPUTS = new Set(["topics_list.txt"]);
+
+function isUserProblemInput(name: string): boolean {
+  return !PIPELINE_REFERENCE_INPUTS.has(name);
+}
+
+async function listLocalInputFiles(problemId: string): Promise<OutputFile[]> {
+  const dir = localInputsDir(problemId);
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const results: OutputFile[] = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.name === ".DS_Store") continue;
+      if (!isUserProblemInput(entry.name)) continue;
+      const filePath = path.join(dir, entry.name);
+      const s = await stat(filePath);
+      results.push({
+        path: entry.name,
+        name: entry.name,
+        size: s.size,
+        modifiedAt: s.mtime.toISOString(),
+        isDirectory: false,
+      });
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+async function readLocalInputFile(problemId: string, filePath: string): Promise<string | null> {
+  try {
+    return await readFile(path.join(localInputsDir(problemId), filePath), "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+function sortInputFiles(files: OutputFile[]): OutputFile[] {
+  return files.sort((a, b) => {
+    const rank = (name: string) => {
+      if (name === "problem.md") return 0;
+      if (name.startsWith("solution.")) return 1;
+      return 2;
+    };
+    const diff = rank(a.name) - rank(b.name);
+    return diff !== 0 ? diff : a.name.localeCompare(b.name);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Upload operations
 // ---------------------------------------------------------------------------
@@ -67,29 +156,32 @@ export async function uploadInputFiles(
   files: { name: string; content: Buffer }[],
 ): Promise<void> {
   for (const file of files) {
+    await mirrorInputFileLocally(problemId, file.name, file.content);
     await uploadFile(`${problemId}/inputs/${file.name}`, file.content);
   }
 }
 
-/** Upload shared inputs (topics_list.txt) for a problem. */
+/** Upload a single output file to storage and the local Outputs mirror. */
+export async function uploadOutputFile(
+  problemId: string,
+  name: string,
+  content: Buffer | string,
+): Promise<void> {
+  const dir = localOutputsDir(problemId);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, name), content);
+  await uploadFile(`${problemId}/outputs/${name}`, content);
+}
+
+/** Upload shared pipeline reference inputs (deprecated — references are copied at run time only). */
 export async function uploadSharedInputs(
   problemId: string,
   sharedInputsDir: string,
 ): Promise<void> {
-  try {
-    const entries = await readdir(sharedInputsDir);
-    for (const entry of entries) {
-      if (entry === "problem.md" || entry.startsWith("solution.") || entry === ".DS_Store") continue;
-      const filePath = path.join(sharedInputsDir, entry);
-      const s = await stat(filePath);
-      if (s.isFile()) {
-        const content = await readFile(filePath);
-        await uploadFile(`${problemId}/inputs/${entry}`, content);
-      }
-    }
-  } catch {
-    // shared inputs dir may not exist
-  }
+  void problemId;
+  void sharedInputsDir;
+  // topics_list.txt and similar live in pipeline/Inputs/ and are copied into the
+  // temp workspace when a step runs — they should not be stored per-problem.
 }
 
 /** Walk a local directory and upload all files to storage under a prefix. */
@@ -152,6 +244,15 @@ export async function readStorageFile(
   filePath: string,
   subfolder = "outputs",
 ): Promise<string> {
+  if (subfolder === "inputs") {
+    try {
+      return await getObjectString(`${problemId}/inputs/${filePath}`);
+    } catch {
+      const local = await readLocalInputFile(problemId, filePath);
+      if (local != null) return local;
+      throw new Error(`File not found: ${filePath}`);
+    }
+  }
   return getObjectString(`${problemId}/${subfolder}/${filePath}`);
 }
 
@@ -172,6 +273,37 @@ export async function writeStorageFile(
   subfolder = "outputs",
 ): Promise<void> {
   await uploadFile(`${problemId}/${subfolder}/${filePath}`, content);
+}
+
+/** List all input files for a problem (flat files under inputs/). */
+export async function listInputFiles(problemId: string): Promise<OutputFile[]> {
+  const byName = new Map<string, OutputFile>();
+
+  try {
+    const prefix = `${problemId}/inputs/`;
+    const items = await listObjects(prefix);
+    for (const item of items) {
+      const relativePath = item.name.slice(prefix.length);
+      if (!relativePath || relativePath.includes("/")) continue;
+      if (!isUserProblemInput(relativePath)) continue;
+
+      byName.set(relativePath, {
+        path: relativePath,
+        name: relativePath,
+        size: item.size,
+        modifiedAt: item.updated,
+        isDirectory: false,
+      });
+    }
+  } catch {
+    // Object storage may be unavailable in local dev.
+  }
+
+  for (const file of await listLocalInputFiles(problemId)) {
+    if (!byName.has(file.name)) byName.set(file.name, file);
+  }
+
+  return sortInputFiles([...byName.values()]);
 }
 
 /** List all output files for a problem (recursive). Returns OutputFile[]. */
@@ -243,9 +375,6 @@ export async function getLogContent(
   runId?: string,
 ): Promise<string | null> {
   if (runId) {
-    // Bind the runId lookup to the caller-validated problemId/stepId so a
-    // user with access to one problem can't fetch another problem's logs by
-    // guessing/leaking a runId. (IDOR fix.)
     const rows = await db
       .select({ content: pipelineLogs.content })
       .from(pipelineLogs)
@@ -258,6 +387,29 @@ export async function getLogContent(
       )
       .limit(1);
     return rows[0]?.content ?? null;
+  }
+
+  // When a step is in-flight, only return that run's log (empty until first sync).
+  const activeRun = await db
+    .select({ id: pipelineRuns.id })
+    .from(pipelineRuns)
+    .where(
+      and(
+        eq(pipelineRuns.problemId, problemId),
+        eq(pipelineRuns.stepId, stepId),
+        eq(pipelineRuns.status, "running"),
+      ),
+    )
+    .orderBy(desc(pipelineRuns.startedAt))
+    .limit(1);
+
+  if (activeRun[0]) {
+    const rows = await db
+      .select({ content: pipelineLogs.content })
+      .from(pipelineLogs)
+      .where(eq(pipelineLogs.runId, activeRun[0].id))
+      .limit(1);
+    return rows[0]?.content ?? "";
   }
 
   const rows = await db
@@ -279,7 +431,15 @@ export async function getLogContent(
  * from the Docker image (or local path).
  */
 export async function createTempWorkspace(problemId: string): Promise<string> {
-  const tmpDir = path.join(os.tmpdir(), `pipeline-${problemId}-${Date.now()}`);
+  // Unique per call: when several steps for the same problem launch in the same
+  // millisecond (parallel GQ substeps, or testcases + enrichment), a Date.now()
+  // -only name collided so two runs shared one dir — and one run's cleanup
+  // (rm -rf) then yanked the dir out from under the other, failing it instantly
+  // with no log. The random suffix guarantees an isolated workspace per run.
+  const tmpDir = path.join(
+    os.tmpdir(),
+    `pipeline-${problemId}-${Date.now()}-${randomUUID().slice(0, 8)}`
+  );
   const inputsDir = path.join(tmpDir, "Inputs");
   const outputsDir = path.join(tmpDir, "Outputs");
   const logsDir = path.join(tmpDir, "logs");
@@ -290,17 +450,35 @@ export async function createTempWorkspace(problemId: string): Promise<string> {
 
   // Download input files from App Storage
   const inputPrefix = `${problemId}/inputs/`;
-  const inputItems = await listObjects(inputPrefix);
-  for (const item of inputItems) {
-    const relativePath = item.name.slice(inputPrefix.length);
-    if (!relativePath) continue;
-    try {
-      const buf = await getObjectBuffer(item.name);
-      const localPath = path.join(inputsDir, relativePath);
-      await mkdir(path.dirname(localPath), { recursive: true });
-      await writeFile(localPath, buf);
-    } catch {
-      // skip
+  try {
+    const inputItems = await listObjects(inputPrefix);
+    for (const item of inputItems) {
+      const relativePath = item.name.slice(inputPrefix.length);
+      if (!relativePath) continue;
+      try {
+        const buf = await getObjectBuffer(item.name);
+        const localPath = path.join(inputsDir, relativePath);
+        await mkdir(path.dirname(localPath), { recursive: true });
+        await writeFile(localPath, buf);
+        await mirrorInputFileLocally(problemId, relativePath, buf);
+      } catch {
+        // skip
+      }
+    }
+  } catch {
+    // Object storage may be unavailable in local dev.
+  }
+
+  // Supplement from the local Inputs mirror when cloud is empty or unavailable.
+  const localMirror = localInputsDir(problemId);
+  if (existsSync(localMirror)) {
+    const entries = await readdir(localMirror, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.name === ".DS_Store") continue;
+      const dest = path.join(inputsDir, entry.name);
+      if (!existsSync(dest)) {
+        await cp(path.join(localMirror, entry.name), dest);
+      }
     }
   }
 
