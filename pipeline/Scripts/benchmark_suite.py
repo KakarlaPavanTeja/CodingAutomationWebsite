@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import concurrent.futures
 import copy
 import glob
 import json
@@ -474,6 +475,18 @@ def is_equivalent_mutant(
     return True
 
 
+def _mutant_workers(n: int) -> int:
+    """Thread count for evaluating mutants concurrently. Each mutant runs in its
+    own subprocess (which releases the GIL while it executes), so threads give a
+    real speedup. Bounded so we don't flood the host with Python processes.
+    Override with SUITE_MAX_WORKERS."""
+    if n <= 1:
+        return 1
+    env = os.environ.get("SUITE_MAX_WORKERS", "").strip()
+    cap = int(env) if env.isdigit() and int(env) > 0 else min(8, os.cpu_count() or 4)
+    return max(1, min(cap, n))
+
+
 def run_mutation_benchmark(
     optimal_code: str,
     test_cases: list[dict],
@@ -498,17 +511,18 @@ def run_mutation_benchmark(
     ))
     opt_cache = build_output_cache(optimal_code, filter_inputs, timeout)
 
-    non_equivalent: list[Mutant] = []
-    for i, m in enumerate(mutants):
-        if not is_equivalent_mutant(m, filter_inputs, opt_cache, timeout):
-            non_equivalent.append(m)
-        if progress and (i + 1) % 5 == 0:
-            _log_progress(
-                "filter",
-                i + 1,
-                len(mutants),
-                f"{len(non_equivalent)} non-equivalent",
-            )
+    # Equivalence filter — run mutants concurrently (each is a subprocess).
+    eq_workers = _mutant_workers(len(mutants))
+
+    def _is_equiv(m: Mutant) -> bool:
+        return is_equivalent_mutant(m, filter_inputs, opt_cache, timeout)
+
+    if eq_workers > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=eq_workers) as ex:
+            equiv_flags = list(ex.map(_is_equiv, mutants))  # preserves order
+        non_equivalent = [m for m, equiv in zip(mutants, equiv_flags) if not equiv]
+    else:
+        non_equivalent = [m for m in mutants if not _is_equiv(m)]
 
     if progress:
         _log_ok(
@@ -553,10 +567,24 @@ def run_mutation_benchmark(
         build_output_cache(optimal_code, stress_inputs, timeout) if stress_cases else {}
     )
 
-    for idx, m in enumerate(non_equivalent):
+    # Kill phase — evaluate mutants concurrently (each is a subprocess). Quick
+    # cases first, then stress cases only if still alive (kept inside the worker).
+    def _kill_one(m: Mutant) -> bool:
         is_killed = _evaluate_mutant(m, small_cases, opt_quick_cache)
         if not is_killed and stress_cases:
             is_killed = _evaluate_mutant(m, stress_cases, opt_stress_cache)
+        return is_killed
+
+    kill_workers = _mutant_workers(len(non_equivalent))
+    if progress and non_equivalent:
+        _log_detail(f"Kill phase: {len(non_equivalent)} mutant(s) across {kill_workers} worker(s)…")
+    if kill_workers > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=kill_workers) as ex:
+            kill_flags = list(ex.map(_kill_one, non_equivalent))  # preserves order
+    else:
+        kill_flags = [_kill_one(m) for m in non_equivalent]
+
+    for m, is_killed in zip(non_equivalent, kill_flags):
         if is_killed:
             killed.append(m.mutant_id)
         else:
@@ -566,9 +594,6 @@ def run_mutation_benchmark(
                 "bug_class": m.bug_class,
                 "diff": m.diff_summary,
             })
-        if progress and non_equivalent and (idx + 1) % 5 == 0:
-            pct = int(100 * len(killed) / (idx + 1))
-            _log_progress("test", idx + 1, len(non_equivalent), f"{len(killed)} killed · {pct}% so far")
 
     total = len(non_equivalent)
     kill_rate = (len(killed) / total) if total else 1.0
