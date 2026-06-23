@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -924,6 +925,128 @@ def fuzz_kill_survivors(
             "output": exp,
             "weightage": 1.0,
             "tags": [size_tag_from_bucket(bucket), "fuzz_harden", "adversarial"],
+            "order": 0,
+        })
+    return new_cases
+
+
+def _perturb_numeric_inputs(test_cases: list[dict], count: int, seed: int = 777) -> list[str]:
+    """Generate new inputs by perturbing the NUMERIC VALUES in existing test-case
+    inputs while keeping their line/token structure intact. This is format-
+    agnostic — it reuses each problem's real input shape (counts, line layout)
+    and only changes data values — so the optimal solution still accepts them.
+    Used to find inputs that distinguish the optimal from a surviving wrong
+    solution (B2 strengthening)."""
+    bases = [tc.get("input", "") for tc in test_cases if tc.get("input")]
+    if not bases:
+        return []
+    rng = random.Random(seed)
+    seen = {tc.get("input", "") for tc in test_cases}
+    deltas = [1, -1, 2, -2, 3, -3, 5, -5, 10, -10]
+    out: list[str] = []
+    attempts = 0
+    while len(out) < count and attempts < count * 8:
+        attempts += 1
+        base = rng.choice(bases)
+        lines = base.split("\n")
+        # Prefer perturbing data lines (after the first, which is usually counts);
+        # fall back to any non-empty line. Token COUNT per line is preserved so
+        # array lengths / declared sizes stay consistent.
+        data_idxs = [i for i in range(1, len(lines)) if lines[i].strip()] \
+            or [i for i in range(len(lines)) if lines[i].strip()]
+        if not data_idxs:
+            continue
+        new_lines = list(lines)
+        li = rng.choice(data_idxs)
+        toks = new_lines[li].split()
+        changed = False
+        for j in range(len(toks)):
+            if rng.random() < 0.5:
+                try:
+                    v = int(toks[j])
+                except ValueError:
+                    continue
+                r = rng.random()
+                v2 = v + rng.choice(deltas) if r < 0.7 else (-v if r < 0.85 else rng.choice([0, 1, -1, 1000, -1000]))
+                toks[j] = str(v2)
+                changed = True
+        if not changed:
+            continue
+        new_lines[li] = " ".join(toks)
+        cand = "\n".join(new_lines)
+        if cand in seen:
+            continue
+        seen.add(cand)
+        out.append(cand)
+    return out
+
+
+def fuzz_kill_wrong_solutions(
+    optimal_code: str,
+    test_cases: list[dict],
+    wrong_solutions: list[tuple[str, str]],
+    brute_code: str | None = None,
+    count: int = 200,
+    timeout: float = BENCHMARK_RUN_TIMEOUT,
+    description: str = "",
+    progress: bool = False,
+    chunk: int = 40,
+    target_per_solution: int = 3,
+    max_seconds: float = 45.0,
+) -> list[dict]:
+    """Find inputs that kill surviving WRONG solutions (B2). Perturbs existing
+    inputs (format-preserving), validates against optimal (+ brute), and keeps
+    cases where a wrong solution disagrees. Processed in CHUNKS with early-stop
+    and a wall-time cap — a handful of discriminating cases per wrong solution is
+    enough, and blind perturbation can't always find subtle ones, so it must not
+    run unbounded."""
+    if not wrong_solutions:
+        return []
+    candidates = _perturb_numeric_inputs(test_cases, count)
+    if not candidates:
+        return []
+    max_n = parse_constraint_max_n(description) or 100
+    deadline = time.monotonic() + max_seconds
+
+    killer_cases: dict[str, str] = {}  # input -> expected
+    kills_per_sol = {name: 0 for name, _ in wrong_solutions}
+
+    for start in range(0, len(candidates), chunk):
+        if time.monotonic() > deadline:
+            if progress:
+                print(f"    wrong-soln harden: time cap reached ({max_seconds:.0f}s)", flush=True)
+            break
+        batch = candidates[start:start + chunk]
+        opt_results = run_solutions_batch(optimal_code, batch, timeout)
+        valid = [(inp, normalize(o)) for inp, (o, s) in zip(batch, opt_results) if s == "ok"]
+        if brute_code and valid:
+            bru = run_solutions_batch(brute_code, [i for i, _ in valid], timeout)
+            valid = [(i, e) for (i, e), (bo, bs) in zip(valid, bru) if bs == "ok" and normalize(bo) == e]
+        if valid:
+            vin = [i for i, _ in valid]
+            exp_by = dict(valid)
+            for name, code in wrong_solutions:
+                wres = run_solutions_batch(code, vin, timeout)
+                for inp, (wout, wstatus) in zip(vin, wres):
+                    if wstatus in ("timeout", "error") or normalize(wout) != exp_by[inp]:
+                        killer_cases.setdefault(inp, exp_by[inp])
+                        kills_per_sol[name] += 1
+        if progress:
+            print(f"    wrong-soln harden: {len(killer_cases)} killer case(s) after "
+                  f"{min(start + chunk, len(candidates))} candidate(s)", flush=True)
+        # Stop once every surviving wrong solution has enough discriminating cases.
+        if all(kills_per_sol[name] >= target_per_solution for name, _ in wrong_solutions):
+            break
+
+    new_cases: list[dict] = []
+    for inp, exp in killer_cases.items():
+        n_val = parse_primary_n(inp)
+        bucket = derive_size_bucket(n_val, max_n, inp)
+        new_cases.append({
+            "input": inp,
+            "output": exp,
+            "weightage": 1.0,
+            "tags": [size_tag_from_bucket(bucket), "wrong_soln_harden", "adversarial"],
             "order": 0,
         })
     return new_cases

@@ -30,6 +30,7 @@ from benchmark_suite import (
     DEFAULT_MIN_KILL,
     DEFAULT_RUN_TIMEOUT,
     fuzz_kill_survivors,
+    fuzz_kill_wrong_solutions,
     load_testcases,
     load_text,
     normalize,
@@ -37,6 +38,7 @@ from benchmark_suite import (
     run_benchmark,
     run_mutation_benchmark,
     run_solution,
+    run_wrong_approach_gate,
 )
 from testcase_helpers import (
     derive_size_bucket,
@@ -318,6 +320,36 @@ def main():
     if total_added:
         _save_testcases(testcases_path, test_cases, description)
         print(f"Appended {total_added} case(s) to {testcases_path}")
+
+    # B2 strengthening: the rounds above harden against synthetic mutants (B1).
+    # A wrong solution can still pass EVERY case (B2 survivor) — target those by
+    # perturbing real inputs until the optimal and the wrong solution diverge.
+    for b2_round in range(1, args.max_rounds + 1):
+        b2 = run_wrong_approach_gate(test_cases, timeout=args.timeout, progress=True)
+        if not b2.get("hard_fail"):
+            break
+        failures = b2.get("failures") or []
+        wrong_dir = os.path.join("Outputs", "wrong_solutions")
+        wrong_codes = []
+        for f in failures:
+            p = os.path.join(wrong_dir, f["file"])
+            if os.path.exists(p):
+                wrong_codes.append((f["file"], load_text(p)))
+        if not wrong_codes:
+            break
+        print(f"\n--- B2 strengthening round {b2_round}/{args.max_rounds} — "
+              f"{len(wrong_codes)} surviving wrong solution(s) ---")
+        new_cases = fuzz_kill_wrong_solutions(
+            optimal_code, test_cases, wrong_codes, brute_code,
+            timeout=args.timeout, description=description, progress=True,
+        )
+        if not new_cases:
+            print("  Could not find discriminating inputs via perturbation — leaving for review.")
+            break
+        print(f"  Added {len(new_cases)} case(s) that kill surviving wrong solution(s).")
+        test_cases.extend(new_cases)
+        total_added += len(new_cases)
+        _save_testcases(testcases_path, test_cases, description)
 
     report = run_benchmark(advisory_size=True)
     print_report(report, args.min_kill)
