@@ -37,7 +37,7 @@ import {
   recomputeLanguageStepStatus,
   languageSubStepLogKey,
 } from "@/lib/pipeline-language-steps";
-import { mergeRunProgress, mergeSubStepCompletion } from "@/lib/pipeline-duration";
+import { mergeRunProgress, mergeSubStepCompletion, isActiveStatus } from "@/lib/pipeline-duration";
 import {
   reconcileLegacyGenerateQuestion,
   downstreamHasProgress,
@@ -214,6 +214,10 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   >([]);
   // One poller per running step, keyed by stepId, so steps poll independently.
   const pollRefs = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
+  // Timers that flip a "stopped" step/sub-step back to "pending" after the
+  // 3s cooldown (P1-H3), keyed by a stable step/sub-step/lang key.
+  const stopRevertTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const STOP_REVERT_MS = 3000;
   // Monotonic token: each loadProblemState bumps it so a slow earlier load
   // can detect it has been superseded and abort instead of clobbering state.
   const loadGenerationRef = useRef(0);
@@ -443,8 +447,11 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     // problem's state.
     for (const timer of pollRefs.current.values()) clearInterval(timer);
     pollRefs.current.clear();
+    for (const timer of stopRevertTimersRef.current.values()) clearTimeout(timer);
+    stopRevertTimersRef.current.clear();
     runningStepsRef.current.clear();
     launchingStepsRef.current.clear();
+    runningSubStepsRef.current.clear();
     runningLangStepsRef.current.clear();
     pendingPollsRef.current = [];
     setRunAllQueue([]);
@@ -1440,6 +1447,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         savePipelineState();
         return;
       }
+      // Show "Stopping…" immediately (P1-H3).
+      patchGqSubStepRun(subStepId, { status: "stopping" });
       try {
         await fetch("/api/pipeline/run/stop", {
           method: "POST",
@@ -1449,17 +1458,26 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       } catch {
         // ignore
       }
-      const state = stepStatesRef.current.get("generate_question");
-      if (state) {
-        patchGqSubStepRun(subStepId, {
-          status: "failed",
-          exitCode: -1,
-          endTime: Date.now(),
-        });
-      }
+      // Then "Stopped", and revert to "pending" after the cooldown.
+      patchGqSubStepRun(subStepId, { status: "stopped", exitCode: -1, endTime: Date.now() });
       runningSubStepsRef.current.delete(subStepId);
       stopPolling("generate_question", subStepId);
       savePipelineState();
+
+      const timerKey = `gq__${subStepId}`;
+      const existing = stopRevertTimersRef.current.get(timerKey);
+      if (existing) clearTimeout(existing);
+      stopRevertTimersRef.current.set(
+        timerKey,
+        setTimeout(() => {
+          stopRevertTimersRef.current.delete(timerKey);
+          const run = stepStatesRef.current.get("generate_question")?.subStepRuns?.[subStepId];
+          if (run?.status === "stopped") {
+            patchGqSubStepRun(subStepId, { status: "pending", exitCode: null, endTime: null });
+            savePipelineState();
+          }
+        }, STOP_REVERT_MS)
+      );
     },
     [patchGqSubStepRun, stopPolling, savePipelineState]
   );
@@ -1489,6 +1507,22 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         savePipelineState();
         return;
       }
+      const setLangStatus = (st: StepStatus, extra?: Partial<SubStepRunState>) => {
+        const state = stepStatesRef.current.get(stepId);
+        if (!state) return;
+        const languageSubRuns = { ...(state.languageSubRuns ?? {}) };
+        languageSubRuns[langId] = {
+          ...(languageSubRuns[langId] ?? createEmptySubStepRun()),
+          status: st,
+          ...extra,
+        };
+        updateStepState(stepId, {
+          languageSubRuns,
+          ...recomputeLanguageStepStatus({ ...state, languageSubRuns }, getLangsForStep(stepId, globalLanguages)),
+        });
+      };
+
+      setLangStatus("stopping"); // immediate feedback (P1-H3)
       try {
         await fetch("/api/pipeline/run/stop", {
           method: "POST",
@@ -1498,23 +1532,25 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       } catch {
         // ignore
       }
-      const state = stepStatesRef.current.get(stepId);
-      if (state) {
-        const languageSubRuns = { ...(state.languageSubRuns ?? {}) };
-        languageSubRuns[langId] = {
-          ...(languageSubRuns[langId] ?? createEmptySubStepRun()),
-          status: "failed",
-          exitCode: -1,
-          endTime: Date.now(),
-        };
-        updateStepState(stepId, {
-          languageSubRuns,
-          ...recomputeLanguageStepStatus({ ...state, languageSubRuns }, getLangsForStep(stepId, globalLanguages)),
-        });
-      }
+      setLangStatus("stopped", { exitCode: -1, endTime: Date.now() });
       runningLangStepsRef.current.delete(langPollKey(stepId, langId));
       stopPolling(stepId, undefined, langId);
       savePipelineState();
+
+      const timerKey = `${stepId}__lang__${langId}`;
+      const existing = stopRevertTimersRef.current.get(timerKey);
+      if (existing) clearTimeout(existing);
+      stopRevertTimersRef.current.set(
+        timerKey,
+        setTimeout(() => {
+          stopRevertTimersRef.current.delete(timerKey);
+          const run = stepStatesRef.current.get(stepId)?.languageSubRuns?.[langId];
+          if (run?.status === "stopped") {
+            setLangStatus("pending", { exitCode: null, endTime: null });
+            savePipelineState();
+          }
+        }, STOP_REVERT_MS)
+      );
     },
     [updateStepState, stopPolling, savePipelineState, globalLanguages]
   );
@@ -1551,6 +1587,9 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    // Immediate "Stopping…" feedback (P1-H3).
+    updateStepState(stepId, { status: "stopping" });
+
     try {
       await fetch("/api/pipeline/run/stop", {
         method: "POST",
@@ -1561,16 +1600,25 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       // Stop request failed — process may have already exited
     }
 
-    // Update UI immediately — the close handler on the server will finalize.
+    // Then "Stopped"; revert to "pending" after the cooldown so Run returns.
     // Only this step is stopped; queued independent siblings keep running.
-    updateStepState(stepId, {
-      status: "failed",
-      exitCode: -1,
-      endTime: Date.now(),
-    });
+    updateStepState(stepId, { status: "stopped", exitCode: -1, endTime: Date.now() });
     runningStepsRef.current.delete(stepId);
     stopPolling(stepId);
     savePipelineState();
+
+    const existing = stopRevertTimersRef.current.get(stepId);
+    if (existing) clearTimeout(existing);
+    stopRevertTimersRef.current.set(
+      stepId,
+      setTimeout(() => {
+        stopRevertTimersRef.current.delete(stepId);
+        if (stepStatesRef.current.get(stepId)?.status === "stopped") {
+          updateStepState(stepId, { status: "pending", exitCode: null, endTime: null });
+          savePipelineState();
+        }
+      }, STOP_REVERT_MS)
+    );
   }, [updateStepState, stopPolling, savePipelineState, stopQuestionSubStep, stopLanguageSubStep]);
 
   const getSubStepStatus = useCallback(
@@ -1583,12 +1631,12 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
 
   const isAnyRunning =
     Array.from(stepStates.values()).some((s) => {
-      if (s.status === "running") return true;
+      if (isActiveStatus(s.status)) return true;
       if (s.subStepRuns) {
-        return Object.values(s.subStepRuns).some((r) => r?.status === "running");
+        return Object.values(s.subStepRuns).some((r) => r && isActiveStatus(r.status));
       }
       if (s.languageSubRuns) {
-        return Object.values(s.languageSubRuns).some((r) => r?.status === "running");
+        return Object.values(s.languageSubRuns).some((r) => r && isActiveStatus(r.status));
       }
       return false;
     });

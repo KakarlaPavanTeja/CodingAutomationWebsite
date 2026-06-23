@@ -1,12 +1,5 @@
 export type StepId =
-  | "generate_description"
-  | "enforce_naming"
-  | "generate_titles"
-  | "generate_difficulty"
-  | "generate_topics"
-  | "translate_cpp"
-  | "translate_java"
-  | "translate_nodejs"
+  | "generate_question"
   | "generate_brute_force"
   | "generate_testcases"
   | "generate_wrong_solutions"
@@ -21,18 +14,30 @@ export type StepId =
   | "execute_editorial"
   | "prepare_platform_json";
 
-export type StepStatus = "pending" | "running" | "completed" | "failed";
+/** Sub-operations inside the Generate Question step (run in parallel where possible). */
+export type QuestionSubStepId =
+  | "description"
+  | "naming"
+  | "titles"
+  | "difficulty"
+  | "topics"
+  | "translate_cpp"
+  | "translate_java"
+  | "translate_nodejs";
+
+export type StepStatus =
+  | "pending"
+  | "running"
+  | "stopping"
+  | "stopped"
+  | "completed"
+  | "failed"
+  | "skipped";
 
 export type QuestionType = "function" | "nonfunction";
 
 export type PipelineMode = "practice" | "exam";
 
-/**
- * Whether a step calls the LLM:
- *  - "llm"         → always makes one or more LLM calls
- *  - "none"        → pure local execution, never calls the LLM
- *  - "conditional" → only calls the LLM under certain conditions
- */
 export type LlmUsage = "llm" | "none" | "conditional";
 
 export interface SubStep {
@@ -40,6 +45,8 @@ export interface SubStep {
   label: string;
   description: string;
   defaultEnabled: boolean;
+  /** Hidden for non-function problems */
+  functionOnly?: boolean;
 }
 
 export interface LanguageOption {
@@ -57,15 +64,18 @@ export interface PipelineStepConfig {
   hasLanguageSelector: boolean;
   hasTestcaseCount: boolean;
   needsMode: boolean;
-  /** Whether the step calls the LLM (always / never / conditionally). */
   llmUsage: LlmUsage;
-  /**
-   * Explicit prerequisite step. When set, this step becomes runnable as soon as
-   * the named step completes, instead of depending on the immediately-previous
-   * step in the workflow array. Used to make sibling terminal steps (editorial
-   * and JSON) independent off `package_platform`.
-   */
   prerequisite?: StepId;
+}
+
+export interface SubStepRunState {
+  status: StepStatus;
+  logs: LogLine[];
+  exitCode: number | null;
+  startTime: number | null;
+  endTime: number | null;
+  /** DB run id for the current/last execution — scopes log fetches on rerun. */
+  activeRunId?: string | null;
 }
 
 export interface StepState {
@@ -78,6 +88,12 @@ export interface StepState {
   enabledSubSteps: string[];
   enabledLanguages: string[];
   testcaseCount: number;
+  /** Per-sub-step run state for `generate_question` */
+  subStepRuns?: Partial<Record<QuestionSubStepId, SubStepRunState>>;
+  /** Per-language run state for split/execute steps */
+  languageSubRuns?: Record<string, SubStepRunState>;
+  /** DB run id for the current/last execution — scopes log fetches on rerun. */
+  activeRunId?: string | null;
 }
 
 export interface LogLine {
@@ -86,6 +102,14 @@ export interface LogLine {
   ts: number;
 }
 
+export interface GlobalPipelineConfig {
+  ownerTitle: string;
+  generateTitleWithAi: boolean;
+  defaultTagNames: string;
+}
+
+export const GLOBAL_CONFIG_KEY = "__global__";
+
 export interface RunRequest {
   stepId: StepId;
   mode: PipelineMode;
@@ -93,6 +117,8 @@ export interface RunRequest {
   languages: string[];
   testcaseCount?: number;
   problemId?: string;
+  /** Override log file key (e.g. split_code__cpp) for per-language runs */
+  runKey?: string;
 }
 
 export interface OutputFile {
@@ -103,7 +129,6 @@ export interface OutputFile {
   isDirectory: boolean;
 }
 
-/** Aggregated LLM usage for a step's most recent run */
 export interface StepLlmUsageStats {
   promptTokens: number;
   completionTokens: number;
