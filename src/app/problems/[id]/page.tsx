@@ -23,7 +23,7 @@ import {
   ListChecks,
   Users,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ProblemPipeline } from "@/components/problems/ProblemPipeline";
 import { ProblemOutputs } from "@/components/problems/ProblemOutputs";
@@ -31,6 +31,9 @@ import { ProblemEditorial } from "@/components/problems/ProblemEditorial";
 import { ProblemExecutionLogs } from "@/components/problems/ProblemExecutionLogs";
 import { ManageAccessDialog } from "@/components/problems/MemberAccess";
 import { cn } from "@/lib/utils";
+import { formatPipelineCost, formatStepCostDisplay, formatTokenCount } from "@/lib/pipeline-usage-match";
+import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
+import { getStepConfig } from "@/lib/pipeline-config";
 
 type Problem = {
   id: string;
@@ -53,10 +56,31 @@ type Problem = {
 type PipelineRun = {
   id: string;
   step_id: string;
+  run_step_key?: string;
+  step_label?: string;
+  substep_label?: string;
   status: string;
   exit_code: number | null;
   started_at: string;
   finished_at: string | null;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    cost_usd: number;
+    call_count: number;
+  } | null;
+};
+
+type UsageSummary = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  cost_usd: number;
+  call_count: number;
+};
+
+type OptimalWarning = {
+  reason: string;
+  mismatches: { input: string; optimal: string; brute: string }[];
 };
 
 const STATUS_CONFIG: Record<string, { icon: React.ElementType; label: string; className: string }> = {
@@ -69,14 +93,7 @@ const STATUS_CONFIG: Record<string, { icon: React.ElementType; label: string; cl
 };
 
 const STEP_LABELS: Record<string, string> = {
-  generate_description: "Generate Description",
-  enforce_naming: "Enforce Naming",
-  generate_titles: "Generate Titles",
-  generate_difficulty: "Estimate Difficulty",
-  generate_topics: "Classify Topics",
-  translate_cpp: "Translate to C++",
-  translate_java: "Translate to Java",
-  translate_nodejs: "Translate to Node.js",
+  generate_question: "Generate Question",
   generate_brute_force: "Generate Brute Force",
   generate_testcases: "Generate Test Cases",
   generate_wrong_solutions: "Generate Wrong Solutions",
@@ -92,6 +109,31 @@ const STEP_LABELS: Record<string, string> = {
   prepare_platform_json: "Prepare Platform JSON",
 };
 
+function pipelineRunStepLabel(run: PipelineRun): { step: string; substep: string } {
+  if (run.step_label && run.substep_label) {
+    return { step: run.step_label, substep: run.substep_label };
+  }
+  const step = STEP_LABELS[run.step_id] || run.step_id;
+  return { step, substep: step };
+}
+
+function pipelineRunCostLabel(run: PipelineRun): string {
+  const key = run.run_step_key ?? run.step_id;
+  const { parentStepId } = parsePipelineRunStepKey(key);
+  const llmUsage = getStepConfig(parentStepId).llmUsage;
+  return formatStepCostDisplay(run.usage?.cost_usd, llmUsage, run.status);
+}
+
+function formatRunDuration(start: string, end: string | null, status: string): string {
+  const endMs = end ? new Date(end).getTime() : status === "running" ? Date.now() : null;
+  if (endMs == null) return "";
+  const ms = endMs - new Date(start).getTime();
+  if (ms < 0) return "";
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+}
+
 type Tab = "overview" | "pipeline" | "outputs" | "editorial" | "execution-logs";
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
@@ -102,14 +144,6 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "execution-logs", label: "Execution Logs", icon: ListChecks },
 ];
 
-function formatDuration(start: string, end: string | null): string {
-  if (!end) return "—";
-  const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
-}
-
 export default function ProblemDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -118,6 +152,9 @@ export default function ProblemDetailPage() {
   const { toast } = useToast();
   const [problem, setProblem] = useState<Problem | null>(null);
   const [runs, setRuns] = useState<PipelineRun[]>([]);
+  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
+  const [optimalWarning, setOptimalWarning] = useState<OptimalWarning | null>(null);
+  const [warningExpanded, setWarningExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
@@ -125,6 +162,7 @@ export default function ProblemDetailPage() {
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [inputFiles, setInputFiles] = useState<{ name: string; content: string; expanded: boolean }[]>([]);
+  const [inputFilesLoading, setInputFilesLoading] = useState(true);
   const [editingMeta, setEditingMeta] = useState(false);
   const [editDifficulty, setEditDifficulty] = useState<string>("");
   const [editScore, setEditScore] = useState<string>("");
@@ -176,6 +214,8 @@ export default function ProblemDetailPage() {
       .then((data) => {
         setProblem(data.problem);
         setRuns(data.runs || []);
+        setUsageSummary(data.usage_summary ?? null);
+        setOptimalWarning(data.optimal_warning ?? null);
         setLoading(false);
       })
       .catch((err) => {
@@ -185,17 +225,58 @@ export default function ProblemDetailPage() {
   };
 
   const fetchInputFiles = () => {
-    const files = ["problem.md", "solution.py"];
-    Promise.all(
-      files.map((name) =>
-        fetch(`/api/files/read?problemId=${id}&path=${encodeURIComponent(name)}&subfolder=inputs`)
-          .then((r) => (r.ok ? r.json() : null))
-          .then((data) => (data ? { name, content: data.content, expanded: false } : null))
-          .catch(() => null)
+    setInputFilesLoading(true);
+
+    const readFileContent = (filePath: string, subfolder: "inputs" | "outputs") =>
+      fetch(
+        `/api/files/read?problemId=${id}&path=${encodeURIComponent(filePath)}&subfolder=${subfolder}`
       )
-    ).then((results) => {
-      setInputFiles(results.filter(Boolean) as { name: string; content: string; expanded: boolean }[]);
-    });
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+
+    fetch(`/api/files/inputs?problemId=${id}`)
+      .then((r) => (r.ok ? r.json() : { files: [] }))
+      .then(async (data) => {
+        const names = (data.files ?? [])
+          .filter((f: { isDirectory?: boolean }) => !f.isDirectory)
+          .map((f: { path: string }) => f.path);
+
+        let entries: { name: string; content: string; expanded: boolean }[] = [];
+
+        if (names.length > 0) {
+          const results = await Promise.all(
+            names.map(async (name: string) => {
+              const fileData = await readFileContent(name, "inputs");
+              return fileData ? { name, content: fileData.content, expanded: false } : null;
+            })
+          );
+          entries = results.filter(Boolean) as typeof entries;
+        } else {
+          const fallbacks = [
+            {
+              name: "problem.md (from generated description)",
+              path: "generated_description.md",
+              subfolder: "outputs" as const,
+            },
+            {
+              name: "solution.py (from generated code)",
+              path: "generatedFullCode/PYTHON.py",
+              subfolder: "outputs" as const,
+            },
+          ];
+          const results = await Promise.all(
+            fallbacks.map(async ({ name, path, subfolder }) => {
+              const fileData = await readFileContent(path, subfolder);
+              return fileData ? { name, content: fileData.content, expanded: false } : null;
+            })
+          );
+          entries = results.filter(Boolean) as typeof entries;
+        }
+
+        setInputFiles(entries);
+      })
+      .catch(() => setInputFiles([]))
+      .finally(() => setInputFilesLoading(false));
   };
 
   useEffect(() => {
@@ -228,6 +309,8 @@ export default function ProblemDetailPage() {
           if (data) {
             setProblem(data.problem);
             setRuns(data.runs || []);
+            setUsageSummary(data.usage_summary ?? null);
+            setOptimalWarning(data.optimal_warning ?? null);
           }
         })
         .catch(() => {});
@@ -301,11 +384,12 @@ export default function ProblemDetailPage() {
       <div className="container mx-auto px-4 py-8">
         <div className="rounded-lg border bg-card p-8 text-center">
           <p className="text-destructive">{error || "Problem not found."}</p>
-          <Link href="/problems" className="mt-4 inline-block">
-            <Button variant="outline">
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to problems
-            </Button>
+          <Link
+            href="/problems"
+            className={cn(buttonVariants({ variant: "outline" }), "mt-4 inline-flex")}
+          >
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to problems
           </Link>
         </div>
       </div>
@@ -316,7 +400,7 @@ export default function ProblemDetailPage() {
   const StatusIcon = status.icon;
 
   return (
-    <div className="container mx-auto px-4 py-6 space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="container mx-auto px-4 py-4 space-y-3 animate-in fade-in slide-in-from-bottom-4 duration-500">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
@@ -327,12 +411,18 @@ export default function ProblemDetailPage() {
             <ArrowLeft className="h-4 w-4" />
             Back to problems
           </Link>
-          <h1 className="text-2xl font-bold tracking-tight">{problem.name}</h1>
-          <div className="flex items-center gap-3 mt-2">
+          <h1 className="text-xl font-bold tracking-tight">{problem.name}</h1>
+          <div className="flex items-center gap-2 mt-1.5">
             <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${status.className}`}>
               <StatusIcon className={`h-3 w-3 ${problem.status === "processing" ? "animate-spin" : ""}`} />
               {status.label}
             </span>
+            {optimalWarning && (
+              <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-red-500/10 text-red-700 dark:text-red-400">
+                <AlertTriangle className="h-3 w-3" />
+                Optimal may be buggy
+              </span>
+            )}
             <span className="text-sm text-muted-foreground">
               Type: <span className="text-foreground font-medium">{problem.question_type === "function" ? "Function-based" : "Non-function"}</span>
             </span>
@@ -351,11 +441,12 @@ export default function ProblemDetailPage() {
               Manage access
             </Button>
           )}
-          <a href={`/api/files/download?problemId=${problem.id}`}>
-            <Button variant="outline" size="sm">
-              <Download className="mr-2 h-4 w-4" />
-              Download
-            </Button>
+          <a
+            href={`/api/files/download?problemId=${problem.id}`}
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }), "inline-flex")}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Download
           </a>
         </div>
       </div>
@@ -368,6 +459,63 @@ export default function ProblemDetailPage() {
         />
       )}
 
+      {/* Buggy-optimal warning (reference solution disagrees with the brute force) */}
+      {optimalWarning && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 space-y-2">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <h2 className="text-sm font-semibold text-red-700 dark:text-red-400">
+                Reference solution may be buggy
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                The reference (optimal) solution disagrees with the independent brute-force oracle
+                on small inputs. Test cases are derived from the reference, so their expected
+                outputs are likely wrong. Review and fix the optimal solution before trusting this
+                problem.
+              </p>
+            </div>
+          </div>
+          {optimalWarning.mismatches.length > 0 && (
+            <div className="pl-6">
+              <button
+                type="button"
+                onClick={() => setWarningExpanded((v) => !v)}
+                className="text-[11px] text-red-700 dark:text-red-400 hover:underline underline-offset-2"
+              >
+                {warningExpanded
+                  ? "Hide disagreeing inputs"
+                  : `Show ${optimalWarning.mismatches.length} disagreeing input${optimalWarning.mismatches.length === 1 ? "" : "s"}`}
+              </button>
+              {warningExpanded && (
+                <div className="mt-2 rounded-md border border-red-500/20 bg-background overflow-x-auto">
+                  <table className="w-full text-[11px]">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className="text-left px-2 py-1 font-medium">Input</th>
+                        <th className="text-left px-2 py-1 font-medium">Optimal</th>
+                        <th className="text-left px-2 py-1 font-medium">Brute</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {optimalWarning.mismatches.map((m, i) => (
+                        <tr key={i} className="border-b last:border-0 align-top">
+                          <td className="px-2 py-1">
+                            <pre className="whitespace-pre-wrap font-mono">{m.input.trim()}</pre>
+                          </td>
+                          <td className="px-2 py-1 font-mono text-red-600 dark:text-red-400">{m.optimal}</td>
+                          <td className="px-2 py-1 font-mono text-green-700 dark:text-green-400">{m.brute}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="border-b">
         <nav className="flex gap-1">
@@ -378,7 +526,7 @@ export default function ProblemDetailPage() {
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={cn(
-                  "flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px",
+                  "flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 transition-colors -mb-px",
                   activeTab === tab.id
                     ? "border-primary text-primary"
                     : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"
@@ -394,9 +542,9 @@ export default function ProblemDetailPage() {
 
       {/* Tab Content */}
       {activeTab === "overview" && (
-        <div className="space-y-6">
+        <div className="space-y-3">
           {/* Details */}
-          <div className="rounded-lg border bg-card p-5 space-y-3">
+          <div className="rounded-lg border bg-card p-3 space-y-2">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold">Details</h2>
               {!editingMeta && (
@@ -405,33 +553,33 @@ export default function ProblemDetailPage() {
                 </Button>
               )}
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-xs">
               <div>
-                <p className="text-muted-foreground">Type</p>
+                <p className="text-muted-foreground text-[11px]">Type</p>
                 <p className="font-medium capitalize">{problem.question_type.replace("_", " ")}</p>
               </div>
               <div>
-                <p className="text-muted-foreground">Structure</p>
+                <p className="text-muted-foreground text-[11px]">Structure</p>
                 <p className="font-medium capitalize">{(problem.structure_type || "standard").replace("_", " ")}</p>
               </div>
               <div>
-                <p className="text-muted-foreground">Mode</p>
+                <p className="text-muted-foreground text-[11px]">Mode</p>
                 <p className="font-medium capitalize">{problem.mode || "Not set"}</p>
               </div>
               <div>
-                <p className="text-muted-foreground">Scenario Level</p>
+                <p className="text-muted-foreground text-[11px]">Scenario Level</p>
                 <p className="font-medium capitalize">{problem.scenario_level}</p>
               </div>
               <div>
-                <p className="text-muted-foreground">Difficulty</p>
+                <p className="text-muted-foreground text-[11px]">Difficulty</p>
                 <p className="font-medium capitalize">{problem.difficulty || "Not set"}</p>
               </div>
               <div>
-                <p className="text-muted-foreground">Score</p>
+                <p className="text-muted-foreground text-[11px]">Score</p>
                 <p className="font-medium">{problem.score ?? "Not set"}</p>
               </div>
               <div>
-                <p className="text-muted-foreground">Created</p>
+                <p className="text-muted-foreground text-[11px]">Created</p>
                 <p className="font-medium">{new Date(problem.created_at).toLocaleDateString()}</p>
               </div>
             </div>
@@ -496,15 +644,22 @@ export default function ProblemDetailPage() {
           </div>
 
           {/* Input Files */}
-          {inputFiles.length > 0 && (
-            <div className="rounded-lg border bg-card p-5 space-y-3">
-              <h2 className="text-sm font-semibold">Input Files</h2>
+          <div className="rounded-lg border bg-card p-3 space-y-2">
+            <h2 className="text-sm font-semibold">Input Files</h2>
+            {inputFilesLoading ? (
+              <p className="text-xs text-muted-foreground py-2">Loading input files…</p>
+            ) : inputFiles.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-2">
+                No input files found. Original uploads may be missing from storage; run any
+                pipeline step again to refresh the local copy, or re-upload the problem files.
+              </p>
+            ) : (
               <div className="space-y-2">
                 {inputFiles.map((file, idx) => (
                   <div key={file.name} className="rounded-md border overflow-hidden">
                     <button
                       type="button"
-                      className="flex items-center gap-2 w-full px-4 py-2.5 text-sm font-medium hover:bg-muted/50 transition-colors text-left"
+                      className="flex items-center gap-2 w-full px-3 py-2 text-xs font-medium hover:bg-muted/50 transition-colors text-left"
                       onClick={() =>
                         setInputFiles((prev) =>
                           prev.map((f, i) => (i === idx ? { ...f, expanded: !f.expanded } : f))
@@ -545,14 +700,38 @@ export default function ProblemDetailPage() {
                   </div>
                 ))}
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Pipeline Runs */}
-          <div className="rounded-lg border bg-card p-5 space-y-3">
-            <h2 className="text-sm font-semibold">Pipeline Runs ({runs.length})</h2>
+          <div className="rounded-lg border bg-card p-3 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold">Pipeline Runs ({runs.length})</h2>
+              {usageSummary && usageSummary.call_count > 0 && (
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+                  <span>
+                    Total cost:{" "}
+                    <span className="font-medium text-foreground tabular-nums">
+                      {formatPipelineCost(usageSummary.cost_usd)}
+                    </span>
+                  </span>
+                  <span>
+                    Input tokens:{" "}
+                    <span className="font-medium text-foreground tabular-nums">
+                      {formatTokenCount(usageSummary.prompt_tokens)}
+                    </span>
+                  </span>
+                  <span>
+                    Output tokens:{" "}
+                    <span className="font-medium text-foreground tabular-nums">
+                      {formatTokenCount(usageSummary.completion_tokens)}
+                    </span>
+                  </span>
+                </div>
+              )}
+            </div>
             {runs.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">
+              <p className="text-xs text-muted-foreground py-2 text-center">
                 No runs yet. Switch to the{" "}
                 <button onClick={() => setActiveTab("pipeline")} className="text-primary hover:underline">
                   Pipeline
@@ -561,38 +740,39 @@ export default function ProblemDetailPage() {
               </p>
             ) : (
               <div className="rounded-md border overflow-hidden">
-                <table className="w-full text-sm">
+                <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b bg-muted/50">
-                      <th className="text-left px-4 py-2 font-medium">Step</th>
-                      <th className="text-left px-4 py-2 font-medium">Status</th>
-                      <th className="text-left px-4 py-2 font-medium">Exit Code</th>
-                      <th className="text-left px-4 py-2 font-medium">Duration</th>
-                      <th className="text-left px-4 py-2 font-medium">Started</th>
+                      <th className="text-left px-3 py-1.5 font-medium">Step</th>
+                      <th className="text-left px-3 py-1.5 font-medium">Substep</th>
+                      <th className="text-left px-3 py-1.5 font-medium">Status</th>
+                      <th className="text-left px-3 py-1.5 font-medium">Duration</th>
+                      <th className="text-right px-3 py-1.5 font-medium">Cost</th>
+                      <th className="text-left px-3 py-1.5 font-medium">Started</th>
                     </tr>
                   </thead>
                   <tbody>
                     {runs.map((run) => {
                       const runStatus = STATUS_CONFIG[run.status] || STATUS_CONFIG.draft;
                       const RunIcon = runStatus.icon;
+                      const { step, substep } = pipelineRunStepLabel(run);
                       return (
                         <tr key={run.id} className="border-b last:border-0">
-                          <td className="px-4 py-2 font-medium">
-                            {STEP_LABELS[run.step_id] || run.step_id}
-                          </td>
-                          <td className="px-4 py-2">
+                          <td className="px-3 py-1.5 font-medium">{step}</td>
+                          <td className="px-3 py-1.5 text-muted-foreground">{substep}</td>
+                          <td className="px-3 py-1.5">
                             <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${runStatus.className}`}>
                               <RunIcon className={`h-3 w-3 ${run.status === "running" ? "animate-spin" : ""}`} />
                               {runStatus.label}
                             </span>
                           </td>
-                          <td className="px-4 py-2 text-muted-foreground font-mono">
-                            {run.exit_code !== null ? run.exit_code : "—"}
+                          <td className="px-3 py-1.5 text-muted-foreground">
+                            {formatRunDuration(run.started_at, run.finished_at, run.status)}
                           </td>
-                          <td className="px-4 py-2 text-muted-foreground">
-                            {formatDuration(run.started_at, run.finished_at)}
+                          <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">
+                            {pipelineRunCostLabel(run)}
                           </td>
-                          <td className="px-4 py-2 text-muted-foreground">
+                          <td className="px-3 py-1.5 text-muted-foreground">
                             {new Date(run.started_at).toLocaleString()}
                           </td>
                         </tr>
@@ -770,7 +950,13 @@ export default function ProblemDetailPage() {
 
       {activeTab === "outputs" && <ProblemOutputs problemId={id} />}
 
-      {activeTab === "editorial" && <ProblemEditorial problemId={id} problemName={problem.name} />}
+      {activeTab === "editorial" && (
+        <ProblemEditorial
+          problemId={id}
+          problemName={problem.name}
+          onStatusChange={fetchProblem}
+        />
+      )}
 
       {activeTab === "execution-logs" && (
         <ProblemExecutionLogs

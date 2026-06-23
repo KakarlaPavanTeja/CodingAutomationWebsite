@@ -9,6 +9,45 @@ import {
 } from "@/lib/pipeline-run-label";
 import { aggregateUsageRows, matchUsageRowsForRun } from "@/lib/pipeline-usage-match";
 import { reconcileStalePipelineRuns } from "@/lib/reconcile-pipeline-runs";
+import { getObjectString } from "@/lib/object-storage";
+
+type OptimalWarning = {
+  reason: string;
+  mismatches: { input: string; optimal: string; brute: string }[];
+};
+
+/**
+ * Read the optimal-vs-brute cross-check verdict written by generate_brute_force.py.
+ * Returns a warning only when the reference solution disagreed with the brute force
+ * (status "mismatch"); ok/skipped/absent all mean "no warning".
+ */
+async function readOptimalWarning(problemId: string): Promise<OptimalWarning | null> {
+  try {
+    const raw = await getObjectString(`${problemId}/outputs/optimal_brute_check.json`);
+    const parsed = JSON.parse(raw) as {
+      status?: string;
+      reason?: string;
+      mismatches?: { input?: string; optimal?: string; brute?: string }[];
+    };
+    if (parsed?.status !== "mismatch") return null;
+    return {
+      reason:
+        typeof parsed.reason === "string" && parsed.reason
+          ? parsed.reason
+          : "Reference solution disagrees with the brute-force oracle",
+      mismatches: (Array.isArray(parsed.mismatches) ? parsed.mismatches : [])
+        .slice(0, 5)
+        .map((m) => ({
+          input: String(m?.input ?? ""),
+          optimal: String(m?.optimal ?? ""),
+          brute: String(m?.brute ?? ""),
+        })),
+    };
+  } catch {
+    // No marker (older problem / step not run) or unreadable → no warning.
+    return null;
+  }
+}
 
 export async function GET(
   request: NextRequest,
@@ -50,6 +89,8 @@ export async function GET(
     .orderBy(desc(pipelineRuns.startedAt));
 
   const usageRows = await db.select().from(llmUsage).where(eq(llmUsage.problemId, id));
+
+  const optimalWarning = await readOptimalWarning(id);
 
   const usageSummary = aggregateUsageRows(
     usageRows.map((row) => ({
@@ -120,6 +161,7 @@ export async function GET(
   return NextResponse.json({
     problem: problemOut,
     runs: runsOut,
+    optimal_warning: optimalWarning,
     usage_summary: {
       prompt_tokens: usageSummary.promptTokens,
       completion_tokens: usageSummary.completionTokens,
