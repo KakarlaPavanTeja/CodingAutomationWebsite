@@ -1094,6 +1094,95 @@ def fuzz_kill_wrong_solutions(
     return new_cases
 
 
+_EXAMPLE_INPUT_RE = re.compile(r"\*\*Input:\*\*\s*```[^\n]*\n(.*?)```", re.S)
+
+
+def extract_example_inputs(description: str) -> list[str]:
+    """Pull the stdin from each `**Input:** ``` ... ``` ` block in a description."""
+    out: list[str] = []
+    for m in _EXAMPLE_INPUT_RE.finditer(description or ""):
+        s = m.group(1).strip("\n")
+        if s.strip():
+            out.append(s + "\n")
+    return out
+
+
+def structured_random_inputs(examples: list[str], count: int = 100, seed: int = 7) -> list[str]:
+    """Generate fresh SMALL inputs in the problem's own format, inferred from the
+    example inputs: header tokens that equal an array length are treated as counts
+    (regenerated to a small n), other header tokens as small parameters, and array
+    lines as small random values (duplicates likely). Small inputs with small
+    params + clustered values expose many bugs that large/random fuzz misses."""
+    if not examples:
+        return []
+    rng = random.Random(seed)
+    out: list[str] = []
+    for _ in range(count):
+        lines = [l for l in rng.choice(examples).split("\n")]
+        header = lines[0].split() if lines else []
+        arr_lines = [l.split() for l in lines[1:] if l.strip()]
+        if not header or not arr_lines:
+            continue
+        arr_lens = {len(a) for a in arr_lines}
+        n = rng.randint(1, 4)
+        new_header = []
+        for tok in header:
+            try:
+                tv = int(tok)
+            except ValueError:
+                new_header.append(tok)
+                continue
+            new_header.append(str(n) if tv in arr_lens else str(rng.randint(1, max(2, n + 1))))
+        new_lines = [" ".join(new_header)]
+        for _a in arr_lines:
+            new_lines.append(" ".join(str(rng.randint(1, 12)) for _ in range(n)))
+        out.append("\n".join(new_lines) + "\n")
+    return out
+
+
+_OPEN_ENDED_RE = re.compile(
+    r"\b(return|print|output|construct|produce|find|report|give|build)\s+any\b"
+    r"|\bany\s+(valid|such|one|correct)\b"
+    r"|\bmultiple\s+(valid|correct|possible|right)\b"
+    r"|\bmore than one\b"
+    r"|\bif there (are|is)\s+(multiple|several|many)\b"
+    r"|\bany of (them|the)\b",
+    re.I,
+)
+
+
+def is_open_ended_problem(description: str) -> bool:
+    """True when the statement accepts more than one correct output (e.g. "return
+    any grid such that ..."). For these, optimal and brute legitimately differ
+    textually, so a plain output comparison would false-positive."""
+    return bool(_OPEN_ENDED_RE.search(description or ""))
+
+
+def crosscheck_optimal_brute(
+    optimal_code: str,
+    brute_code: str,
+    examples: list[str],
+    count: int = 100,
+    timeout: float = BENCHMARK_RUN_TIMEOUT,
+    max_report: int = 5,
+) -> list[dict]:
+    """Run the optimal and the (independent) brute on the example inputs plus a
+    structure-aware small-input sweep; return the inputs where they disagree. A
+    disagreement strongly indicates the reference/optimal solution is buggy."""
+    candidates = list(examples) + structured_random_inputs(examples, count)
+    if not candidates:
+        return []
+    opt = run_solutions_batch(optimal_code, candidates, timeout)
+    bru = run_solutions_batch(brute_code, candidates, timeout)
+    out: list[dict] = []
+    for inp, (o, s1), (br, s2) in zip(candidates, opt, bru):
+        if s1 == "ok" and s2 == "ok" and normalize(o) != normalize(br):
+            out.append({"input": inp, "optimal": normalize(o)[:80], "brute": normalize(br)[:80]})
+            if len(out) >= max_report:
+                break
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Consolidated benchmark
 # --------------------------------------------------------------------------- #
