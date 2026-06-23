@@ -19,6 +19,7 @@ import {
 } from "@/lib/storage-sync";
 import { registerProcess, unregisterProcess } from "@/lib/process-registry";
 import { pipelineRunLogKey } from "@/lib/pipeline-run-label";
+import { recomputeProblemStatus } from "@/lib/reconcile-pipeline-runs";
 import { resolveOpenRouterBaseUrl } from "@/lib/openrouter";
 import type { RunRequest, PipelineMode, QuestionType, StepId } from "@/types/pipeline";
 
@@ -470,17 +471,10 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        if (code !== 0 && !wasStopped) {
-          await db
-            .update(problems)
-            .set({ status: "failed", updatedAt: new Date() })
-            .where(eq(problems.id, safeProblemId));
-        } else if (stepId === "prepare_platform_json" && code === 0) {
-          await db
-            .update(problems)
-            .set({ status: "completed", updatedAt: new Date() })
-            .where(eq(problems.id, safeProblemId));
-        }
+        // Single derivation of problems.status from the run rows (P1-H6),
+        // replacing the previous ad-hoc failed/completed writes here. The run
+        // row was just marked terminal above, so this reflects reality.
+        await recomputeProblemStatus(safeProblemId);
       } catch {
         // Background DB update failed
       }

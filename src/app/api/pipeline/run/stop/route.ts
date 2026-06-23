@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
+import { recomputeProblemStatus } from "@/lib/reconcile-pipeline-runs";
 import { requireAuthApi } from "@/lib/auth/server";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { db } from "@/lib/db";
-import { pipelineRuns, pipelineStates, problems } from "@/lib/db/schema";
+import { pipelineRuns, pipelineStates } from "@/lib/db/schema";
 import { getProcessPidAsync } from "@/lib/process-registry";
 
 export async function POST(request: NextRequest) {
@@ -69,20 +70,10 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Only drop the problem back to "draft" when no other runs are still active.
-  // Stopping one sub-step/language while siblings run must not flip the whole
-  // problem out of "processing" (part of the status-responsiveness fixes).
-  const otherActive = await db
-    .select({ id: pipelineRuns.id })
-    .from(pipelineRuns)
-    .where(and(eq(pipelineRuns.problemId, run.problemId), eq(pipelineRuns.status, "running")))
-    .limit(1);
-  if (otherActive.length === 0) {
-    await db
-      .update(problems)
-      .set({ status: "draft", updatedAt: new Date() })
-      .where(and(eq(problems.id, run.problemId), eq(problems.status, "processing")));
-  }
+  // Re-derive problems.status from the run rows in one place (P1-H6). This run
+  // is now exitCode -1; if siblings are still running the problem stays
+  // "processing", otherwise it drops to "draft".
+  await recomputeProblemStatus(run.problemId);
 
   const pid = await getProcessPidAsync(runId);
   if (pid) {
