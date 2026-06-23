@@ -237,6 +237,29 @@ class TestPreparePlatformJson(unittest.TestCase):
             data = ppj.build_exam_json(lua, MINIMAL_CONTAINER, level, ["python"])
             self.assertEqual(data[0]["total_score"], expected)
 
+    def test_language_order_is_canonical(self):
+        """Per-language arrays follow CPP, PYTHON, JAVA, NODE_JS regardless of input order."""
+        lua = MINIMAL_LUA + (
+            "\n----------CODE_CONTENT_JAVA_START----------\nclass Main{}\n----------CODE_CONTENT_JAVA_END----------\n"
+            "----------CODE_CONTENT_NODE_JS_START----------\nmain()\n----------CODE_CONTENT_NODE_JS_END----------\n"
+            "----------CODE_BASE64_JAVA_START----------\nclass Main{}\n----------CODE_BASE64_JAVA_END----------\n"
+            "----------CODE_BASE64_NODE_JS_START----------\nmain()\n----------CODE_BASE64_NODE_JS_END----------\n"
+        )
+        # Intentionally pass in a non-canonical order.
+        data = ppj.build_practice_json(
+            lua, PRACTICE_CONTAINER, "EASY", node_based=False,
+            enabled_langs=["nodejs", "python", "java", "cpp"],
+        )
+        q = data[0]
+        for key in ("coding_question_details", "language_code_repository_details", "test_case_evaluation_metrics"):
+            langs = [e["language"] for e in q[key]]
+            ordered = [l for l in ["CPP", "PYTHON", "JAVA", "NODE_JS"] if l in langs]
+            self.assertEqual(langs, ordered, f"{key} not in canonical order: {langs}")
+        # Exam side too.
+        exam = ppj.build_exam_json(lua, MINIMAL_CONTAINER, "EASY", ["nodejs", "java", "python", "cpp"])
+        elangs = [e["language"] for e in exam[0]["coding_question_details"]]
+        self.assertEqual(elangs, [l for l in ["CPP", "PYTHON39", "JAVA", "NODEJS"] if l in elangs])
+
     def test_parse_companies_splits_on_newlines_only(self):
         """Company names may contain commas; split only on newlines (UI-H2 / 3A)."""
         self.assertEqual(

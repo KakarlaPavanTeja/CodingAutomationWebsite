@@ -214,6 +214,16 @@ def parse_enabled_langs(cli_langs=None):
     return langs or ["python", "cpp", "java", "nodejs"]
 
 
+# Canonical language order for every per-language array in the JSON
+# (coding_question_details, repos, solutions, metrics): CPP, Python, Java, Node.js.
+LANG_CANONICAL_ORDER = ["cpp", "python", "java", "nodejs"]
+
+
+def order_langs_canonically(enabled_langs):
+    rank = {l: i for i, l in enumerate(LANG_CANONICAL_ORDER)}
+    return sorted(enabled_langs, key=lambda l: rank.get(l, 99))
+
+
 def pick_default_lang_id(enabled_langs):
     """The platform expects exactly one language flagged `default_code: true`.
     Prefer C++ (historical default), then Python, Java, Node.js; fall back to the
@@ -385,7 +395,7 @@ def exam_assign_weights(test_cases, difficulty_level, total_score_override=None)
 
 
 def build_exam_json(lua, container, difficulty, enabled_langs=None):
-    enabled_langs = parse_enabled_langs(enabled_langs)
+    enabled_langs = order_langs_canonically(parse_enabled_langs(enabled_langs))
     non_fn = is_non_function()
     fn_based = not non_fn
     owner_total_score = get_owner_total_score()
@@ -702,7 +712,7 @@ def practice_parse_solutions(lua):
 
 
 def build_practice_json(lua, container, difficulty, node_based, enabled_langs=None):
-    enabled_langs = parse_enabled_langs(enabled_langs)
+    enabled_langs = order_langs_canonically(parse_enabled_langs(enabled_langs))
     non_fn = is_non_function()
     fn_based = not non_fn
     parsed_test_cases = practice_parse_test_cases(container)
