@@ -507,7 +507,11 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       if (state) {
         // Restore remaining configuration (qt/m already set above from problem record)
         setGlobalLanguagesRaw(state.enabled_languages || LANGUAGES.filter((l) => l.defaultEnabled).map((l) => l.id));
-        setGlobalTestcaseCount(state.testcase_count || 30);
+        // 0 / unset means "let the test-case generator auto-scale the count by
+        // difficulty x type (LLM decides, hard minimum 25)". Only an explicit
+        // value forces a fixed target. (Previously this defaulted to 30, so a
+        // blank box silently became a hard 30-case target.)
+        setGlobalTestcaseCount(state.testcase_count ?? 0);
 
         const savedGlobal = (state.step_configs?.[GLOBAL_CONFIG_KEY] ?? {}) as Partial<GlobalPipelineConfig>;
         setOwnerTitleRaw(savedGlobal.ownerTitle ?? "");
