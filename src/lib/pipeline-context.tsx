@@ -49,6 +49,25 @@ function requiresOwnerTitle(stepId: StepId): boolean {
   return stepId === "package_platform" || stepId === "prepare_platform_json";
 }
 
+/**
+ * Resolve once a watched status leaves "running" (settled), with a hard safety
+ * deadline so a GQ/lang orchestrator can never hang forever if the watched
+ * state stops updating (e.g. the problem was switched mid-run) — P1-H9.
+ */
+const STATUS_SETTLE_MAX_MS = 50 * 60 * 1000; // just past the 45-min pipeline timeout
+function awaitStatusSettled(getStatus: () => StepStatus | undefined): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const start = Date.now();
+    const check = setInterval(() => {
+      const st = getStatus();
+      if ((st && st !== "running") || Date.now() - start > STATUS_SETTLE_MAX_MS) {
+        clearInterval(check);
+        resolve();
+      }
+    }, 400);
+  });
+}
+
 function langPollKey(stepId: StepId, langId: string): string {
   return `${stepId}:${langId}`;
 }
@@ -1137,16 +1156,9 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         if (data.runId) {
           patchGqSubStepRun(subStepId, { activeRunId: data.runId });
           startPolling(data.runId, "generate_question", subStepId);
-          await new Promise<void>((resolve) => {
-            const check = setInterval(() => {
-              const gq = stepStatesRef.current.get("generate_question");
-              const st = gq?.subStepRuns?.[subStepId]?.status;
-              if (st && st !== "running") {
-                clearInterval(check);
-                resolve();
-              }
-            }, 400);
-          });
+          await awaitStatusSettled(
+            () => stepStatesRef.current.get("generate_question")?.subStepRuns?.[subStepId]?.status
+          );
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to start step";
@@ -1257,15 +1269,9 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         if (data.runId) {
           patchLanguageSubRun(stepId, langId, { activeRunId: data.runId });
           startPolling(data.runId, stepId, undefined, langId);
-          await new Promise<void>((resolve) => {
-            const check = setInterval(() => {
-              const st = stepStatesRef.current.get(stepId)?.languageSubRuns?.[langId]?.status;
-              if (st && st !== "running") {
-                clearInterval(check);
-                resolve();
-              }
-            }, 400);
-          });
+          await awaitStatusSettled(
+            () => stepStatesRef.current.get(stepId)?.languageSubRuns?.[langId]?.status
+          );
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to start step";
@@ -1399,15 +1405,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           runningStepsRef.current.set(state.id, data.runId);
           updateStepState(state.id, { activeRunId: data.runId });
           startPolling(data.runId, state.id);
-          await new Promise<void>((resolve) => {
-            const check = setInterval(() => {
-              const st = stepStatesRef.current.get(state.id)?.status;
-              if (st && st !== "running") {
-                clearInterval(check);
-                resolve();
-              }
-            }, 400);
-          });
+          await awaitStatusSettled(() => stepStatesRef.current.get(state.id)?.status);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to start step";

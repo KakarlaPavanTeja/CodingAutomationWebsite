@@ -6,6 +6,10 @@ import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
 
 const STALE_ORPHAN_MS = 5 * 60 * 1000;
 const EMPTY_LOG_ORPHAN_MS = 3 * 60 * 1000;
+// Hard ceiling: a run "running" longer than the pipeline timeout (45 min) plus a
+// buffer is force-failed regardless of pid liveness, so a recycled PID that
+// process.kill(pid,0) reports as alive can't keep a dead run stuck forever (P1-H8).
+const MAX_RUNNING_MS = 50 * 60 * 1000;
 
 // Throttle reconciliation so frontend polling (every 2-4s) doesn't turn every
 // read into a write storm against pipeline_runs/problems (P1-M3).
@@ -106,8 +110,12 @@ export async function reconcileStalePipelineRuns(problemId: string): Promise<num
   let fixed = 0;
 
   for (const run of running) {
+    const runAge = now - (run.startedAt?.getTime() ?? now);
     const pid = (await getProcessPidAsync(run.id)) ?? run.pid ?? undefined;
-    if (pid && isProcessAlive(pid)) {
+    // Trust "alive" only within the max-runtime ceiling; beyond it the pid is
+    // almost certainly reused (the real process would have hit the 45-min
+    // SIGTERM), so fall through and force-fail (P1-H8).
+    if (pid && isProcessAlive(pid) && runAge < MAX_RUNNING_MS) {
       continue;
     }
 
@@ -135,9 +143,12 @@ export async function reconcileStalePipelineRuns(problemId: string): Promise<num
 
     const startedMs = run.startedAt?.getTime() ?? now;
     const age = now - startedMs;
-    const isOrphan = !pid || !isProcessAlive(pid);
+    // Over the runtime ceiling -> force-fail even if a (likely reused) pid still
+    // looks alive. Otherwise apply the normal orphan heuristics.
+    const overMaxRuntime = age >= MAX_RUNNING_MS;
+    const isOrphan = overMaxRuntime || !pid || !isProcessAlive(pid);
 
-    if (isOrphan && (age > STALE_ORPHAN_MS || (!content.trim() && age > EMPTY_LOG_ORPHAN_MS))) {
+    if (isOrphan && (overMaxRuntime || age > STALE_ORPHAN_MS || (!content.trim() && age > EMPTY_LOG_ORPHAN_MS))) {
       await db
         .update(pipelineRuns)
         .set({
