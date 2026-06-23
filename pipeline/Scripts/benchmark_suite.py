@@ -793,12 +793,15 @@ def run_differential_fuzz(
     cap = min(max_n, 50)
     disagreements = []
     random.seed(42)
+    # Generate all fuzz inputs first, then run optimal + brute each in ONE batched
+    # process (was 2 subprocess spawns per input). Same seed -> same inputs/results.
+    inputs = []
     for _ in range(count):
         n = random.randint(1, max(1, cap))
-        # generic numeric fuzz — problems may reject; skip non-ok
-        inp = f"{n}\n" + " ".join(str(random.randint(-10, 10)) for _ in range(n)) + "\n0\n"
-        opt_out, s1 = run_solution(optimal_code, inp, timeout)
-        bru_out, s2 = run_solution(brute_code, inp, timeout)
+        inputs.append(f"{n}\n" + " ".join(str(random.randint(-10, 10)) for _ in range(n)) + "\n0\n")
+    opt_results = run_solutions_batch(optimal_code, inputs, timeout)
+    bru_results = run_solutions_batch(brute_code, inputs, timeout)
+    for inp, (opt_out, s1), (bru_out, s2) in zip(inputs, opt_results, bru_results):
         if s1 != "ok" or s2 != "ok":
             continue
         if normalize(opt_out) != normalize(bru_out):
@@ -836,52 +839,70 @@ def fuzz_kill_survivors(
     new_cases: list[dict] = []
     seen_inputs = {tc.get("input", "") for tc in test_cases}
 
-    def kills_survivor(inp: str, expected: str) -> bool:
-        for sid in survivor_ids:
-            m = mutant_map.get(sid)
-            if not m:
-                continue
-            out, status = run_solution(m.code, inp, timeout)
-            if status in ("timeout", "error"):
-                opt_out, opt_s = run_solution(optimal_code, inp, timeout)
-                if opt_s == "ok":
-                    return True
-                continue
-            if normalize(out) != expected:
-                return True
-        return False
-
-    candidates: list[str] = []
-    # boundary sizes
+    size_pool: list[int] = []
     for n in [1, 2, max(1, cap // 2), cap, max_n if max_n else cap]:
         if n and n <= (max_n or cap):
-            candidates.append(n)
-    for fi in range(count):
-        if progress and fi and fi % 100 == 0:
-            print(f"    fuzz {fi}/{count} ({len(new_cases)} killer case(s) so far)", flush=True)
-        n = random.choice(candidates) if candidates else random.randint(1, cap)
+            size_pool.append(n)
+
+    # Generate all candidate inputs up front (deduped), then execute in batches —
+    # one process for the optimal over all inputs, one for brute, and one per
+    # survivor mutant — instead of a subprocess per (input x solution).
+    gen_inputs: list[str] = []
+    for _fi in range(count):
+        n = random.choice(size_pool) if size_pool else random.randint(1, cap)
         inp = f"{n}\n" + " ".join(str(random.randint(-1000, 1000)) for _ in range(n))
         if inp in seen_inputs:
             continue
-        opt_out, s1 = run_solution(optimal_code, inp, timeout)
-        if s1 != "ok":
+        seen_inputs.add(inp)
+        gen_inputs.append(inp)
+    if not gen_inputs:
+        return []
+
+    # Keep inputs the optimal accepts; record expected output.
+    opt_results = run_solutions_batch(optimal_code, gen_inputs, timeout)
+    valid: list[tuple[str, str]] = [
+        (inp, normalize(out)) for inp, (out, s1) in zip(gen_inputs, opt_results) if s1 == "ok"
+    ]
+    # Cross-check against brute force where available.
+    if brute_code and valid:
+        bru_results = run_solutions_batch(brute_code, [inp for inp, _ in valid], timeout)
+        valid = [
+            (inp, exp)
+            for (inp, exp), (bout, bs) in zip(valid, bru_results)
+            if bs == "ok" and normalize(bout) == exp
+        ]
+    if not valid:
+        return []
+
+    valid_inputs = [inp for inp, _ in valid]
+    expected_by_input = dict(valid)
+
+    # An input kills a survivor when that mutant errors/timeouts or disagrees with
+    # the (already-validated) expected output. One batched run per survivor.
+    killer: set[str] = set()
+    for sid in survivor_ids:
+        m = mutant_map.get(sid)
+        if not m:
             continue
-        expected = normalize(opt_out)
-        if brute_code:
-            bru_out, s2 = run_solution(brute_code, inp, timeout)
-            if s2 != "ok" or normalize(bru_out) != expected:
-                continue
-        if kills_survivor(inp, expected):
-            n_val = parse_primary_n(inp)
-            bucket = derive_size_bucket(n_val, max_n, inp)
-            new_cases.append({
-                "input": inp,
-                "output": expected,
-                "weightage": 1.0,
-                "tags": [size_tag_from_bucket(bucket), "fuzz_harden", "adversarial"],
-                "order": 0,
-            })
-            seen_inputs.add(inp)
+        mres = run_solutions_batch(m.code, valid_inputs, timeout)
+        for inp, (mout, mstatus) in zip(valid_inputs, mres):
+            if mstatus in ("timeout", "error") or normalize(mout) != expected_by_input[inp]:
+                killer.add(inp)
+    if progress:
+        print(f"    fuzz: {len(valid_inputs)} valid input(s), {len(killer)} killer case(s)", flush=True)
+
+    for inp, exp in valid:
+        if inp not in killer:
+            continue
+        n_val = parse_primary_n(inp)
+        bucket = derive_size_bucket(n_val, max_n, inp)
+        new_cases.append({
+            "input": inp,
+            "output": exp,
+            "weightage": 1.0,
+            "tags": [size_tag_from_bucket(bucket), "fuzz_harden", "adversarial"],
+            "order": 0,
+        })
     return new_cases
 
 
