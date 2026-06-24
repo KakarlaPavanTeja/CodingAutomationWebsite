@@ -27,6 +27,91 @@ export type WhatsNewFeature = {
 
 export const WHATS_NEW: WhatsNewFeature[] = [
   {
+    id: "buggy-optimal-detection",
+    title: "Buggy Solution Detection",
+    date: "2026-06-24",
+    tag: "Testing",
+    summary:
+      "The pipeline now flags when your reference solution looks wrong — before any bad test cases are generated.",
+    items: [
+      {
+        title: "Optimal vs brute-force cross-check",
+        summary: "Catches a buggy reference solution automatically, using the brute force as a second opinion.",
+        details:
+          "Right after the brute force is generated, the pipeline runs both your reference (optimal) solution and the " +
+          "brute force on the worked examples plus a batch of small auto-generated inputs in the problem's own format. " +
+          "If they ever disagree, the reference solution is almost certainly buggy — and every test case derived from it " +
+          "would carry the wrong expected output. Problems that accept multiple valid answers (“return any valid…”) " +
+          "are skipped to avoid false alarms.",
+      },
+      {
+        title: "“Optimal may be buggy” badge",
+        summary: "A red warning appears on the problem page when the reference solution fails the cross-check.",
+        details:
+          "On a mismatch, the problem page shows a red badge next to the status and an expandable banner listing the exact " +
+          "inputs where the optimal and brute-force answers differ (with both outputs). The verdict is rewritten on every " +
+          "brute-force run, so fixing the solution clears the warning automatically.",
+      },
+    ],
+  },
+  {
+    id: "faster-checks-pipeline-fixes",
+    title: "Faster Checks & Pipeline Fixes",
+    date: "2026-06-23",
+    tag: "Pipeline",
+    summary:
+      "Benchmark and Strengthen run much faster and catch more wrong solutions, plus several Run All and platform-JSON fixes.",
+    items: [
+      {
+        title: "Parallel benchmarking",
+        summary: "Mutation testing now checks many injected bugs at once instead of one at a time.",
+        details:
+          "The Benchmark step evaluates mutants concurrently and batches the differential-fuzz runs, so the slow " +
+          "“checking test cases” phase on larger problems finishes far quicker. Live progress (e.g. “tested 40/70 " +
+          "mutants”) shows it's working.",
+      },
+      {
+        title: "Stronger wrong-solution gate",
+        summary: "Strengthen now actively hunts for inputs that expose plausible-but-wrong solutions.",
+        details:
+          "The wrong-approach (B2) check was fixed so a wrong solution counts as caught when any single test case rejects " +
+          "it. When the suite is still too weak, Strengthen perturbs inputs and asks the LLM for targeted breaking cases; " +
+          "if it still can't close the gap it now warns and continues instead of blocking the pipeline.",
+      },
+      {
+        title: "Differential fuzzing for any input format",
+        summary: "The optimal-vs-brute fuzz check now works on custom input formats, not just simple ones.",
+        details:
+          "Previously the differential fuzz step was effectively a no-op for problems with custom stdin formats. It now " +
+          "derives fresh inputs from the real test cases plus structure-aware perturbations, so it can actually surface " +
+          "disagreements between the optimal and brute-force solutions.",
+      },
+      {
+        title: "LLM-decided test-case count",
+        summary: "Leave the count blank and the system scales it by difficulty instead of a fixed number.",
+        details:
+          "If you don't set a test-case target, the pipeline now auto-scales the count based on difficulty (minimum 25) " +
+          "rather than defaulting to a hard-coded 30.",
+      },
+      {
+        title: "Run All no longer stalls between phases",
+        summary: "Fixed a case where Run All stopped partway and wouldn't continue to packaging.",
+        details:
+          "A transient prerequisite state could drop the Run All chain between phases. The orchestrator now keeps going so " +
+          "execution flows through to packaging and the later steps without a manual nudge.",
+      },
+      {
+        title: "Cleaner platform JSON",
+        summary: "Per-language content is ordered C++, Python, Java, Node.js, and several packaging bugs are fixed.",
+        details:
+          "Each per-language array in the final JSON now follows a canonical order (C++, Python, Java, Node.js). Also " +
+          "fixed: the short title falling back to a placeholder when an owner title was set, node-based packaging when " +
+          "C++ is disabled, default-language selection, per-language debug helpers, and Execute running all languages " +
+          "when only C++ was selected.",
+      },
+    ],
+  },
+  {
     id: "testcase-quality",
     title: "Test Case Quality Suite",
     date: "2026-06-22",
