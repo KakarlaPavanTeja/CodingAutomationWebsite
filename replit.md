@@ -1,12 +1,12 @@
 # Coding Automation Website
 
-Next.js 16 application, fully migrated off Supabase to Replit-hosted infrastructure.
+Next.js 16 application on Replit-hosted infrastructure.
 
 ## Architecture
 
-- **Framework**: Next.js 16 (App Router) on port 5000, host 0.0.0.0
+- **Framework**: Next.js 16 (App Router) on port 5001, host 0.0.0.0
 - **Workflow**: `Start application` runs `npm run dev`
-- **Database**: Replit Postgres (`DATABASE_URL`) — Supabase Postgres no longer used
+- **Database**: Replit Postgres (`DATABASE_URL`)
 - **ORM**: Drizzle ORM (`src/lib/db/schema.ts`, `src/lib/db/index.ts`); use `npm run db:push` to sync schema
 - **Auth**: Custom email + bcrypt + DB-backed session-cookie auth (`src/lib/auth/*`).
   - `users` table holds `email`, `password_hash` (bcryptjs cost=12), `password_reset_required`.
@@ -48,20 +48,12 @@ The Python pipeline scripts (`pipeline/Scripts/*.py`) record token usage by POST
   - **The fix:** `llm_client.py` gzip-compresses every outgoing request body (`_GzipRequestTransport`, a custom `httpx` transport, sets `Content-Encoding: gzip`). The WAF does **not** decompress the body (sees no signatures → passes), while OpenRouter **does** decompress it and processes the request normally. Content-preserving — the model receives identical bytes — and covers the template, user code, and all downstream steps with **zero prompt edits**. Verified: full Java code-split returns 200 with valid JSON + correct `java.io` imports in the driver. Disable with `OPENROUTER_DISABLE_GZIP=1`.
   - Safety net retained: `llm_client._is_waf_block()` still detects an HTML 403 and fails fast with an actionable error if gzip ever stops bypassing the WAF (the gateway-side fix would then be to whitelist/disable the OWASP-CRS Java RCE rule, 944xxx family, for this proxy). The bounded JSON-403 retry (`OPENROUTER_GATEWAY_403_RETRIES`) is unchanged.
 
-## Migration Status — COMPLETE
+## Access Control
 
-All 8 phases done (schema, queries, storage, auth, data rows, files, cleanup). Project is fully off Supabase. The historical `supabase/`, `migrations/`, and `scripts/migrate-*` folders have been removed since the migration is complete.
+- Access control is enforced in app code via `requireAuthApi()` / `requireAdminApi()` guards on every protected route.
+- Imported users may have `password_hash=NULL` and `password_reset_required=true`. They must complete the password-reset flow on first login.
 
-- Original Supabase RLS policies are NOT replicated — access control is enforced in app code via `requireAuthApi()` / `requireAdminApi()` guards on every protected route.
-- Imported users have `password_hash=NULL` and `password_reset_required=true`. They must complete the password-reset flow on first login.
-
-## Outstanding Manual Cleanup (user action)
-
-- Rotate the Supabase database password (since it was exposed via `SUPABASE_DB_URL` during the migration window).
-- Delete these now-unused secrets: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`, `STORAGE_BUCKET`.
-- Optionally pause / delete the Supabase project once you've confirmed the Replit copy is the system of record.
-
-## Security Hardening (post-migration)
+## Security Hardening
 
 - Per-route ownership enforcement: `src/lib/auth/ownership.ts` (`requireProblemAccess`) checks the session and verifies the caller is `problems.created_by` or an admin; returns generic 404 on mismatch to avoid existence leaks. Applied to: `files/read`, `files/save`, `files/outputs`, `files/download`, `pipeline/run` (POST), `pipeline/run/logs`, `pipeline/run/status`, `pipeline/run/stop`, `pipeline/state` (GET + POST).
 - Path / id validators: `src/lib/storage-path.ts` (`assertSafeProblemId` UUID-only, `assertSafeRelativePath` rejects abs / `..` / null bytes / >512 chars). Used at every problem-scoped endpoint.
@@ -71,11 +63,6 @@ All 8 phases done (schema, queries, storage, auth, data rows, files, cleanup). P
 - Reset URLs are built from trusted `APP_URL` (`src/lib/app-url.ts`), not from the request `Origin` header.
 - Removed unused scripts that contained a hardcoded NxtWave gateway API key (`pipeline/Scripts/llm_client_niat.py`, `llm_client_GPT4o.py`). **The leaked key is still in git history — please rotate it via NxtWave IT.**
 - Bumped `next` 16.2.2 → 16.2.3 (GHSA-q4gf-8mx6-v5v3 high-severity DoS).
-
-## One-off Scripts
-
-- `scripts/migrate-data.mts` — copy DB rows from Supabase to Replit. Idempotent. Supports `--dry-run`.
-- `scripts/migrate-files.mts` — copy storage objects from Supabase Storage to Replit App Storage. Idempotent (skips by name+size). Supports `--dry-run`, `--problem <uuid>`, `--start N`, `--limit N`.
 
 ## Performance Optimizations (post-deployment)
 

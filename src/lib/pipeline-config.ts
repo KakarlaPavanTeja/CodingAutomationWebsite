@@ -1,4 +1,6 @@
 import type { PipelineStepConfig, StepId, QuestionType, PipelineMode } from "@/types/pipeline";
+import { getQuestionSubStepsForType } from "@/lib/pipeline-question";
+import { filterLanguagesForCommand, getSplitSubStepsForLanguages } from "@/lib/pipeline-language-steps";
 
 export const LANGUAGES = [
   { id: "python", label: "Python", defaultEnabled: true },
@@ -7,108 +9,30 @@ export const LANGUAGES = [
   { id: "nodejs", label: "Node.js", defaultEnabled: true },
 ];
 
-const QUESTION_GEN_SCRIPT = "Scripts/generate_full_question.py";
-
-const QUESTION_GENERATION_STEPS: PipelineStepConfig[] = [
-  {
-    id: "generate_description",
-    label: "Generate Description",
-    description: "Create the full problem description in a single LLM call",
-    script: QUESTION_GEN_SCRIPT,
-    subSteps: [],
-    hasLanguageSelector: false,
-    hasTestcaseCount: false,
-    needsMode: false,
-    llmUsage: "llm",
-  },
-  {
-    id: "enforce_naming",
-    label: "Enforce Naming",
-    description: "Extract the function signature from the description and normalize source code naming",
-    script: QUESTION_GEN_SCRIPT,
-    subSteps: [],
-    hasLanguageSelector: false,
-    hasTestcaseCount: false,
-    needsMode: false,
-    llmUsage: "llm",
-    prerequisite: "generate_description",
-  },
-  {
-    id: "generate_titles",
-    label: "Generate Titles",
-    description: "Generate title options for the problem",
-    script: QUESTION_GEN_SCRIPT,
-    subSteps: [],
-    hasLanguageSelector: false,
-    hasTestcaseCount: false,
-    needsMode: false,
-    llmUsage: "llm",
-    prerequisite: "generate_description",
-  },
-  {
-    id: "generate_difficulty",
-    label: "Estimate Difficulty",
-    description: "Estimate the problem difficulty level",
-    script: QUESTION_GEN_SCRIPT,
-    subSteps: [],
-    hasLanguageSelector: false,
-    hasTestcaseCount: false,
-    needsMode: false,
-    llmUsage: "llm",
-    prerequisite: "generate_description",
-  },
-  {
-    id: "generate_topics",
-    label: "Classify Topics",
-    description: "Classify problem topics from the topics list",
-    script: QUESTION_GEN_SCRIPT,
-    subSteps: [],
-    hasLanguageSelector: false,
-    hasTestcaseCount: false,
-    needsMode: false,
-    llmUsage: "llm",
-    prerequisite: "generate_description",
-  },
-  {
-    id: "translate_cpp",
-    label: "Translate to C++",
-    description: "Translate the Python solution to C++",
-    script: QUESTION_GEN_SCRIPT,
-    subSteps: [],
-    hasLanguageSelector: false,
-    hasTestcaseCount: false,
-    needsMode: false,
-    llmUsage: "llm",
-    prerequisite: "enforce_naming",
-  },
-  {
-    id: "translate_java",
-    label: "Translate to Java",
-    description: "Translate the Python solution to Java",
-    script: QUESTION_GEN_SCRIPT,
-    subSteps: [],
-    hasLanguageSelector: false,
-    hasTestcaseCount: false,
-    needsMode: false,
-    llmUsage: "llm",
-    prerequisite: "enforce_naming",
-  },
-  {
-    id: "translate_nodejs",
-    label: "Translate to Node.js",
-    description: "Translate the Python solution to Node.js",
-    script: QUESTION_GEN_SCRIPT,
-    subSteps: [],
-    hasLanguageSelector: false,
-    hasTestcaseCount: false,
-    needsMode: false,
-    llmUsage: "llm",
-    prerequisite: "enforce_naming",
-  },
+const QUESTION_SUB_STEPS: PipelineStepConfig["subSteps"] = [
+  { id: "description", label: "Description", description: "Writes the problem statement, constraints, and sample I/O.", defaultEnabled: true },
+  { id: "naming", label: "Naming", description: "Parses the function signature and normalizes the Python solution.", defaultEnabled: true, functionOnly: true },
+  { id: "titles", label: "Titles", description: "Produces several short title candidates for the problem.", defaultEnabled: true },
+  { id: "difficulty", label: "Difficulty", description: "Estimates Easy, Medium, or Hard from the content.", defaultEnabled: true },
+  { id: "topics", label: "Topics", description: "Assigns DSA topic tags such as arrays, graphs, or DP.", defaultEnabled: true },
+  { id: "translate_cpp", label: "C++", description: "Translates the reference solution into C++.", defaultEnabled: true },
+  { id: "translate_java", label: "Java", description: "Translates the reference solution into Java.", defaultEnabled: true },
+  { id: "translate_nodejs", label: "Node.js", description: "Translates the reference solution into Node.js.", defaultEnabled: true },
 ];
 
 export const STEP_CONFIGS: PipelineStepConfig[] = [
-  ...QUESTION_GENERATION_STEPS,
+  {
+    id: "generate_question",
+    label: "Generate Question",
+    description:
+      "Create description, metadata, and multi-language solutions. Sub-steps run in parallel where dependencies allow.",
+    script: "Scripts/generate_full_question.py",
+    subSteps: QUESTION_SUB_STEPS,
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+    llmUsage: "llm",
+  },
   {
     id: "generate_brute_force",
     label: "Generate Brute Force",
@@ -119,6 +43,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasTestcaseCount: false,
     needsMode: false,
     llmUsage: "llm",
+    prerequisite: "generate_question",
   },
   {
     id: "generate_testcases",
@@ -146,7 +71,8 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
   {
     id: "benchmark_testcases",
     label: "Benchmark Test Cases",
-    description: "Checks how strong your test cases are: it secretly injects small bugs into the solution and verifies the tests catch them. Read-only — it reports a score and never changes your tests.",
+    description:
+      "Checks how strong your test cases are: it secretly injects small bugs into the solution and verifies the tests catch them. Read-only — it reports a score and never changes your tests.",
     script: "Scripts/benchmark_suite.py",
     subSteps: [],
     hasLanguageSelector: false,
@@ -157,7 +83,8 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
   {
     id: "harden_testcases",
     label: "Strengthen Test Cases",
-    description: "Strengthens a weak suite: finds bugs your current tests miss and automatically adds new test cases that catch them, until the kill-rate target is reached.",
+    description:
+      "Strengthens a weak suite: finds bugs your current tests miss and automatically adds new test cases that catch them, until the kill-rate target is reached.",
     script: "Scripts/harden_suite.py",
     subSteps: [],
     hasLanguageSelector: false,
@@ -227,7 +154,8 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
   {
     id: "generate_editorial",
     label: "Generate Editorial",
-    description: "Write a complete multi-solution DSA editorial (intuition, approach, pseudocode, 4-language code, complexity)",
+    description:
+      "Write a complete multi-solution DSA editorial (intuition, approach, pseudocode, 4-language code, complexity)",
     script: "Scripts/editorial_manager.py",
     subSteps: [],
     hasLanguageSelector: false,
@@ -262,20 +190,12 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
   },
 ];
 
-/** Question-generation steps that can run in parallel once their prerequisite is met. */
-export function getQuestionGenerationSteps(questionType: QuestionType): StepId[] {
-  const steps: StepId[] = ["generate_description"];
-  if (questionType === "function") {
-    steps.push("enforce_naming");
-  }
-  steps.push("generate_titles", "generate_difficulty", "generate_topics");
-  steps.push("translate_cpp", "translate_java", "translate_nodejs");
-  return steps;
-}
+/** Steps always tracked in state for GQ Wave 2 UI even though not in linear workflow. */
+export const GQ_EMBEDDED_STEPS: StepId[] = ["generate_brute_force"];
 
 export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode): StepId[] {
-  const afterGeneration: StepId[] = [
-    "generate_brute_force",
+  const core: StepId[] = [
+    "generate_question",
     "generate_testcases",
     "generate_wrong_solutions",
     "benchmark_testcases",
@@ -283,64 +203,65 @@ export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode)
   ];
 
   if (questionType === "nonfunction") {
-    const steps: StepId[] = [...getQuestionGenerationSteps(questionType), ...afterGeneration];
-    steps.push("execute_tests_nonfunction");
+    const steps: StepId[] = [...core, "execute_tests_nonfunction"];
     if (mode === "practice") steps.push("generate_enrichment");
     steps.push("package_platform", "generate_editorial", "prepare_platform_json", "execute_editorial");
     return steps;
   }
 
-  const steps: StepId[] = [...getQuestionGenerationSteps(questionType), ...afterGeneration];
-  steps.push("split_code", "execute_tests_function");
+  const steps: StepId[] = [...core, "split_code", "execute_tests_function"];
   if (mode === "practice") steps.push("generate_enrichment");
   steps.push("package_platform", "generate_editorial", "prepare_platform_json", "execute_editorial");
   return steps;
+}
+
+/** Steps handled on the Editorial tab — hidden from the Pipeline UI and Run all. */
+export const EDITORIAL_TAB_STEPS: StepId[] = ["generate_editorial", "execute_editorial"];
+
+export function getPipelineUiWorkflowSteps(questionType: QuestionType, mode: PipelineMode): StepId[] {
+  return getWorkflowSteps(questionType, mode).filter((id) => !EDITORIAL_TAB_STEPS.includes(id));
+}
+
+/** All step IDs that need state entries (workflow + GQ-embedded steps like brute force). */
+export function getAllTrackedStepIds(questionType: QuestionType, mode: PipelineMode): StepId[] {
+  const workflow = getWorkflowSteps(questionType, mode);
+  const extra = GQ_EMBEDDED_STEPS.filter((id) => !workflow.includes(id));
+  return [...workflow, ...extra];
 }
 
 export function getStepConfig(stepId: StepId): PipelineStepConfig {
   return STEP_CONFIGS.find((s) => s.id === stepId)!;
 }
 
-/**
- * Returns the step that must complete before `stepId` can run, given a workflow.
- * If the step declares an explicit `prerequisite`, that is used (with adjustments
- * for question type); otherwise it falls back to the immediately-previous step in
- * the workflow array. Returns `null` when the step has no prerequisite.
- */
+export function getEnabledQuestionSubSteps(questionType: QuestionType, enabled: string[]): string[] {
+  const applicable = new Set(getQuestionSubStepsForType(questionType));
+  return enabled.filter((id) => applicable.has(id as never));
+}
+
 export function getPrerequisiteStep(
   stepId: StepId,
   workflowSteps: StepId[],
-  questionType?: QuestionType
+  _questionType?: QuestionType
 ): StepId | null {
-  // Non-function problems skip naming — translations depend on description only.
-  if (
-    questionType === "nonfunction" &&
-    (stepId === "translate_cpp" || stepId === "translate_java" || stepId === "translate_nodejs")
-  ) {
-    return "generate_description";
+  if (stepId === "generate_enrichment") {
+    return "generate_question";
   }
-
-  if (stepId === "generate_brute_force") {
-    return questionType === "function" ? "enforce_naming" : "generate_description";
-  }
-
   const config = getStepConfig(stepId);
   if (config.prerequisite) return config.prerequisite;
-
   const index = workflowSteps.indexOf(stepId);
   if (index <= 0) return null;
   return workflowSteps[index - 1];
 }
 
-const QUESTION_STEP_ARGS: Partial<Record<StepId, string[]>> = {
-  generate_description: ["--steps", "description"],
-  enforce_naming: ["--steps", "naming"],
-  generate_titles: ["--steps", "titles"],
-  generate_difficulty: ["--steps", "difficulty"],
-  generate_topics: ["--steps", "topics"],
-  translate_cpp: ["--steps", "codes", "--langs", "cpp"],
-  translate_java: ["--steps", "codes", "--langs", "java"],
-  translate_nodejs: ["--steps", "codes", "--langs", "nodejs"],
+const SUBSTEP_TO_PY: Record<string, { steps: string; langs?: string }> = {
+  description: { steps: "description" },
+  naming: { steps: "naming" },
+  titles: { steps: "titles" },
+  difficulty: { steps: "difficulty" },
+  topics: { steps: "topics" },
+  translate_cpp: { steps: "codes", langs: "cpp" },
+  translate_java: { steps: "codes", langs: "java" },
+  translate_nodejs: { steps: "codes", langs: "nodejs" },
 };
 
 export function buildCommand(
@@ -353,10 +274,14 @@ export function buildCommand(
   const config = getStepConfig(stepId);
   const args: string[] = [];
 
-  const questionArgs = QUESTION_STEP_ARGS[stepId];
-  if (questionArgs) {
-    args.push(...questionArgs);
-    return { script: config.script, args };
+  if (stepId === "generate_question" && subSteps.length > 0) {
+    const sub = subSteps[0];
+    const mapping = SUBSTEP_TO_PY[sub];
+    if (mapping) {
+      args.push("--steps", mapping.steps);
+      if (mapping.langs) args.push("--langs", mapping.langs);
+      return { script: config.script, args };
+    }
   }
 
   if (config.subSteps.length > 0 && subSteps.length > 0) {
@@ -364,14 +289,17 @@ export function buildCommand(
   }
 
   if (config.hasLanguageSelector && languages.length > 0) {
-    if (
+    const langs = filterLanguagesForCommand(stepId, languages, languages);
+    if (langs.length === 0 && stepId === "split_code") {
+      args.push("--langs", getSplitSubStepsForLanguages(languages).join(","));
+    } else if (
       stepId === "execute_tests_function" ||
       stepId === "execute_tests_nonfunction" ||
       stepId === "execute_editorial"
     ) {
-      args.push(...languages);
-    } else {
-      args.push("--langs", languages.join(","));
+      args.push(...(langs.length ? langs : languages));
+    } else if (langs.length > 0) {
+      args.push("--langs", langs.join(","));
     }
   }
 
@@ -381,6 +309,9 @@ export function buildCommand(
 
   if (config.needsMode) {
     args.push("--mode", mode);
+    if (languages.length > 0) {
+      args.push("--langs", languages.join(","));
+    }
   }
 
   if (stepId === "execute_tests_nonfunction") {
@@ -394,12 +325,8 @@ export function buildCommand(
   if (stepId === "harden_testcases") {
     const minKill = process.env.SUITE_MIN_KILL;
     const maxRounds = process.env.SUITE_MAX_ROUNDS;
-    if (minKill) {
-      args.push("--min-kill", minKill);
-    }
-    if (maxRounds) {
-      args.push("--max-rounds", maxRounds);
-    }
+    if (minKill) args.push("--min-kill", minKill);
+    if (maxRounds) args.push("--max-rounds", maxRounds);
   }
 
   return { script: config.script, args };

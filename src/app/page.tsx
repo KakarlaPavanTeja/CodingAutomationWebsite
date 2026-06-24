@@ -130,7 +130,7 @@ export default function Home() {
             <p className="text-sm text-muted-foreground mb-4">
               Upload a problem statement and solution to start the automation pipeline.
             </p>
-            <Link href="/problems">
+            <Link href="/problems/new">
               <Button size="sm">
                 Create Problem
                 <ArrowRight className="ml-2 h-4 w-4" />
@@ -161,28 +161,6 @@ export default function Home() {
           </Card>
         )}
       </div>
-
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-primary" />
-              What&apos;s New
-            </CardTitle>
-            <Link href="/whats-new" className="text-sm text-primary hover:underline underline-offset-4">
-              View all updates
-            </Link>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <p className="text-xs text-muted-foreground mb-3">
-            Recent improvements — tap any row to read more.
-          </p>
-          {recentUpdates.map((feature) => (
-            <WhatsNewTeaser key={feature.id} feature={feature} />
-          ))}
-        </CardContent>
-      </Card>
 
       {problems.length > 0 && (
         <div className="space-y-3">
@@ -241,6 +219,28 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              What&apos;s New
+            </CardTitle>
+            <Link href="/whats-new" className="text-sm text-primary hover:underline underline-offset-4">
+              View all updates
+            </Link>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <p className="text-xs text-muted-foreground mb-3">
+            Recent improvements — tap any row to read more.
+          </p>
+          {recentUpdates.map((feature) => (
+            <WhatsNewTeaser key={feature.id} feature={feature} />
+          ))}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

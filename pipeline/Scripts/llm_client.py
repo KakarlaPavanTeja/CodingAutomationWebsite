@@ -222,12 +222,12 @@ def _make_client() -> OpenAI:
     talking to the gateway, to avoid its WAF false-positive on code-heavy
     prompts; direct calls skip gzip. Force-disable with OPENROUTER_DISABLE_GZIP=1.
     """
-    base_url = os.environ.get("OPENROUTER_BASE_URL", _DIRECT_BASE_URL)
+    base_url = (os.environ.get("OPENROUTER_BASE_URL") or "").strip() or _DIRECT_BASE_URL
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "OPENROUTER_API_KEY is not set — provide a real OpenRouter API key "
-            "(or set OPENROUTER_BASE_URL to the proxy gateway and use the gateway key)."
+            "OPENROUTER_API_KEY is not set — add it to .env.local "
+            "(https://openrouter.ai/keys)."
         )
     disable_gzip = os.environ.get("OPENROUTER_DISABLE_GZIP", "").strip().lower() in (
         "1",

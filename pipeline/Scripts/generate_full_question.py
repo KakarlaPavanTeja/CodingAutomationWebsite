@@ -5,7 +5,7 @@ import glob
 import re
 
 # Prompts
-from Prompts.descriptionPrompt import get_description_prompt
+from Prompts.descriptionPrompt import get_description_prompt, get_nonfunction_description_prompt
 from Prompts.titlePrompt import get_title_prompt
 from Prompts.difficultyPrompt import get_difficulty_prompt
 from Prompts.conversionPrompt import get_conversion_prompt
@@ -347,12 +347,17 @@ def detect_user_solution():
     print("Please provide one of: solution.py, solution.cpp, Solution.java, solution.js")
     sys.exit(1)
 
-def run_description_step(problem_name, structure_type, scenario_level, problem_content, user_code, detected_lang):
+def run_description_step(problem_name, structure_type, scenario_level, problem_content, user_code, detected_lang, question_kind="function"):
     print("\n" + "=" * 60)
     print("STEP: Description Creation")
     print("=" * 60)
 
-    desc_prompt = get_description_prompt(problem_name, structure_type, user_code, scenario_level)
+    if question_kind == "nonfunction":
+        desc_prompt = get_nonfunction_description_prompt(
+            problem_name, structure_type, user_code, scenario_level
+        )
+    else:
+        desc_prompt = get_description_prompt(problem_name, structure_type, user_code, scenario_level)
     desc_response, desc_usage = call_llm(desc_prompt, problem_content, purpose="chat")
     desc_response = _strip_scratchpad(desc_response)
     if scenario_level == "none":
@@ -412,16 +417,27 @@ def run_titles_step(problem_name):
     print("STEP: Generating Titles")
     print("=" * 60)
 
+    owner_title = os.environ.get("PIPELINE_OWNER_TITLE", "").strip()
+    generate_with_ai = os.environ.get("PIPELINE_GENERATE_TITLE_WITH_AI", "").strip().lower() in (
+        "1", "true", "yes"
+    )
+    titles_path = os.path.join(OUTPUT_DIR, 'generated_titles.txt')
+
+    if owner_title and not generate_with_ai:
+        with open(titles_path, 'w', encoding='utf-8') as f:
+            f.write(owner_title + "\n")
+        print(f"✓ Using owner-set title (final): {owner_title}")
+        return
+
     desc_response = _load_description()
     if not desc_response.strip():
-        print("Error: no description found. Run generate_description first.")
+        print("Error: no description found. Run generate_question (description sub-step) first.")
         sys.exit(1)
 
     title_prompt = get_title_prompt(desc_response)
     title_response, title_usage = call_llm(title_prompt, "", purpose="chat")
     _track_llm_usage(title_usage, f"{problem_name}_titles")
 
-    titles_path = os.path.join(OUTPUT_DIR, 'generated_titles.txt')
     with open(titles_path, 'w', encoding='utf-8') as f:
         f.write(title_response)
     print("✓ Titles generated")
@@ -434,7 +450,7 @@ def run_difficulty_step(problem_name):
 
     desc_response = _load_description()
     if not desc_response.strip():
-        print("Error: no description found. Run generate_description first.")
+        print("Error: no description found. Run generate_question (description sub-step) first.")
         sys.exit(1)
 
     diff_path = os.path.join(OUTPUT_DIR, 'generated_difficulty.txt')
@@ -460,7 +476,7 @@ def run_topics_step(problem_name, user_code, detected_lang):
 
     desc_response = _load_description()
     if not desc_response.strip():
-        print("Error: no description found. Run generate_description first.")
+        print("Error: no description found. Run generate_question (description sub-step) first.")
         sys.exit(1)
 
     topics_list_path = os.path.join(INPUT_DIR, 'topics_list.txt')
@@ -496,7 +512,7 @@ def run_translate_step(problem_name, structure_type, user_code, detected_lang, s
 
     desc_response = _load_description()
     if not desc_response.strip():
-        print("Error: no description found. Run generate_description first.")
+        print("Error: no description found. Run generate_question (description sub-step) first.")
         sys.exit(1)
 
     working_code = _load_normalized_source(detected_lang, user_code)
@@ -565,7 +581,7 @@ def main():
 
     if "description" in selected_steps:
         run_description_step(
-            problem_name, structure_type, scenario_level, problem_content, user_code, detected_lang
+            problem_name, structure_type, scenario_level, problem_content, user_code, detected_lang, question_kind
         )
 
     if "naming" in selected_steps:
@@ -578,7 +594,11 @@ def main():
         run_difficulty_step(problem_name)
 
     if "topics" in selected_steps:
-        run_topics_step(problem_name, user_code, detected_lang)
+        pipeline_mode = os.environ.get("PIPELINE_MODE", "practice").strip().lower()
+        if pipeline_mode == "exam":
+            print("ℹ Exam mode — skipping topics generation.")
+        else:
+            run_topics_step(problem_name, user_code, detected_lang)
 
     if "codes" in selected_steps:
         run_translate_step(problem_name, structure_type, user_code, detected_lang, selected_langs)

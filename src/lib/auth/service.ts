@@ -91,7 +91,7 @@ export async function login(emailRaw: string, password: string): Promise<LoginRe
     return { ok: false, error: invalidMsg };
   }
   if (!row.passwordHash) {
-    // Account exists but has no password (e.g. migrated from Supabase). The
+    // Account exists but has no password yet (imported user). The user must
     // user must complete a password reset before they can sign in.
     await verifyPassword(password, "$2b$12$abcdefghijklmnopqrstuv");
     return {

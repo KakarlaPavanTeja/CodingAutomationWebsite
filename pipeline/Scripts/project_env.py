@@ -1,10 +1,9 @@
 """
-Load EXEC_V2_* / AWS_* from project-root env files.
+Load AWS_* / S3_* from project-root env files.
 
 Load order (later files override earlier file values):
-  1. .env.execution_manager_v2.example
-  2. .env.execution_manager_v2
-  3. .env
+  1. .env.execution_manager_v2
+  2. .env
 
 Shell environment variables remain highest precedence.
 """
@@ -42,7 +41,6 @@ def load_execution_manager_env() -> None:
     protected_keys = set(os.environ.keys())
     root = _project_root()
     for name in (
-        ".env.execution_manager_v2.example",
         ".env.execution_manager_v2",
         ".env",
     ):

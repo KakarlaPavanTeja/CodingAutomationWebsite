@@ -43,7 +43,7 @@ export async function GET() {
     .where(baseFilter)
     .orderBy(desc(problems.createdAt));
 
-  // Shape to match the legacy Supabase joined response
+  // Join creator profile for list API response.
   const data = rows.map((r) => ({
     id: r.problem.id,
     created_by: r.problem.createdBy,

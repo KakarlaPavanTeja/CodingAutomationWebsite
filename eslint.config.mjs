@@ -16,7 +16,6 @@ const eslintConfig = defineConfig([
     ".local/**",
     "pipeline/**",
     "scripts/**",
-    "supabase/**",
   ]),
 ]);
 
