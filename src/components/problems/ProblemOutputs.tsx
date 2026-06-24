@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { OutputBrowser } from "@/components/files/OutputBrowser";
 import { TabbedEditor } from "@/components/files/TabbedEditor";
 import type { OutputFile } from "@/types/pipeline";
@@ -113,17 +113,18 @@ export function ProblemOutputs({ problemId }: ProblemOutputsProps) {
 
   const closeTab = useCallback(
     (path: string) => {
-      setOpenTabs((prev) => {
-        const filtered = prev.filter((t) => t.path !== path);
-        if (activeTabPath === path) {
-          const idx = prev.findIndex((t) => t.path === path);
-          const nextTab = filtered[Math.min(idx, filtered.length - 1)];
-          setActiveTabPath(nextTab?.path || null);
-        }
-        return filtered;
-      });
+      // Compute the next active tab BEFORE updating state — calling setState
+      // inside a setOpenTabs updater is impure and double-fires in StrictMode
+      // (UI-M2).
+      const idx = openTabs.findIndex((t) => t.path === path);
+      const filtered = openTabs.filter((t) => t.path !== path);
+      if (activeTabPath === path) {
+        const nextTab = filtered[Math.min(idx, filtered.length - 1)];
+        setActiveTabPath(nextTab?.path || null);
+      }
+      setOpenTabs(filtered);
     },
-    [activeTabPath]
+    [openTabs, activeTabPath]
   );
 
   const updateTab = useCallback((path: string, updates: Partial<OpenTab>) => {
@@ -152,7 +153,7 @@ export function ProblemOutputs({ problemId }: ProblemOutputsProps) {
     [openTabs, updateTab, problemId]
   );
 
-  const openPaths = new Set(openTabs.map((t) => t.path));
+  const openPaths = useMemo(() => new Set(openTabs.map((t) => t.path)), [openTabs]);
 
   return (
     <div className="flex flex-col gap-3">
@@ -196,7 +197,7 @@ export function ProblemOutputs({ problemId }: ProblemOutputsProps) {
       <div className="w-60 border-r bg-card flex flex-col shrink-0">
         <div className="px-3 py-2 border-b flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Files
+            Outputs by stage
           </span>
           <a
             href={`/api/files/download?problemId=${encodeURIComponent(problemId)}`}

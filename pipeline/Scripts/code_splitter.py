@@ -52,12 +52,14 @@ def save_split_code(language_name, split_data, question_type="standard"):
     ext = ext_map.get(language_name, ".txt")
     
     # Write files
+    pipeline_mode = os.environ.get("PIPELINE_MODE", "practice").strip().lower()
     files = {
         "default": split_data.get("default_code", ""),
         "solution": split_data.get("solution_code", ""),
         "driver": split_data.get("driver_code", ""),
-        "debugger": split_data.get("debugger_code", "")
     }
+    if pipeline_mode != "exam":
+        files["debugger"] = split_data.get("debugger_code", "")
     
     for key, content in files.items():
         filename = f"{key}{ext}"

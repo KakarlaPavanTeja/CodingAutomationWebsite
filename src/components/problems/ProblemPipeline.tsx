@@ -1,17 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
-import { GlobalConfig } from "@/components/pipeline/GlobalConfig";
-import { StepCard } from "@/components/pipeline/StepCard";
-import { QuestionGenerationFlow } from "@/components/pipeline/QuestionGenerationFlow";
-import { getWorkflowSteps, getPrerequisiteStep, getQuestionGenerationSteps } from "@/lib/pipeline-config";
-import { usePipeline } from "@/lib/pipeline-context";
-import type { StepId, StepLlmUsageStats } from "@/types/pipeline";
-import { Loader2, PlayCircle, StopCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { GlobalConfig } from "@/components/pipeline/GlobalConfig";
+import { PipelineWaveFlow } from "@/components/pipeline/PipelineWaveFlow";
+import { getPipelineUiWorkflowSteps } from "@/lib/pipeline-config";
+import { usePipeline } from "@/lib/pipeline-context";
+import type { PipelineStepUsageMap } from "@/lib/pipeline-step-list";
+import type { StepId } from "@/types/pipeline";
+import { ChevronDown, Loader2, PlayCircle, StopCircle } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface ProblemPipelineProps {
   problemId: string;
@@ -24,22 +23,36 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
     mode,
     globalLanguages,
     globalTestcaseCount,
+    ownerTitle,
+    ownerDifficulty,
+    generateTitleWithAi,
+    defaultTagNames,
     stepStates,
     isAnyRunning,
     stateLoading,
     setGlobalLanguages,
     setGlobalTestcaseCount,
-    updateStepState,
+    setOwnerTitle,
+    setGenerateTitleWithAi,
+    setDefaultTagNames,
+    saveOwnerTitle,
     runStep,
     stopStep,
+    runQuestionSubStep,
+    stopQuestionSubStep,
+    runLanguageSubStep,
+    stopLanguageSubStep,
+    getSubStepStatus,
     runAll,
     cancelRunAll,
     isRunAllActive,
     loadProblemState,
     savePipelineState,
+    legacyPipelineNotice,
   } = usePipeline();
 
-  const [stepUsage, setStepUsage] = useState<Partial<Record<StepId, StepLlmUsageStats>>>({});
+  const [stepUsage, setStepUsage] = useState<PipelineStepUsageMap>({});
+  const [configOpen, setConfigOpen] = useState(false);
 
   const fetchStepUsage = useCallback(() => {
     fetch(`/api/pipeline/usage?problemId=${encodeURIComponent(problemId)}`)
@@ -59,7 +72,6 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
     fetchStepUsage();
   }, [stateLoading, fetchStepUsage]);
 
-  // Poll usage while any step is running; refresh once when all finish.
   useEffect(() => {
     if (!isAnyRunning) {
       fetchStepUsage();
@@ -70,7 +82,6 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
     return () => clearInterval(interval);
   }, [isAnyRunning, fetchStepUsage]);
 
-  // Notify parent when a step starts or finishes so it can refetch problem status
   const prevRunning = useRef(isAnyRunning);
   useEffect(() => {
     if (prevRunning.current !== isAnyRunning) {
@@ -79,138 +90,156 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
     }
   }, [isAnyRunning, onStatusChange]);
 
-  const workflowSteps = getWorkflowSteps(questionType, mode);
-  const questionGenStepIds = new Set(getQuestionGenerationSteps(questionType));
-  const questionGenSteps = workflowSteps.filter((id) => questionGenStepIds.has(id));
-  const downstreamSteps = workflowSteps.filter((id) => !questionGenStepIds.has(id));
+  const workflowSteps = getPipelineUiWorkflowSteps(questionType, mode);
 
   const allCompleted =
     workflowSteps.length > 0 &&
     workflowSteps.every((id) => stepStates.get(id)?.status === "completed");
 
-  const enabledSubSteps = new Map(
-    Array.from(stepStates.entries()).map(([id, state]) => [id, state.enabledSubSteps])
+  const hasIncompleteSteps = workflowSteps.some(
+    (id) => stepStates.get(id)?.status !== "completed"
   );
+
+  const packagingStepsPending =
+    hasIncompleteSteps &&
+    workflowSteps.some(
+      (id) =>
+        (id === "package_platform" || id === "prepare_platform_json") &&
+        stepStates.get(id)?.status !== "completed"
+    );
+
+  const gqEnabledSubSteps = stepStates.get("generate_question")?.enabledSubSteps ?? [];
 
   if (stateLoading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        <span className="ml-2 text-sm text-muted-foreground">Loading pipeline state...</span>
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <span className="ml-2 text-sm text-muted-foreground">Loading pipeline…</span>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base">Pipeline Configuration</CardTitle>
-            <div className="flex gap-2">
-              <Badge variant="outline" className="capitalize">
-                {questionType === "function" ? "Function-based" : "Non-function"}
-              </Badge>
-              <Badge variant="outline" className="capitalize">
-                {mode}
-              </Badge>
-            </div>
+    <div className="space-y-2">
+      <div className="rounded-lg border bg-card overflow-hidden">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-muted/40 transition-colors"
+          onClick={() => setConfigOpen((o) => !o)}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <ChevronDown
+              className={cn(
+                "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+                configOpen && "rotate-180"
+              )}
+            />
+            <span className="text-sm font-medium">Pipeline settings</span>
+            <Badge variant="outline" className="text-[10px] h-5 capitalize hidden sm:inline-flex">
+              {questionType === "function" ? "Function" : "Non-function"}
+            </Badge>
+            <Badge variant="outline" className="text-[10px] h-5 capitalize hidden sm:inline-flex">
+              {mode}
+            </Badge>
           </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <GlobalConfig
-            languages={globalLanguages}
-            onLanguagesChange={(langs) => {
-              setGlobalLanguages(langs);
-              savePipelineState();
-            }}
-            testcaseCount={globalTestcaseCount}
-            onTestcaseCountChange={(count) => {
-              setGlobalTestcaseCount(count);
-              savePipelineState();
-            }}
-            enabledSubSteps={enabledSubSteps}
-            onSubStepToggle={(stepId, subStepId, enabled) => {
-              const current = stepStates.get(stepId)?.enabledSubSteps || [];
-              updateStepState(stepId, {
-                enabledSubSteps: enabled
-                  ? [...current, subStepId]
-                  : current.filter((s) => s !== subStepId),
-              });
-              savePipelineState();
-            }}
-            disabled={isAnyRunning}
-          />
-        </CardContent>
-      </Card>
-
-      <div className="flex items-center justify-between">
-        <Separator className="flex-1" />
-        <div className="px-4">
-          {isRunAllActive ? (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={cancelRunAll}
-            >
-              <StopCircle className="mr-2 h-4 w-4" />
-              Cancel Queued Steps
-            </Button>
-          ) : (
-            <Button
-              size="sm"
-              onClick={runAll}
-              disabled={allCompleted}
-            >
-              <PlayCircle className="mr-2 h-4 w-4" />
-              Run All
-            </Button>
-          )}
-        </div>
-        <Separator className="flex-1" />
+          <span className="text-[10px] text-muted-foreground shrink-0">
+            {configOpen ? "Hide" : "Languages, title, test count"}
+          </span>
+        </button>
+        {configOpen && (
+          <div className="px-3 pb-3 pt-1 border-t">
+            <GlobalConfig
+              compact
+              languages={globalLanguages}
+              onLanguagesChange={(langs) => {
+                setGlobalLanguages(langs);
+                savePipelineState();
+              }}
+              testcaseCount={globalTestcaseCount}
+              onTestcaseCountChange={(count) => {
+                setGlobalTestcaseCount(count);
+                savePipelineState();
+              }}
+              ownerTitle={ownerTitle}
+              onOwnerTitleChange={setOwnerTitle}
+              generateTitleWithAi={generateTitleWithAi}
+              onGenerateTitleWithAiChange={(enabled) => {
+                setGenerateTitleWithAi(enabled);
+                savePipelineState();
+              }}
+              defaultTagNames={defaultTagNames}
+              onDefaultTagNamesChange={(tags) => {
+                setDefaultTagNames(tags);
+                savePipelineState();
+              }}
+              onSaveTitle={saveOwnerTitle}
+              disabled={isAnyRunning}
+            />
+          </div>
+        )}
       </div>
 
-      <QuestionGenerationFlow
+      <div
+        className={cn(
+          "flex items-center gap-3 rounded-lg border bg-muted/25 px-3 py-2",
+          isRunAllActive ? "justify-between" : "justify-center"
+        )}
+      >
+        {isRunAllActive ? (
+          <>
+            <p className="text-xs text-muted-foreground min-w-0">
+              Running pipeline… steps launch as prerequisites complete.
+            </p>
+            <Button
+              size="sm"
+              variant="destructive"
+              className="h-9 px-3 text-sm shrink-0"
+              onClick={cancelRunAll}
+            >
+              <StopCircle className="w-4 h-4 mr-1.5" />
+              Cancel run all
+            </Button>
+          </>
+        ) : (
+          <div className="flex flex-col items-center gap-1 w-full sm:w-auto">
+            <Button
+              className="h-9 w-full sm:w-auto sm:min-w-[220px] px-4 text-sm font-medium"
+              onClick={runAll}
+              disabled={allCompleted || isAnyRunning || !hasIncompleteSteps}
+            >
+              <PlayCircle className="w-4 h-4 mr-1.5" />
+              Run all steps
+            </Button>
+            {packagingStepsPending && !ownerTitle.trim() && (
+              <p className="text-[10px] text-muted-foreground text-center max-w-md">
+                Set a title in Pipeline settings (and Save) to include Package &amp; JSON in run all.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      <PipelineWaveFlow
         questionType={questionType}
+        mode={mode}
+        problemId={problemId}
         workflowSteps={workflowSteps}
+        globalLanguages={globalLanguages}
         stepStates={stepStates}
         stepUsage={stepUsage}
-        onRun={runStep}
-        onStop={stopStep}
+        enabledSubSteps={gqEnabledSubSteps}
+        ownerTitle={ownerTitle}
+        ownerDifficulty={ownerDifficulty}
+        generateTitleWithAi={generateTitleWithAi}
+        legacyNotice={legacyPipelineNotice}
+        getSubStatus={getSubStepStatus}
+        onRunStep={runStep}
+        onStopStep={stopStep}
+        onRunSubStep={runQuestionSubStep}
+        onStopSubStep={stopQuestionSubStep}
+        onRunLangStep={runLanguageSubStep}
+        onStopLangStep={stopLanguageSubStep}
       />
-
-      {downstreamSteps.length > 0 && (
-        <div className="space-y-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Test &amp; package pipeline
-          </p>
-
-          {downstreamSteps.map((stepId, index) => {
-            const state = stepStates.get(stepId);
-            if (!state) return null;
-
-            const prereq = getPrerequisiteStep(stepId, workflowSteps, questionType);
-            const previousCompleted =
-              prereq === null || stepStates.get(prereq)?.status === "completed";
-
-            return (
-              <StepCard
-                key={stepId}
-                stepNumber={questionGenSteps.length + index + 1}
-                stepState={state}
-                llmUsageStats={stepUsage[stepId]}
-                previousCompleted={previousCompleted}
-                onRun={runStep}
-                onStop={stopStep}
-                onUpdateLanguages={(langs) => {
-                  updateStepState(stepId, { enabledLanguages: langs });
-                  savePipelineState();
-                }}
-              />
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }

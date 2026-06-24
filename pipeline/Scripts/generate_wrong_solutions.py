@@ -149,11 +149,11 @@ def main():
             with open(fallback, "r", encoding="utf-8") as f:
                 description = f.read()
     if not description.strip():
-        print("Error: no problem statement found. Run generate_description first.")
+        print("Error: no problem statement found. Run generate_question first.")
         sys.exit(1)
 
     if not os.path.exists(optimal_path):
-        print(f"Error: {optimal_path} not found. Run generate_description first.")
+        print(f"Error: {optimal_path} not found. Run generate_question first.")
         sys.exit(1)
     with open(optimal_path, "r", encoding="utf-8") as f:
         optimal_solution = f.read()

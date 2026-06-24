@@ -16,6 +16,7 @@ a single LLM-fix retry if the generated file does not parse.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
 import sys
@@ -96,6 +97,78 @@ def _retry_fix(description: str, optimal_solution: str, failed_code: str, error:
         f"Return the corrected brute-force Python script."
     )
     return call_llm(retry_system, retry_user, purpose="code")
+
+
+def _write_crosscheck_marker(status: str, reason: str = "", mismatches: list | None = None) -> None:
+    """Always (over)write Outputs/optimal_brute_check.json so the UI/API has a fresh
+    verdict each run — a stale "mismatch" from a prior run must never linger in storage
+    after a passing re-run. status is one of: ok | skipped | mismatch."""
+    marker_path = os.path.join("Outputs", "optimal_brute_check.json")
+    payload = {"status": status, "reason": reason, "mismatches": mismatches or []}
+    try:
+        os.makedirs("Outputs", exist_ok=True)
+        with open(marker_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        print(f"(could not write cross-check marker: {e})")
+
+
+def _crosscheck_optimal_vs_brute(description: str, optimal_solution: str, brute_content: str) -> None:
+    """Run the just-generated brute against the optimal on the example inputs plus a
+    structure-aware small-input sweep. Always writes a fresh verdict to
+    `Outputs/optimal_brute_check.json` (ok | skipped | mismatch); on disagreement also
+    prints a prominent warning so the buggy reference solution is surfaced before any
+    test cases are trusted. Best-effort: never aborts the step (the brute could itself
+    be wrong) unless BRUTE_MISMATCH_FATAL=1 is set."""
+    try:
+        from benchmark_suite import (
+            crosscheck_optimal_brute,
+            extract_example_inputs,
+            is_open_ended_problem,
+        )
+    except Exception as e:  # pragma: no cover - import guard
+        print(f"(optimal-vs-brute cross-check skipped: cannot import benchmark_suite: {e})")
+        _write_crosscheck_marker("skipped", f"could not import benchmark_suite: {e}")
+        return
+
+    # Problems that accept any valid answer ("return any grid such that ...") would
+    # false-positive a plain output comparison — optimal and brute differ legitimately.
+    if is_open_ended_problem(description):
+        print("Optimal-vs-brute cross-check skipped (problem accepts multiple valid outputs).")
+        _write_crosscheck_marker("skipped", "problem accepts multiple valid outputs")
+        return
+
+    try:
+        examples = extract_example_inputs(description)
+        mismatches = crosscheck_optimal_brute(optimal_solution, brute_content, examples)
+    except Exception as e:
+        print(f"(optimal-vs-brute cross-check skipped: {e})")
+        _write_crosscheck_marker("skipped", f"cross-check error: {e}")
+        return
+
+    if not mismatches:
+        print("Optimal-vs-brute cross-check PASSED (no disagreements on sampled inputs).")
+        _write_crosscheck_marker("ok")
+        return
+
+    print("\n" + "=" * 72)
+    print("⚠️  WARNING: the reference (optimal) solution DISAGREES with the brute force.")
+    print("   The reference solution is most likely BUGGY. Test cases generated from it")
+    print("   will have WRONG expected outputs — review/fix the optimal before trusting")
+    print("   this problem. Disagreeing inputs (optimal vs brute):")
+    for d in mismatches:
+        print(f"     input={d['input'].strip()!r}  optimal={d['optimal']}  brute={d['brute']}")
+    print("=" * 72 + "\n")
+
+    _write_crosscheck_marker(
+        "mismatch",
+        "reference solution disagrees with the brute-force oracle",
+        mismatches,
+    )
+
+    if os.environ.get("BRUTE_MISMATCH_FATAL") == "1":
+        print("BRUTE_MISMATCH_FATAL=1 set — aborting so the optimal can be fixed.")
+        sys.exit(1)
 
 
 def main():
@@ -197,6 +270,12 @@ def main():
             f.write(content)
         print(f"Successfully saved brute-force oracle to: {out_path}")
         print("Dual-oracle validation will be ENABLED for test-case generation.")
+
+        # 5. Early optimal-vs-brute cross-check. The brute is an independent oracle,
+        #    so a disagreement on small structure-aware inputs strongly indicates the
+        #    reference/optimal solution is BUGGY — and every test case generated from
+        #    it would carry the wrong expected output. Surface this loudly now.
+        _crosscheck_optimal_vs_brute(description, optimal_solution, content)
 
     except SystemExit:
         raise

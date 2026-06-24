@@ -25,21 +25,19 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npm run dev"
-waitForPort = 5000
+waitForPort = 5001
 
 [workflows.workflow.metadata]
 outputType = "webview"
 
 [[ports]]
-localPort = 5000
+localPort = 5001
 externalPort = 80
 
 [userenv]
 
 [userenv.shared]
 CRON_SECRET = "0ab3b8b1a3546ca748685a37398c05a407b84a4d880a3b77c35fbbdaa0ff1b8b"
-EXEC_V2_UPLOAD_MODE = "s3"
-EXEC_V2_ENABLE_OUTPUT_S3 = "true"
 
 [userenv.development]
 APP_URL = "https://66152dca-4f8c-41b2-b41e-e4bff91b1c17-00-3ooefx2hctsjj.worf.replit.dev"

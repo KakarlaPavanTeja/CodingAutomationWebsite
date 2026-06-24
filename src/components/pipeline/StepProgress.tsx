@@ -14,13 +14,26 @@ interface ProgressItem {
 
 // Parse log lines to extract structured progress for each step type
 function parseProgress(
-  stepId: StepId,
+  stepId: string,
   logs: LogLine[],
   isRunning: boolean,
   exitCode: number | null,
   enabledLanguages?: string[]
 ): ProgressItem[] {
-  const lines = logs.map((l) => l.line);
+  const legacyQuestionKeys: Record<string, string> = {
+    generate_description: "description",
+    enforce_naming: "naming",
+    generate_titles: "titles",
+    generate_difficulty: "difficulty",
+    generate_topics: "topics",
+    translate_cpp: "translate_cpp",
+    translate_java: "translate_java",
+    translate_nodejs: "translate_nodejs",
+  };
+  const questionKey =
+    legacyQuestionKeys[stepId] ??
+    (stepId.startsWith("generate_question__") ? stepId.slice("generate_question__".length) : stepId);
+
   const items: ProgressItem[] = [];
 
   const questionGenProgress = (patterns: RegExp[], done: RegExp[], label: string): ProgressItem[] => {
@@ -28,48 +41,48 @@ function parseProgress(
     return extractSteps(steps, logs, isRunning);
   };
 
-  if (stepId === "generate_description") {
+  if (questionKey === "description") {
     return questionGenProgress(
       [/STEP: Description Creation/i],
       [/✓ Description created/i],
       "Generating Description"
     );
   }
-  if (stepId === "enforce_naming") {
+  if (questionKey === "naming") {
     return questionGenProgress(
       [/STEP: Naming Enforcement/i],
       [/✓ Given code updated|skipping function-signature/i],
       "Enforcing Naming"
     );
   }
-  if (stepId === "generate_titles") {
+  if (questionKey === "titles") {
     return questionGenProgress([/STEP: Generating Titles/i], [/✓ Titles generated/i], "Generating Titles");
   }
-  if (stepId === "generate_difficulty") {
+  if (questionKey === "difficulty") {
     return questionGenProgress(
       [/STEP: Generating Difficulty/i],
       [/✓ Difficulty generated|owner-set difficulty/i],
       "Estimating Difficulty"
     );
   }
-  if (stepId === "generate_topics") {
+  if (questionKey === "topics") {
     return questionGenProgress([/STEP: Generating Topics/i], [/✓ Topics generated/i], "Classifying Topics");
   }
-  if (stepId === "translate_cpp") {
+  if (questionKey === "translate_cpp") {
     return questionGenProgress(
       [/Converting to C\+\+/i],
       [/✓ Solutions saved/i],
       "Translating to C++"
     );
   }
-  if (stepId === "translate_java") {
+  if (questionKey === "translate_java") {
     return questionGenProgress(
       [/Converting to Java/i],
       [/✓ Solutions saved/i],
       "Translating to Java"
     );
   }
-  if (stepId === "translate_nodejs") {
+  if (questionKey === "translate_nodejs") {
     return questionGenProgress(
       [/Converting to Node\.js/i],
       [/✓ Solutions saved/i],
@@ -287,7 +300,7 @@ function StatusIcon({ status }: { status: ProgressItem["status"] }) {
 }
 
 interface StepProgressProps {
-  stepId: StepId;
+  stepId: string;
   logs: LogLine[];
   isRunning: boolean;
   exitCode: number | null;

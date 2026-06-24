@@ -2,7 +2,52 @@ import { NextRequest, NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { db } from "@/lib/db";
-import { problems, pipelineRuns } from "@/lib/db/schema";
+import { problems, pipelineRuns, pipelineLogs, llmUsage } from "@/lib/db/schema";
+import {
+  formatPipelineRunStepDisplay,
+  resolvePipelineRunStepKey,
+} from "@/lib/pipeline-run-label";
+import { aggregateUsageRows, matchUsageRowsForRun } from "@/lib/pipeline-usage-match";
+import { reconcileStalePipelineRuns } from "@/lib/reconcile-pipeline-runs";
+import { getObjectString } from "@/lib/object-storage";
+
+type OptimalWarning = {
+  reason: string;
+  mismatches: { input: string; optimal: string; brute: string }[];
+};
+
+/**
+ * Read the optimal-vs-brute cross-check verdict written by generate_brute_force.py.
+ * Returns a warning only when the reference solution disagreed with the brute force
+ * (status "mismatch"); ok/skipped/absent all mean "no warning".
+ */
+async function readOptimalWarning(problemId: string): Promise<OptimalWarning | null> {
+  try {
+    const raw = await getObjectString(`${problemId}/outputs/optimal_brute_check.json`);
+    const parsed = JSON.parse(raw) as {
+      status?: string;
+      reason?: string;
+      mismatches?: { input?: string; optimal?: string; brute?: string }[];
+    };
+    if (parsed?.status !== "mismatch") return null;
+    return {
+      reason:
+        typeof parsed.reason === "string" && parsed.reason
+          ? parsed.reason
+          : "Reference solution disagrees with the brute-force oracle",
+      mismatches: (Array.isArray(parsed.mismatches) ? parsed.mismatches : [])
+        .slice(0, 5)
+        .map((m) => ({
+          input: String(m?.input ?? ""),
+          optimal: String(m?.optimal ?? ""),
+          brute: String(m?.brute ?? ""),
+        })),
+    };
+  } catch {
+    // No marker (older problem / step not run) or unreadable → no warning.
+    return null;
+  }
+}
 
 export async function GET(
   request: NextRequest,
@@ -21,11 +66,40 @@ export async function GET(
     return NextResponse.json({ error: "Problem not found" }, { status: 404 });
   }
 
+  await reconcileStalePipelineRuns(id);
+
   const runs = await db
-    .select()
+    .select({
+      id: pipelineRuns.id,
+      problemId: pipelineRuns.problemId,
+      userId: pipelineRuns.userId,
+      stepId: pipelineRuns.stepId,
+      status: pipelineRuns.status,
+      exitCode: pipelineRuns.exitCode,
+      startedAt: pipelineRuns.startedAt,
+      finishedAt: pipelineRuns.finishedAt,
+      logsSummary: pipelineRuns.logsSummary,
+      pid: pipelineRuns.pid,
+      logStepId: pipelineLogs.stepId,
+      logContent: pipelineLogs.content,
+    })
     .from(pipelineRuns)
+    .leftJoin(pipelineLogs, eq(pipelineLogs.runId, pipelineRuns.id))
     .where(eq(pipelineRuns.problemId, id))
     .orderBy(desc(pipelineRuns.startedAt));
+
+  const usageRows = await db.select().from(llmUsage).where(eq(llmUsage.problemId, id));
+
+  const optimalWarning = await readOptimalWarning(id);
+
+  const usageSummary = aggregateUsageRows(
+    usageRows.map((row) => ({
+      model: row.model,
+      promptTokens: row.promptTokens,
+      completionTokens: row.completionTokens,
+      costUsd: row.costUsd,
+    }))
+  );
 
   // Snake-case for legacy frontend
   const problemOut = {
@@ -47,20 +121,54 @@ export async function GET(
     deleted_at: problem.deletedAt,
   };
 
-  const runsOut = runs.map((r) => ({
-    id: r.id,
-    problem_id: r.problemId,
-    user_id: r.userId,
-    step_id: r.stepId,
-    status: r.status,
-    exit_code: r.exitCode,
-    started_at: r.startedAt,
-    finished_at: r.finishedAt,
-    logs_summary: r.logsSummary,
-    pid: r.pid,
-  }));
+  const runsOut = runs.map((r) => {
+    const logSnippet = r.logContent?.slice(0, 4000) ?? null;
+    const runStepKey = resolvePipelineRunStepKey(r.stepId, r.logStepId, logSnippet);
+    const display = formatPipelineRunStepDisplay(runStepKey);
+    const usage = matchUsageRowsForRun(
+      usageRows,
+      runStepKey,
+      r.startedAt,
+      r.finishedAt,
+      r.status,
+      r.id
+    );
+    return {
+      id: r.id,
+      problem_id: r.problemId,
+      user_id: r.userId,
+      step_id: r.stepId,
+      run_step_key: runStepKey,
+      step_label: display.step,
+      substep_label: display.substep,
+      status: r.status,
+      exit_code: r.exitCode,
+      started_at: r.startedAt,
+      finished_at: r.finishedAt,
+      logs_summary: r.logsSummary,
+      pid: r.pid,
+      usage: usage
+        ? {
+            prompt_tokens: usage.promptTokens,
+            completion_tokens: usage.completionTokens,
+            cost_usd: usage.costUsd,
+            call_count: usage.callCount,
+          }
+        : null,
+    };
+  });
 
-  return NextResponse.json({ problem: problemOut, runs: runsOut });
+  return NextResponse.json({
+    problem: problemOut,
+    runs: runsOut,
+    optimal_warning: optimalWarning,
+    usage_summary: {
+      prompt_tokens: usageSummary.promptTokens,
+      completion_tokens: usageSummary.completionTokens,
+      cost_usd: usageSummary.costUsd,
+      call_count: usageSummary.callCount,
+    },
+  });
 }
 
 export async function PATCH(

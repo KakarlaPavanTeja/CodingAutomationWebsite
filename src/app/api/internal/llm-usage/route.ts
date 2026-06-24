@@ -46,6 +46,12 @@ export async function POST(request: NextRequest) {
     if (typeof v !== "string" || !v) return null;
     return v.length > max ? v.slice(0, max) : v;
   };
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const optUuid = (v: unknown): string | null => {
+    // The run_id column is a uuid; reject anything that isn't one so a bad value
+    // can't make the whole usage insert fail.
+    return typeof v === "string" && UUID_RE.test(v) ? v : null;
+  };
   const safeInt = (v: unknown): number => {
     const n = typeof v === "number" ? v : Number(v);
     if (!Number.isFinite(n) || n < 0) return 0;
@@ -75,6 +81,7 @@ export async function POST(request: NextRequest) {
       userId: optStr(get("userId", "user_id"), 64),
       problemName: optStr(get("problemName", "problem_name"), 200),
       stepId: optStr(get("stepId", "step_id"), 100),
+      runId: optUuid(get("runId", "run_id")),
     });
     return NextResponse.json({ ok: true });
   } catch (err) {

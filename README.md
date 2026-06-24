@@ -221,7 +221,7 @@ All routes are in `src/app/api/`. Every protected route uses one of: `requireAut
 
 ## Authentication
 
-Custom session-cookie auth (no Supabase, no NextAuth).
+Custom session-cookie auth (no NextAuth).
 
 **Login flow:**
 1. POST `/api/auth/login` with email + password
@@ -257,10 +257,7 @@ Set these in **Replit Secrets** (production) or `.env.local` (Cursor local dev �
 | `PUBLIC_OBJECT_SEARCH_PATHS` | ✅ | Replit App Storage search paths |
 | `PRIVATE_OBJECT_DIR` | ✅ | Replit App Storage private dir |
 | `APP_URL` | (prod) | Trusted base URL for emails |
-| `STORAGE_BUCKET` | (legacy) | Old Supabase bucket name — only used by migration scripts |
 | `OPENROUTER_MODEL_{TESTCASES,CHAT,CODE,ENRICHMENT,EDITORIAL}` | optional | Override the OpenRouter model per purpose (defaults: chat/enrichment = `openai/gpt-5.4`, testcases = `google/gemini-2.5-pro`, code = `openai/gpt-5.3-codex`, editorial = `openai/gpt-5.5`) |
-
-**Legacy / safe to delete** (kept temporarily, no runtime use): `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`.
 
 ---
 
@@ -283,11 +280,11 @@ python3 -m pip install -r pipeline/requirements.txt
 # 5. Sync DB schema
 npm run db:push
 
-# 6. Run dev server (port 5000)
+# 6. Run dev server (port 5001)
 npm run dev
 ```
 
-Then open `http://localhost:5000`. The Python pipeline is invoked from `src/app/api/pipeline/run/route.ts` — `PIPELINE_ROOT` defaults to `path.join(process.cwd(), "pipeline")`, so it works the same locally.
+Then open `http://localhost:5001`. The Python pipeline is invoked from `src/app/api/pipeline/run/route.ts` — `PIPELINE_ROOT` defaults to `path.join(process.cwd(), "pipeline")`, so it works the same locally.
 
 ### GitHub → Replit Auto-Sync
 
@@ -309,7 +306,7 @@ This Replit project is connected to `github.com/KakarlaPavanTeja/CodingAutomatio
 
 | Command | Purpose |
 |---|---|
-| `npm run dev` | Dev server on port 5000 (Turbopack) |
+| `npm run dev` | Dev server on port 5001 (Turbopack) |
 | `npm run build` | Production build |
 | `npm run start` | Production server |
 | `npm run lint` | ESLint |
@@ -324,7 +321,7 @@ Deployed via **Replit Publishing** (Autoscale). Configuration in `.replit`:
 
 - Build: `npm run build`
 - Start: `npm run start`
-- Port: 5000
+- Port: 5001
 
 To deploy: open Publishing panel → Deploy. Production URL is on `*.replit.app` (or custom domain).
 
@@ -344,13 +341,9 @@ To deploy: open Publishing panel → Deploy. Production URL is on `*.replit.app`
 
 ---
 
-## Operational Notes (handed off from migration)
+## Operational Notes
 
-The project was fully migrated off Supabase. See `replit.md` for the migration log. Outstanding manual cleanup:
-
-- Rotate the old Supabase DB password (it was exposed during the migration window)
 - An old NxtWave gateway API key remains in **git history** (file: `pipeline/Scripts/llm_client_niat.py`, since deleted) — please rotate it via NxtWave IT
-- Optionally pause/delete the old Supabase project once you've confirmed Replit is the system of record
 
 ---
 

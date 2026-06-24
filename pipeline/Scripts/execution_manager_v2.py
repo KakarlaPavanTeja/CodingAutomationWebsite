@@ -22,10 +22,6 @@ S3_PREFIX = "testing-coding-question-test-cases/"
 AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
 AWS_PROFILE = os.environ.get("AWS_PROFILE")
 
-UPLOAD_MODE = os.environ.get("EXEC_V2_UPLOAD_MODE", "proxy").strip().lower()  # proxy | s3
-UPLOAD_SERVICE_URL = os.environ.get("EXEC_V2_UPLOAD_SERVICE_URL", "").strip()
-UPLOAD_SERVICE_TOKEN = os.environ.get("EXEC_V2_UPLOAD_SERVICE_TOKEN", "").strip()
-
 # Testcase OUTPUTS are always sent inline as base64 — never uploaded to S3.
 # (Only large INPUTS use S3; see _build_testcase_io_objects.)
 
@@ -159,31 +155,6 @@ def _upload_blob_to_s3(local_path, object_name):
         return False, str(e)
 
 
-def _upload_blob_via_service(local_path, object_name):
-    if not UPLOAD_SERVICE_URL:
-        return False, "EXEC_V2_UPLOAD_SERVICE_URL is not set"
-    url = f"{UPLOAD_SERVICE_URL.rstrip('/')}/upload"
-    headers = {}
-    if UPLOAD_SERVICE_TOKEN:
-        headers["Authorization"] = f"Bearer {UPLOAD_SERVICE_TOKEN}"
-    try:
-        with open(local_path, "rb") as f:
-            files = {"file": (object_name, f, "text/plain")}
-            data = {"object_name": object_name}
-            resp = requests.post(url, files=files, data=data, headers=headers, timeout=30)
-        resp.raise_for_status()
-        body = resp.json()
-        key = (body.get("key") or "").strip()
-        public_url = body.get("public_url")
-        if key:
-            return True, _s3_virtual_hosted_public_url(key)
-        if not public_url:
-            return False, f"Invalid response from upload service: {body}"
-        return True, public_url
-    except Exception as e:
-        return False, str(e)
-
-
 def _write_blob_and_get_s3_url(base_dir, question_id, question_name, order, io_kind, contents):
     qid = (question_id or "unknown").strip()
     qname = _slugify(question_name)
@@ -195,10 +166,7 @@ def _write_blob_and_get_s3_url(base_dir, question_id, question_name, order, io_k
     with open(local_path, "w", encoding="utf-8") as f:
         f.write(contents or "")
 
-    if UPLOAD_MODE == "proxy":
-        uploaded, info = _upload_blob_via_service(local_path, filename)
-    else:
-        uploaded, info = _upload_blob_to_s3(local_path, filename)
+    uploaded, info = _upload_blob_to_s3(local_path, filename)
     if uploaded:
         return info, local_path, True
     print(f"  S3 upload error for {filename}: {info}", flush=True)
@@ -207,24 +175,19 @@ def _write_blob_and_get_s3_url(base_dir, question_id, question_name, order, io_k
 
 def _print_runtime_config(base_dir):
     env_candidates = (
-        ".env.execution_manager_v2.example",
         ".env.execution_manager_v2",
         ".env",
     )
     found_env_files = [name for name in env_candidates if os.path.exists(os.path.join(base_dir, name))]
     print("\n[execution_manager_v2 config]")
-    print(f"  Upload mode: {UPLOAD_MODE}")
-    if UPLOAD_MODE == "proxy":
-        print(f"  Upload service URL set: {'yes' if bool(UPLOAD_SERVICE_URL) else 'no'}")
-    else:
-        print(f"  AWS region: {AWS_REGION}")
-        print(f"  S3 bucket: {S3_BUCKET}")
+    print(f"  AWS region: {AWS_REGION}")
+    print(f"  S3 bucket: {S3_BUCKET}")
     print("  Output upload: inline base64 only (S3 disabled for outputs)")
     if found_env_files:
         print(f"  Env files found: {', '.join(found_env_files)}")
     else:
         print("  Env files found: none")
-        print("  Note: create .env.execution_manager_v2 for local overrides.")
+        print("  Note: create .env.execution_manager_v2 for local AWS/S3 overrides.")
 
 
 def _warn_if_upload_env_incomplete():
@@ -232,18 +195,9 @@ def _warn_if_upload_env_incomplete():
     if _UPLOAD_CONFIG_WARNING_PRINTED:
         return
 
-    if UPLOAD_MODE == "proxy" and not UPLOAD_SERVICE_URL:
+    if not S3_BUCKET:
         print(
-            "\n[config warning] EXEC_V2_UPLOAD_MODE=proxy but EXEC_V2_UPLOAD_SERVICE_URL is not set.\n"
-            "Large testcase inputs will fall back to inline base64 (no input_s3_url).\n"
-            "Set EXEC_V2_UPLOAD_SERVICE_URL in .env.execution_manager_v2 or shell env."
-        )
-        _UPLOAD_CONFIG_WARNING_PRINTED = True
-        return
-
-    if UPLOAD_MODE == "s3" and not S3_BUCKET:
-        print(
-            "\n[config warning] EXEC_V2_UPLOAD_MODE=s3 but S3_BUCKET is empty.\n"
+            "\n[config warning] S3_BUCKET is empty.\n"
             "Large testcase inputs will fall back to inline base64 (no input_s3_url)."
         )
         _UPLOAD_CONFIG_WARNING_PRINTED = True
@@ -819,7 +773,10 @@ def run_all_tests_nonfunction(base_dir=None, selected_lang=None):
     elif selected_lang:
         mapped_lang = None
         for k in NONFUNCTION_LANG_CONFIG.keys():
-            if k.lower() == selected_lang or k.lower().replace(".", "") == selected_lang:
+            # See run_all_tests_v2: normalize "C++" -> "cpp" so single-lang
+            # execute doesn't fall back to running every language.
+            norm = k.lower().replace(".", "").replace("+", "p")
+            if k.lower() == selected_lang or norm == selected_lang:
                 mapped_lang = k
                 break
         if mapped_lang:
@@ -1017,7 +974,12 @@ def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
     elif selected_lang:
         mapped_lang = None
         for k in LANG_CONFIG.keys():
-            if k.lower() == selected_lang or k.lower().replace(".", "") == selected_lang:
+            # Normalize the same way as the multi-lang path so frontend ids map:
+            # "C++" -> "cpp", "Node.js"/"NodeJS" -> "nodejs", etc. Without the
+            # "+" -> "p" step, "cpp" failed to match "C++" and the run silently
+            # fell back to executing ALL languages (Python/Java/Node too).
+            norm = k.lower().replace(".", "").replace("+", "p")
+            if k.lower() == selected_lang or norm == selected_lang:
                 mapped_lang = k
                 break
         if mapped_lang:
@@ -1252,25 +1214,6 @@ def main():
         print(f"\n[execution_manager_v2] Running in NON-FUNCTION mode")
     _print_runtime_config(base_dir)
     _warn_if_upload_env_incomplete()
-
-    if not is_nonfunction and UPLOAD_MODE == "proxy":
-        # Health check: ensure the proxy upload service is alive before starting execution.
-        # Only relevant in proxy mode — in direct S3 mode (EXEC_V2_UPLOAD_MODE=s3) we upload
-        # straight to S3 via boto3, so there is no proxy service to health-check.
-        S3_HEALTH_URL = f"{UPLOAD_SERVICE_URL.rstrip('/')}/health" if UPLOAD_SERVICE_URL else ""
-        if S3_HEALTH_URL:
-            print(f"\nChecking S3 upload service health: {S3_HEALTH_URL}")
-            try:
-                health_resp = requests.get(S3_HEALTH_URL, timeout=300)
-                health_data = health_resp.json()
-                if health_data.get("ok"):
-                    print("S3 upload service is live.")
-                else:
-                    print(f"Warning: S3 upload service returned unexpected response: {health_data}")
-                    print("Proceeding anyway — large testcases may fall back to inline base64.")
-            except Exception as e:
-                print(f"Warning: S3 upload service health check failed: {e}")
-                print("Proceeding anyway — large testcases may fall back to inline base64.")
 
     if is_nonfunction:
         all_passed, all_results, testcases = run_all_tests_nonfunction(base_dir=base_dir, selected_lang=selected_lang)

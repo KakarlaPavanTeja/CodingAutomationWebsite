@@ -115,7 +115,7 @@ def generate_enrichment():
     
     print(f"\n✅ SUCCESS! Enrichment data saved to {output_path}")
 
-    print("✓ Enrichment usage tracked per-call to Supabase")
+    print("✓ Enrichment usage tracked per-call via internal API")
 
 if __name__ == "__main__":
     generate_enrichment()

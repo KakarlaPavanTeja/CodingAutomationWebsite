@@ -162,6 +162,7 @@ def update_usage(
     user_id = os.environ.get("PIPELINE_USER_ID") or None
     problem_id = os.environ.get("PIPELINE_PROBLEM_ID") or None
     resolved_step = step_id or os.environ.get("PIPELINE_STEP_ID") or None
+    run_id = os.environ.get("PIPELINE_RUN_ID") or None
 
     row = {
         "id": str(uuid.uuid4()),
@@ -171,6 +172,8 @@ def update_usage(
         "model": model,
         "purpose": purpose,
         "step_id": resolved_step,
+        # Exact pipeline run id for precise usage attribution (P1-M1).
+        "run_id": run_id,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,

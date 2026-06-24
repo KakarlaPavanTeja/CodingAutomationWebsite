@@ -1,38 +1,24 @@
 /**
- * Ad-hoc, read-only query tool for the Replit (and local) Postgres DBs.
+ * Ad-hoc, read-only query tool for the Postgres DB.
  *
- * Connection strings are read from `.env.replit.local` (gitignored):
- *   REPLIT_PROD_DATABASE_URL=postgresql://...neon.tech/...?sslmode=require
- *   REPLIT_DEV_DATABASE_URL=postgresql://...neon.tech/...?sslmode=require
- * The `local` target falls back to DATABASE_URL from `.env.local`.
+ * Reads DATABASE_URL from `.env.local` (gitignored).
  *
  * Usage:
  *   npx tsx scripts/db.mts --list
- *   npx tsx scripts/db.mts --env prod --tables
- *   npx tsx scripts/db.mts --env prod --problem 6ab80b66
- *   npx tsx scripts/db.mts --env dev  --sql "select id, name, status from problems order by created_at desc limit 10"
+ *   npx tsx scripts/db.mts --tables
+ *   npx tsx scripts/db.mts --problem 6ab80b66
+ *   npx tsx scripts/db.mts --sql "select id, name, status from problems order by created_at desc limit 10"
  *
  * Safety: queries run inside a READ ONLY transaction. Pass --allow-write to disable
- * (you almost never should against prod).
+ * (you almost never should against a shared database).
  */
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { config as loadEnv } from "dotenv";
 import postgres from "postgres";
 
-// dotenv does not override already-set vars, so the first file to define a key wins.
-for (const file of [".env.replit.local", ".env.local"]) {
-  const path = resolve(process.cwd(), file);
-  if (existsSync(path)) loadEnv({ path, quiet: true });
-}
-
-type Target = "prod" | "dev" | "local";
-
-const TARGET_ENV: Record<Target, string> = {
-  prod: "REPLIT_PROD_DATABASE_URL",
-  dev: "REPLIT_DEV_DATABASE_URL",
-  local: "DATABASE_URL",
-};
+const envPath = resolve(process.cwd(), ".env.local");
+if (existsSync(envPath)) loadEnv({ path: envPath, quiet: true });
 
 const WRITE_KEYWORDS = new Set([
   "insert", "update", "delete", "drop", "alter", "truncate", "create",
@@ -42,7 +28,7 @@ const WRITE_KEYWORDS = new Set([
 
 function parseArgs(argv: string[]): Record<string, string | boolean> {
   const short: Record<string, string> = {
-    e: "env", q: "sql", p: "problem", l: "list", t: "tables", h: "help",
+    q: "sql", p: "problem", l: "list", t: "tables", h: "help",
   };
   const out: Record<string, string | boolean> = {};
   for (let i = 0; i < argv.length; i++) {
@@ -93,7 +79,6 @@ function connect(url: string) {
 }
 
 function assertReadOnly(query: string) {
-  // Strip leading parens/whitespace, grab first token of each statement.
   for (const stmt of query.split(";")) {
     const first = stmt.trim().replace(/^\(+/, "").split(/\s+/)[0]?.toLowerCase();
     if (first && WRITE_KEYWORDS.has(first)) {
@@ -167,19 +152,18 @@ function printHelp() {
   console.log(`db.mts — read-only Postgres query tool
 
 Flags:
-  --env, -e <prod|dev|local>   which database to hit
   --problem, -p <uuid|prefix>  dump a problem + its runs/logs/state/usage
   --sql, -q "<query>"          run an arbitrary SELECT (read-only tx)
   --tables, -t                 list tables in the public schema
-  --list, -l                   show which targets are configured
+  --list, -l                   show whether DATABASE_URL is configured
   --limit <n>                  max rows to print per result (default 100)
   --allow-write                disable the read-only guard (dangerous)
   --help, -h                   this help
 
 Examples:
   npx tsx scripts/db.mts --list
-  npx tsx scripts/db.mts -e prod -p 6ab80b66
-  npx tsx scripts/db.mts -e dev  -q "select id, name, status from problems limit 20"`);
+  npx tsx scripts/db.mts -p 6ab80b66
+  npx tsx scripts/db.mts -q "select id, name, status from problems limit 20"`);
 }
 
 async function main() {
@@ -190,33 +174,25 @@ async function main() {
     return;
   }
 
-  if (args.list || (!args.env && !args.sql && !args.problem && !args.tables)) {
-    console.log("Configured targets (from .env.replit.local / .env.local):");
-    for (const t of ["prod", "dev", "local"] as Target[]) {
-      const url = process.env[TARGET_ENV[t]];
-      console.log(`  ${t.padEnd(5)} ${TARGET_ENV[t].padEnd(24)} ${url ? maskUrl(url) : "(not set)"}`);
-    }
+  const url = process.env.DATABASE_URL;
+
+  if (args.list || (!args.sql && !args.problem && !args.tables)) {
+    console.log("Configured database (from .env.local):");
+    console.log(`  DATABASE_URL  ${url ? maskUrl(url) : "(not set)"}`);
     if (!args.list) {
       console.log("\nNothing to do. Pass --help for usage.");
     }
     return;
   }
 
-  const target = String(args.env || "") as Target;
-  if (!["prod", "dev", "local"].includes(target)) {
-    throw new Error(`--env must be one of prod|dev|local (got "${args.env ?? ""}")`);
-  }
-  const url = process.env[TARGET_ENV[target]];
   if (!url) {
-    throw new Error(
-      `${TARGET_ENV[target]} is not set. Add it to .env.replit.local (or .env.local for local).`,
-    );
+    throw new Error("DATABASE_URL is not set. Add it to .env.local.");
   }
 
   const limit = args.limit ? Math.max(1, parseInt(String(args.limit), 10) || 100) : 100;
   const sql = connect(url);
   try {
-    console.log(`Connected to ${target}: ${maskUrl(url)}`);
+    console.log(`Connected: ${maskUrl(url)}`);
 
     if (args.tables) {
       const rows = await sql`

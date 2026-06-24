@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
-import { getProcessPidAsync } from "@/lib/process-registry";
+import { eq } from "drizzle-orm";
+import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
+import { recomputeProblemStatus } from "@/lib/reconcile-pipeline-runs";
 import { requireAuthApi } from "@/lib/auth/server";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { db } from "@/lib/db";
-import { pipelineRuns, pipelineStates, problems } from "@/lib/db/schema";
+import { pipelineRuns, pipelineStates } from "@/lib/db/schema";
+import { getProcessPidAsync } from "@/lib/process-registry";
 
 export async function POST(request: NextRequest) {
   const { runId } = await request.json();
@@ -49,21 +51,29 @@ export async function POST(request: NextRequest) {
 
   if (stateRows[0]) {
     const stepStatuses = (stateRows[0].stepStatuses as Record<string, unknown>) || {};
-    stepStatuses[run.stepId] = {
-      status: "failed",
-      exitCode: -1,
-      endTime: Date.now(),
-    };
-    await db
-      .update(pipelineStates)
-      .set({ stepStatuses, updatedAt: new Date() })
-      .where(eq(pipelineStates.problemId, run.problemId));
+    const { parentStepId } = parsePipelineRunStepKey(run.stepId);
+    // Only mark the PARENT failed when stopping the atomic parent run itself.
+    // Stopping one GQ sub-step or one language tile (run.stepId is a composite
+    // "parent__sub" key) must NOT flip the whole parent to failed and discard
+    // its sibling progress — the client patches just that sub-run (P1-C2).
+    const isAtomicParentRun = run.stepId === parentStepId;
+    if (isAtomicParentRun) {
+      stepStatuses[parentStepId] = {
+        status: "failed",
+        exitCode: -1,
+        endTime: Date.now(),
+      };
+      await db
+        .update(pipelineStates)
+        .set({ stepStatuses, updatedAt: new Date() })
+        .where(eq(pipelineStates.problemId, run.problemId));
+    }
   }
 
-  await db
-    .update(problems)
-    .set({ status: "draft", updatedAt: new Date() })
-    .where(and(eq(problems.id, run.problemId), eq(problems.status, "processing")));
+  // Re-derive problems.status from the run rows in one place (P1-H6). This run
+  // is now exitCode -1; if siblings are still running the problem stays
+  // "processing", otherwise it drops to "draft".
+  await recomputeProblemStatus(run.problemId);
 
   const pid = await getProcessPidAsync(runId);
   if (pid) {

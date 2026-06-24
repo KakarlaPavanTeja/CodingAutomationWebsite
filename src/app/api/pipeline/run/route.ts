@@ -4,7 +4,7 @@ import path from "path";
 import { mkdirSync, createWriteStream } from "fs";
 import { readFile } from "fs/promises";
 import { eq } from "drizzle-orm";
-import { buildCommand, getWorkflowSteps, STEP_CONFIGS, LANGUAGES } from "@/lib/pipeline-config";
+import { buildCommand, getStepConfig, getAllTrackedStepIds, STEP_CONFIGS, LANGUAGES } from "@/lib/pipeline-config";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { db } from "@/lib/db";
 import { problems, pipelineRuns, pipelineStates } from "@/lib/db/schema";
@@ -15,9 +15,34 @@ import {
   uploadLog,
   cleanupTempDir,
   startPeriodicSync,
+  mirrorInputsFromDir,
 } from "@/lib/storage-sync";
 import { registerProcess, unregisterProcess } from "@/lib/process-registry";
+import { pipelineRunLogKey } from "@/lib/pipeline-run-label";
+import { recomputeProblemStatus } from "@/lib/reconcile-pipeline-runs";
+import { resolveOpenRouterBaseUrl } from "@/lib/openrouter";
 import type { RunRequest, PipelineMode, QuestionType, StepId } from "@/types/pipeline";
+
+async function markRunTerminal(
+  runId: string | null,
+  status: "failed" | "completed",
+  exitCode: number
+): Promise<void> {
+  if (!runId) return;
+  try {
+    await db
+      .update(pipelineRuns)
+      .set({
+        status,
+        exitCode,
+        finishedAt: new Date(),
+        pid: null,
+      })
+      .where(eq(pipelineRuns.id, runId));
+  } catch {
+    // Non-fatal
+  }
+}
 
 /**
  * Resolve the base URL the spawned Python pipeline uses to POST usage/cost rows
@@ -25,7 +50,7 @@ import type { RunRequest, PipelineMode, QuestionType, StepId } from "@/types/pip
  *
  * The base MUST point at the instance that owns the current request's database:
  *  - In the deployment (REPLIT_DEPLOYMENT set) → the deployment's own public
- *    origin. `127.0.0.1:5000` and the dev domain both fail there: the former
+ *    origin. `127.0.0.1:5001` and the dev domain both fail there: the former
  *    returns a 404 HTML page, the latter (if even set) targets the *dev*
  *    workspace, so every cost row silently degrades to "local only" and never
  *    reaches the production database.
@@ -51,12 +76,29 @@ function resolveInternalApiUrl(): string {
     if (firstDomain) return `https://${firstDomain}`;
   }
 
-  return `http://127.0.0.1:${process.env.PORT || 5000}`;
+  return `http://127.0.0.1:${process.env.PORT || 5001}`;
+}
+
+function stepMayCallLlm(stepId: StepId): boolean {
+  const usage = getStepConfig(stepId).llmUsage;
+  return usage === "llm" || usage === "conditional";
+}
+
+function resolveOpenRouterApiKey(): string | undefined {
+  return process.env.OPENROUTER_API_KEY?.trim() || undefined;
+}
+
+/** Env for spawned Python — OpenRouter only; strip direct provider keys. */
+function pipelineSpawnEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {
+  const env = { ...process.env, ...overrides };
+  delete env.OPENAI_API_KEY;
+  delete env.ANTHROPIC_API_KEY;
+  return env;
 }
 
 export async function POST(request: NextRequest) {
   const body: RunRequest = await request.json();
-  const { stepId, mode, subSteps, languages, testcaseCount, problemId } = body;
+  const { stepId, mode, subSteps, languages, testcaseCount, problemId, runKey } = body;
 
   // Validate problemId shape before any DB work.
   let safeProblemId: string;
@@ -90,15 +132,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid subSteps" }, { status: 400 });
     }
   }
+  // testcaseCount is optional. 0 / unset means "let the generator auto-scale"
+  // (buildCommand omits --count for falsy values), so only a positive number
+  // outside the supported range is actually invalid.
   if (
     testcaseCount !== undefined &&
     testcaseCount !== null &&
     (typeof testcaseCount !== "number" ||
       !Number.isInteger(testcaseCount) ||
-      testcaseCount < 1 ||
+      testcaseCount < 0 ||
       testcaseCount > 1000)
   ) {
     return NextResponse.json({ error: "Invalid testcaseCount" }, { status: 400 });
+  }
+  if (
+    runKey !== undefined &&
+    (typeof runKey !== "string" || !/^[a-z0-9_]{1,64}$/.test(runKey))
+  ) {
+    return NextResponse.json({ error: "Invalid runKey" }, { status: 400 });
   }
 
   // Auth + ownership/admin gate.
@@ -126,14 +177,23 @@ export async function POST(request: NextRequest) {
   }
   const storedQuestionType = cfgRows[0].questionType as QuestionType;
   const storedMode = cfgRows[0].mode as PipelineMode;
-  // The owner-set difficulty/score are FINAL: when present they override the
-  // pipeline's auto-generated difficulty and difficulty-derived weightage.
   const ownerDifficulty = cfgRows[0].difficulty ?? "";
   const ownerScore = cfgRows[0].score != null ? String(cfgRows[0].score) : "";
 
-  // Reject a step that isn't part of this problem's workflow.
-  const workflowSteps = getWorkflowSteps(storedQuestionType, storedMode);
-  if (!workflowSteps.includes(stepId as StepId)) {
+  const stateRows = await db
+    .select({ stepConfigs: pipelineStates.stepConfigs })
+    .from(pipelineStates)
+    .where(eq(pipelineStates.problemId, safeProblemId))
+    .limit(1);
+  const globalCfg = (stateRows[0]?.stepConfigs as Record<string, unknown> | undefined)?.[
+    "__global__"
+  ] as { ownerTitle?: string; defaultTagNames?: string; generateTitleWithAi?: boolean } | undefined;
+  const ownerTitle = globalCfg?.ownerTitle?.trim() ?? "";
+  const defaultTagNames = globalCfg?.defaultTagNames?.trim() ?? "";
+
+  // Reject a step that isn't tracked for this problem (workflow + GQ-embedded e.g. brute force).
+  const allowedSteps = getAllTrackedStepIds(storedQuestionType, storedMode);
+  if (!allowedSteps.includes(stepId as StepId)) {
     return NextResponse.json(
       { error: "Step is not part of this problem's workflow" },
       { status: 400 }
@@ -149,12 +209,28 @@ export async function POST(request: NextRequest) {
   }
   const effectiveMode: PipelineMode = storedMode;
 
+  if (stepMayCallLlm(stepId as StepId) && !resolveOpenRouterApiKey()) {
+    return NextResponse.json(
+      {
+        error:
+          "OPENROUTER_API_KEY is not set. Add it to .env.local (https://openrouter.ai/keys).",
+      },
+      { status: 503 }
+    );
+  }
+
   const pythonPath = process.env.PYTHON_PATH || "python3";
 
   const pipelineRoot = process.env.PIPELINE_ROOT || path.join(process.cwd(), "pipeline");
   const scriptsDir = process.env.PIPELINE_SCRIPTS_DIR || path.join(pipelineRoot, "Scripts");
 
   const { script, args } = buildCommand(stepId, effectiveMode, subSteps, languages, testcaseCount);
+
+  const logStepKey = pipelineRunLogKey(
+    stepId as StepId,
+    subSteps,
+    runKey
+  );
 
   const scriptBasename = path.basename(script);
   const scriptPath = path.join(scriptsDir, scriptBasename);
@@ -184,7 +260,7 @@ export async function POST(request: NextRequest) {
         .values({
           problemId: safeProblemId,
           userId: user.id,
-          stepId,
+          stepId: logStepKey,
           status: "running",
         })
         .returning({ id: pipelineRuns.id });
@@ -198,7 +274,20 @@ export async function POST(request: NextRequest) {
   let tmpDir: string;
   try {
     tmpDir = await createTempWorkspace(safeProblemId);
+    await mirrorInputsFromDir(safeProblemId, path.join(tmpDir, "Inputs"));
   } catch (err) {
+    await markRunTerminal(runId, "failed", 1);
+    // We optimistically set problems.status = "processing" above; the process
+    // never started, so restore the prior status instead of stranding the
+    // problem in "processing" forever (reconcile only scans running runs) (P1-H7).
+    try {
+      await db
+        .update(problems)
+        .set({ status: previousStatus ?? "draft", updatedAt: new Date() })
+        .where(eq(problems.id, safeProblemId));
+    } catch {
+      // Non-fatal
+    }
     return NextResponse.json(
       { error: `Failed to create workspace: ${err instanceof Error ? err.message : "Unknown"}` },
       { status: 500 }
@@ -207,7 +296,7 @@ export async function POST(request: NextRequest) {
 
   const logsDir = path.join(tmpDir, "logs");
   mkdirSync(logsDir, { recursive: true });
-  const logFilePath = path.join(logsDir, `${stepId}.log`);
+  const logFilePath = path.join(logsDir, `${logStepKey}.log`);
 
   const outputsDir = path.join(tmpDir, "Outputs");
   const periodicSync = startPeriodicSync(safeProblemId, outputsDir, 5000);
@@ -218,7 +307,7 @@ export async function POST(request: NextRequest) {
       try {
         const logContent = await readFile(logFilePath, "utf-8").catch(() => "");
         if (logContent) {
-          await uploadLog(safeProblemId, stepId, runId!, logContent);
+          await uploadLog(safeProblemId, logStepKey, runId!, logContent);
         }
       } catch {
         // Non-fatal
@@ -231,21 +320,27 @@ export async function POST(request: NextRequest) {
 
   const proc = spawn(pythonPath, [scriptPath, ...args], {
     cwd: tmpDir,
-    env: {
-      ...process.env,
+    env: pipelineSpawnEnv({
       PYTHONUNBUFFERED: "1",
       PIPELINE_BASE_DIR: tmpDir,
       PIPELINE_USER_ID: userId || "",
       PIPELINE_PROBLEM_ID: safeProblemId,
-      PIPELINE_STEP_ID: stepId || "",
+      PIPELINE_STEP_ID: logStepKey,
+      // Exact run id so usage rows attribute to THIS run, not a time window (P1-M1).
+      PIPELINE_RUN_ID: runId ?? "",
       // Owner-set, FINAL difficulty/score. Empty string means "not set" — the
       // pipeline then falls back to auto-generating difficulty and deriving the
       // weightage from it.
       PIPELINE_OWNER_DIFFICULTY: ownerDifficulty,
       PIPELINE_OWNER_SCORE: ownerScore,
+      PIPELINE_OWNER_TITLE: ownerTitle,
+      PIPELINE_DEFAULT_TAGS: defaultTagNames,
+      PIPELINE_GENERATE_TITLE_WITH_AI: globalCfg?.generateTitleWithAi ? "true" : "false",
+      PIPELINE_MODE: effectiveMode,
       // Question type so editorial_execution_manager can pick function vs
       // non-function execution without re-deriving it from disk state.
       PIPELINE_QUESTION_TYPE: storedQuestionType || "",
+      PIPELINE_ENABLED_LANGS: (languages ?? []).join(","),
       // Base URL the Python pipeline uses to POST cost/usage back to this same
       // app (`/api/internal/llm-usage`). It MUST resolve to THIS environment's
       // own running instance — in the deployment to the deployment, in dev to
@@ -253,7 +348,9 @@ export async function POST(request: NextRequest) {
       // "local only" (the row never reaches the database).
       INTERNAL_API_URL: internalApiUrl,
       INTERNAL_API_SECRET: process.env.CRON_SECRET || "",
-    },
+      OPENROUTER_API_KEY: resolveOpenRouterApiKey() ?? "",
+      OPENROUTER_BASE_URL: resolveOpenRouterBaseUrl(),
+    }),
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -278,7 +375,7 @@ export async function POST(request: NextRequest) {
   const logStream = createWriteStream(logFilePath, { flags: "w" });
   const timestamp = () => new Date().toISOString();
 
-  logStream.write(`[${timestamp()}] Starting ${stepId}...\n`);
+  logStream.write(`[${timestamp()}] Starting ${logStepKey}...\n`);
 
   let stdoutBuffer = "";
   proc.stdout?.on("data", (chunk: Buffer) => {
@@ -326,7 +423,7 @@ export async function POST(request: NextRequest) {
     try {
       const logContent = await readFile(logFilePath, "utf-8");
       if (runId) {
-        await uploadLog(safeProblemId, stepId, runId, logContent);
+        await uploadLog(safeProblemId, logStepKey, runId, logContent);
       }
     } catch {
       // Non-fatal
@@ -334,52 +431,55 @@ export async function POST(request: NextRequest) {
 
     if (runId) {
       try {
-        await db
-          .update(pipelineRuns)
-          .set({
-            status: code === 0 ? "completed" : "failed",
-            exitCode: code ?? 1,
-            finishedAt: new Date(),
-          })
-          .where(eq(pipelineRuns.id, runId));
-
-        const stateRows = await db
-          .select({ stepStatuses: pipelineStates.stepStatuses })
-          .from(pipelineStates)
-          .where(eq(pipelineStates.problemId, safeProblemId))
-          .limit(1);
-
-        if (stateRows[0]) {
-          const stepStatuses = (stateRows[0].stepStatuses as Record<string, unknown>) || {};
-          stepStatuses[stepId] = {
-            status: code === 0 ? "completed" : "failed",
-            exitCode: code ?? 1,
-            endTime: Date.now(),
-          };
-          await db
-            .update(pipelineStates)
-            .set({ stepStatuses, updatedAt: new Date() })
-            .where(eq(pipelineStates.problemId, safeProblemId));
-        }
-
-        const currRunRows = await db
+        // Detect a stop that already marked this run (exitCode === -1) BEFORE we
+        // overwrite exitCode below, otherwise the stop signal is clobbered and a
+        // force-killed run can be misreported as completed (P1-M5).
+        const priorRunRows = await db
           .select({ exitCode: pipelineRuns.exitCode })
           .from(pipelineRuns)
           .where(eq(pipelineRuns.id, runId))
           .limit(1);
-        const wasStopped = currRunRows[0]?.exitCode === -1;
+        const wasStopped = priorRunRows[0]?.exitCode === -1;
 
-        if (code !== 0 && !wasStopped) {
-          await db
-            .update(problems)
-            .set({ status: "failed", updatedAt: new Date() })
-            .where(eq(problems.id, safeProblemId));
-        } else if (stepId === "package_platform" || previousStatus === "completed") {
-          await db
-            .update(problems)
-            .set({ status: "completed", updatedAt: new Date() })
-            .where(eq(problems.id, safeProblemId));
+        await db
+          .update(pipelineRuns)
+          .set({
+            status: wasStopped ? "failed" : code === 0 ? "completed" : "failed",
+            exitCode: wasStopped ? -1 : code ?? 1,
+            finishedAt: new Date(),
+          })
+          .where(eq(pipelineRuns.id, runId));
+
+        // Only stamp the PARENT step status for atomic top-level steps. For GQ
+        // sub-steps and per-language split/execute runs (logStepKey !== stepId)
+        // the client recomputes and persists the parent status from its
+        // sub-runs, so writing the bare parent here would clobber sibling
+        // progress (P1-C2/M2).
+        if (logStepKey === stepId) {
+          const stateRows = await db
+            .select({ stepStatuses: pipelineStates.stepStatuses })
+            .from(pipelineStates)
+            .where(eq(pipelineStates.problemId, safeProblemId))
+            .limit(1);
+
+          if (stateRows[0]) {
+            const stepStatuses = (stateRows[0].stepStatuses as Record<string, unknown>) || {};
+            stepStatuses[stepId] = {
+              status: wasStopped ? "failed" : code === 0 ? "completed" : "failed",
+              exitCode: wasStopped ? -1 : code ?? 1,
+              endTime: Date.now(),
+            };
+            await db
+              .update(pipelineStates)
+              .set({ stepStatuses, updatedAt: new Date() })
+              .where(eq(pipelineStates.problemId, safeProblemId));
+          }
         }
+
+        // Single derivation of problems.status from the run rows (P1-H6),
+        // replacing the previous ad-hoc failed/completed writes here. The run
+        // row was just marked terminal above, so this reflects reality.
+        await recomputeProblemStatus(safeProblemId);
       } catch {
         // Background DB update failed
       }

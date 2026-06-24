@@ -1,88 +1,227 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { StepProgress } from "./StepProgress";
 import { LogStream } from "./LogStream";
 import { getStepConfig } from "@/lib/pipeline-config";
+import { subStepLogKey } from "@/lib/pipeline-question";
 import { cn } from "@/lib/utils";
-import type { StepId, StepLlmUsageStats, StepState } from "@/types/pipeline";
+import type { LogLine, QuestionSubStepId, StepLlmUsageStats, StepState } from "@/types/pipeline";
+import { FileText, ListTree, Play, Square } from "lucide-react";
 
 interface StepDetailPanelProps {
   stepState: StepState;
+  subStepId?: QuestionSubStepId;
   llmUsageStats?: StepLlmUsageStats;
+  problemId?: string;
+  requiresLabel?: string | null;
+  requirementMet?: boolean;
+  canRun?: boolean;
+  onRun?: () => void;
+  onStop?: () => void;
 }
 
-export function StepDetailPanel({ stepState, llmUsageStats }: StepDetailPanelProps) {
+const SUB_STEP_LABELS: Record<QuestionSubStepId, string> = {
+  description: "Description",
+  naming: "Naming & signature",
+  titles: "Titles",
+  difficulty: "Difficulty",
+  topics: "Topics",
+  translate_cpp: "Translate to C++",
+  translate_java: "Translate to Java",
+  translate_nodejs: "Translate to Node.js",
+};
+
+import { parsePipelineLogContent } from "@/lib/pipeline-log-parse";
+
+function pickBestLogs(live: LogLine[], disk: LogLine[]): LogLine[] {
+  if (live.length === 0) return disk;
+  if (disk.length === 0) return live;
+  return live.length >= disk.length ? live : disk;
+}
+
+type DetailTab = "progress" | "raw";
+
+export function StepDetailPanel({
+  stepState,
+  subStepId,
+  llmUsageStats,
+  problemId,
+  requiresLabel,
+  requirementMet,
+  canRun,
+  onRun,
+  onStop,
+}: StepDetailPanelProps) {
   const config = getStepConfig(stepState.id);
-  const [showRawLogs, setShowRawLogs] = useState(false);
-  const isRunning = stepState.status === "running";
-  const hasLogs = stepState.logs.length > 0;
+  const subRun = subStepId ? stepState.subStepRuns?.[subStepId] : undefined;
+  const isRunning = subRun ? subRun.status === "running" : stepState.status === "running";
+  const stateLogs = subRun?.logs ?? stepState.logs;
+  const exitCode = subRun?.exitCode ?? stepState.exitCode;
+  const status = subRun?.status ?? stepState.status;
+  const progressStepId = subStepId ? subStepLogKey(subStepId) : stepState.id;
+
+  const [tab, setTab] = useState<DetailTab>("progress");
+  const [diskLogs, setDiskLogs] = useState<LogLine[]>([]);
+
+  const canFetchLogs =
+    !!problemId && (status === "completed" || status === "failed" || isRunning);
+
+  const logs = useMemo(
+    () => pickBestLogs(stateLogs, diskLogs),
+    [stateLogs, diskLogs]
+  );
+  const hasLogs = logs.length > 0;
+
+  const fetchDiskLogs = useCallback(async () => {
+    if (!problemId || !canFetchLogs) return;
+    try {
+      const res = await fetch(
+        `/api/pipeline/run/logs?problemId=${encodeURIComponent(problemId)}&stepId=${encodeURIComponent(progressStepId)}&tail=2000`
+      );
+      const data = await res.json();
+      if (data.content?.trim()) {
+        const parsed = parsePipelineLogContent(data.content);
+        if (parsed.length > 0) {
+          setDiskLogs((prev) => pickBestLogs(prev, parsed));
+        }
+      }
+    } catch {
+      /* keep showing live / previous disk logs */
+    }
+  }, [problemId, progressStepId, canFetchLogs]);
+
+  useEffect(() => {
+    setDiskLogs([]);
+  }, [progressStepId, subStepId, stepState.id]);
+
+  useEffect(() => {
+    if (!canFetchLogs) return;
+    fetchDiskLogs();
+    const intervalMs = isRunning ? 2000 : tab === "raw" ? 4000 : null;
+    if (!intervalMs) return;
+    const id = setInterval(fetchDiskLogs, intervalMs);
+    return () => clearInterval(id);
+  }, [canFetchLogs, isRunning, tab, fetchDiskLogs]);
+
+  useEffect(() => {
+    if (isRunning) setTab("raw");
+  }, [isRunning]);
 
   return (
-    <Card className="border-dashed">
-      <CardContent className="pt-4 space-y-3">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h4 className="text-sm font-semibold">{config.label}</h4>
-            <p className="text-xs text-muted-foreground mt-0.5">{config.description}</p>
+    <Card className="border-dashed h-full flex flex-col shadow-none">
+      <CardContent className="pt-3 px-3 pb-3 space-y-2 flex flex-col flex-1 min-h-0">
+        <div className="flex items-start justify-between gap-3 shrink-0">
+          <div className="min-w-0">
+            <h4 className="text-xs font-semibold">
+              {subStepId ? `${config.label} · ${SUB_STEP_LABELS[subStepId]}` : config.label}
+            </h4>
+            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+              {subStepId ? `Sub-step of ${config.label}` : config.description}
+            </p>
+            {requiresLabel && (
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Requires {requiresLabel}
+                {requirementMet ? " ✓" : " — waiting"}
+              </p>
+            )}
           </div>
-          {llmUsageStats && llmUsageStats.callCount > 0 && (
-            <div className="text-right text-xs text-muted-foreground shrink-0">
-              <div>{llmUsageStats.callCount} LLM call{llmUsageStats.callCount !== 1 ? "s" : ""}</div>
-              {llmUsageStats.costUsd > 0 && (
-                <div className="tabular-nums">${llmUsageStats.costUsd.toFixed(4)}</div>
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            {isRunning ? (
+              <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={onStop}>
+                <Square className="w-3.5 h-3.5 mr-1 fill-current" />
+                Stop
+              </Button>
+            ) : (
+              onRun && (
+                <Button size="sm" className="h-7 text-xs" disabled={!canRun} onClick={onRun}>
+                  <Play className="w-3.5 h-3.5 mr-1" />
+                  Run
+                </Button>
+              )
+            )}
+            {llmUsageStats && llmUsageStats.callCount > 0 && (
+              <div className="text-right text-xs text-muted-foreground">
+                <div>
+                  {llmUsageStats.callCount} LLM call{llmUsageStats.callCount !== 1 ? "s" : ""}
+                </div>
+                {llmUsageStats.costUsd > 0 && (
+                  <div className="tabular-nums">${llmUsageStats.costUsd.toFixed(4)}</div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1 border-b pb-0 shrink-0">
+          <button
+            type="button"
+            className={cn(
+              "inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium border-b-2 -mb-px transition-colors",
+              tab === "progress"
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            )}
+            onClick={() => setTab("progress")}
+          >
+            <ListTree className="w-3.5 h-3.5" />
+            Progress
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium border-b-2 -mb-px transition-colors",
+              tab === "raw"
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            )}
+            onClick={() => setTab("raw")}
+          >
+            <FileText className="w-3.5 h-3.5" />
+            Raw logs
+            {hasLogs && (
+              <span className="text-[10px] text-muted-foreground">({logs.length})</span>
+            )}
+            {isRunning && (
+              <span className="text-[10px] text-blue-400 animate-pulse">live</span>
+            )}
+          </button>
+        </div>
+
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {tab === "progress" && (
+            <>
+              {!hasLogs && !isRunning && status === "pending" && (
+                <p className="text-xs text-muted-foreground py-2">
+                  Click <strong className="font-medium">Run</strong> to start. Raw logs update
+                  automatically while the step runs.
+                </p>
+              )}
+              {(hasLogs || isRunning) && (
+                <StepProgress
+                  stepId={progressStepId}
+                  logs={logs}
+                  isRunning={isRunning}
+                  exitCode={exitCode}
+                />
+              )}
+            </>
+          )}
+
+          {tab === "raw" && (
+            <div className="h-full min-h-[200px]">
+              {!hasLogs && !isRunning && status === "pending" ? (
+                <p className="text-xs text-muted-foreground py-2">
+                  Run this step first — logs will appear here automatically.
+                </p>
+              ) : (
+                <LogStream logs={logs} maxHeight="100%" />
               )}
             </div>
           )}
         </div>
-
-        {!hasLogs && !isRunning && stepState.status === "pending" && (
-          <p className="text-xs text-muted-foreground py-2">
-            Select a step and click Run on its graph node to see live progress here.
-          </p>
-        )}
-
-        {(hasLogs || isRunning) && (
-          <>
-            <StepProgress
-              stepId={stepState.id}
-              logs={stepState.logs}
-              isRunning={isRunning}
-              exitCode={stepState.exitCode}
-            />
-            {hasLogs && (
-              <div className="border-t pt-2">
-                <button
-                  type="button"
-                  className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full py-1"
-                  onClick={() => setShowRawLogs(!showRawLogs)}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className={cn("transition-transform", showRawLogs && "rotate-180")}
-                  >
-                    <path d="m6 9 6 6 6-6" />
-                  </svg>
-                  <span>Raw logs ({stepState.logs.length} lines)</span>
-                </button>
-                {showRawLogs && (
-                  <div className="mt-2">
-                    <LogStream logs={stepState.logs} />
-                  </div>
-                )}
-              </div>
-            )}
-          </>
-        )}
       </CardContent>
     </Card>
   );

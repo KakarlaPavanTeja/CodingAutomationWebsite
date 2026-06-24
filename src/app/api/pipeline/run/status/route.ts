@@ -5,6 +5,7 @@ import { pipelineRuns } from "@/lib/db/schema";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { assertSafeProblemId } from "@/lib/storage-path";
 import { requireAuthApi } from "@/lib/auth/server";
+import { reconcileStalePipelineRuns } from "@/lib/reconcile-pipeline-runs";
 
 function toLegacyRun(r: typeof pipelineRuns.$inferSelect) {
   return {
@@ -40,7 +41,9 @@ export async function GET(request: NextRequest) {
     }
     const access = await requireProblemAccess(rows[0].problemId);
     if (access.error) return access.error;
-    return NextResponse.json({ run: toLegacyRun(rows[0]) });
+    await reconcileStalePipelineRuns(rows[0].problemId);
+    const refreshed = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, runId)).limit(1);
+    return NextResponse.json({ run: toLegacyRun(refreshed[0] ?? rows[0]) });
   }
 
   if (problemId) {
@@ -52,6 +55,8 @@ export async function GET(request: NextRequest) {
     }
     const access = await requireProblemAccess(safeProblemId);
     if (access.error) return access.error;
+
+    await reconcileStalePipelineRuns(safeProblemId);
 
     const rows = await db
       .select()

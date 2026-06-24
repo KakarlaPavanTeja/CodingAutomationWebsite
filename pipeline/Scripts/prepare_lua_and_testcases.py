@@ -12,13 +12,66 @@ OUTPUTS_DIR = os.path.join(_BASE, "Outputs")
 INPUTS_DIR = os.path.join(_BASE, "Inputs")
 TEMPLATE_DIR = os.path.join(_BASE, "zReferenceFiles", "JSONPreparationFilesReference")
 
+LANG_FOLDER_MAP = {
+    "cpp": ("Cpp", "CPP"),
+    "python": ("Python", "PYTHON"),
+    "java": ("Java", "JAVA"),
+    "nodejs": ("NodeJS", "NODE_JS"),
+}
+
+GENERATED_FULL_CODE_FILES = {
+    "cpp": "CPP.cpp",
+    "python": "PYTHON.py",
+    "java": "JAVA.java",
+    "nodejs": "NodeJS.js",
+}
+
+NON_FUNCTION_DEFAULT_CODES = {
+    "CPP": '#include<bits/stdc++.h>\nusing namespace std;\n \nint main() {\n    // write your code here...\n    return 0;\n}',
+    "PYTHON": "# write your code here...",
+    "JAVA": 'class Main {\n    public static void main(String[] args) {\n        // write your code here...\n        System.out.println("");\n    }\n}',
+    "NODE_JS": 'const fs = require(\'fs\');\n\nfunction main() {\n    // Write your code here...\n    console.log("Hello, World!");\n}\n\nmain();',
+}
+
+
+def parse_enabled_langs(cli_langs=None):
+    raw = cli_langs or os.environ.get("PIPELINE_ENABLED_LANGS", "python,cpp,java,nodejs")
+    langs = [l.strip().lower() for l in str(raw).split(",") if l.strip()]
+    return langs or ["python", "cpp", "java", "nodejs"]
+
+
+def is_non_function():
+    qt = os.environ.get("PIPELINE_QUESTION_TYPE", "function").strip().lower()
+    return qt in ("nonfunction", "non-function", "non_function")
+
+
+def get_question_kind_from_md():
+    problem_md_path = os.path.join(INPUTS_DIR, "problem.md")
+    if not os.path.exists(problem_md_path):
+        return "function"
+    with open(problem_md_path, "r") as f:
+        for line in f:
+            if line.startswith("# Question Type:"):
+                val = line.replace("# Question Type:", "").strip().lower()
+                return "nonfunction" if "non" in val else "function"
+    return "function"
+
 
 def get_problem_name():
+    # The owner-set title is FINAL (req 14): use it verbatim as short_text,
+    # regardless of whether generated_titles.txt was written (e.g. Titles step
+    # skipped, or Save not clicked). Without this the LUA short_text fell back to
+    # the "Problem Name" default even when the owner title was set.
+    owner = os.environ.get("PIPELINE_OWNER_TITLE", "").strip()
+    if owner:
+        problem_name = "".join(word.capitalize() for word in owner.split())
+        return problem_name, owner
+
     titles_path = os.path.join(OUTPUTS_DIR, "generated_titles.txt")
     if not os.path.exists(titles_path):
-        print(f"Warning: {titles_path} not found.")
+        print(f"Warning: {titles_path} not found and PIPELINE_OWNER_TITLE unset.")
         return "ProblemName", "Problem Name"
-        
+
     with open(titles_path, "r") as f:
         title_line = f.readline().strip()
         # Clean title_line e.g., "- Pair Sum Indices - 95%"
@@ -62,15 +115,24 @@ import argparse
 def main():
     parser = argparse.ArgumentParser(description="Prepare LUA and Testcases for Coding Questions")
     parser.add_argument("--mode", choices=["practice", "exam"], default="practice", help="Type of question JSON to generate (default: practice)")
+    parser.add_argument(
+        "--langs",
+        default="python,cpp,java,nodejs",
+        help="Comma-separated enabled languages: python,cpp,java,nodejs",
+    )
     args = parser.parse_args()
 
     mode = args.mode
+    enabled_langs = parse_enabled_langs(args.langs)
+    non_fn = is_non_function() or get_question_kind_from_md() == "nonfunction"
     problem_name, short_text = get_problem_name()
     question_type = get_question_type()
     print(f"Mode: {mode}")
     print(f"Problem Name: {problem_name}")
     print(f"Short Text: {short_text}")
     print(f"Question Type: {question_type}")
+    print(f"Enabled languages: {enabled_langs}")
+    print(f"Non-function: {non_fn}")
 
     if mode == "exam":
         if question_type in ["binary tree", "linked list"]:
@@ -122,6 +184,18 @@ def main():
             template_content = replace_tag_content(template_content, "----------INTERMEDIATE_TOPICS_START----------", "----------INTERMEDIATE_TOPICS_END----------", ", ".join(int_topics))
             template_content = replace_tag_content(template_content, "----------ADVANCED_TOPICS_START----------", "----------ADVANCED_TOPICS_END----------", ", ".join(adv_topics))
 
+        # Companies (practice only — one company per line in Outputs/Companies)
+        companies_path = os.path.join(OUTPUTS_DIR, "Companies")
+        if os.path.exists(companies_path):
+            companies_content = read_file(companies_path)
+            if companies_content:
+                template_content = replace_tag_content(
+                    template_content,
+                    "----------COMPANIES_START----------",
+                    "----------COMPANIES_END----------",
+                    companies_content,
+                )
+
         # Enrichment (Real life examples, Hints, Follow up questions)
         enrichment_path = os.path.join(OUTPUTS_DIR, "enrichment.json")
         if os.path.exists(enrichment_path):
@@ -156,46 +230,92 @@ def main():
             follow_ups_block = "\n\n".join(follow_ups_content)
             template_content = replace_tag_content(template_content, "----------FOLLOW_UP_QUESTIONS_START----------", "----------FOLLOW_UP_QUESTIONS_END----------", follow_ups_block)
 
-    # CodeContentFiles
-    lang_dirs = {
-        "Cpp": "CPP",
-        "Python": "PYTHON",
-        "Java": "JAVA",
-        "NodeJS": "NODE_JS"
-    }
-    
-    for d, tag in lang_dirs.items():
-        base_dir = os.path.join(OUTPUTS_DIR, "CodeContentFiles", d)
-        if not os.path.exists(base_dir):
+        # Default tags from env (owner override) or leave template tags empty
+        default_tags = os.environ.get("PIPELINE_DEFAULT_TAGS", "").strip()
+        if default_tags:
+            tag_lines = ", ".join(line.strip() for line in default_tags.split("\n") if line.strip())
+            template_content = replace_tag_content(
+                template_content,
+                "----------DEFAULT_TAGS_START----------",
+                "----------DEFAULT_TAGS_END----------",
+                tag_lines,
+            )
+
+    # CodeContentFiles — filtered by enabled languages
+    ext_map = {"Cpp": "cpp", "Python": "py", "Java": "java", "NodeJS": "js"}
+    generated_full_code_dir = os.path.join(OUTPUTS_DIR, "generatedFullCode")
+
+    for lang_id in enabled_langs:
+        mapping = LANG_FOLDER_MAP.get(lang_id)
+        if not mapping:
             continue
-            
-        ext = {"Cpp": "cpp", "Python": "py", "Java": "java", "NodeJS": "js"}[d]
-        
-        # default.ext -> CODE_CONTENT_{LANG}
+        d, tag = mapping
+        base_dir = os.path.join(OUTPUTS_DIR, "CodeContentFiles", d)
+        ext = ext_map[d]
+
         default_path = os.path.join(base_dir, f"default.{ext}")
+        driver_path = os.path.join(base_dir, f"driver.{ext}")
+        debugger_path = os.path.join(base_dir, f"debugger.{ext}")
+        solution_path = os.path.join(base_dir, f"solution.{ext}")
+
+        gen_file = GENERATED_FULL_CODE_FILES.get(lang_id)
+        gen_path = os.path.join(generated_full_code_dir, gen_file) if gen_file else None
+
+        # CODE_CONTENT — default template or non-fn fallback
+        code_content = ""
         if os.path.exists(default_path):
             code_content = read_file(default_path)
-            template_content = replace_tag_content(template_content, f"----------CODE_CONTENT_{tag}_START----------", f"----------CODE_CONTENT_{tag}_END----------", code_content)
-        
-        # debugger.ext -> DEBUG_HELPER_CODE_{LANG} (Only for practice)
-        if mode == "practice":
-            debugger_path = os.path.join(base_dir, f"debugger.{ext}")
-            if os.path.exists(debugger_path):
-                debugger_content = read_file(debugger_path)
-                template_content = replace_tag_content(template_content, f"----------DEBUG_HELPER_CODE_{tag}_START----------", f"----------DEBUG_HELPER_CODE_{tag}_END----------", debugger_content)
+        elif non_fn:
+            code_content = NON_FUNCTION_DEFAULT_CODES.get(tag, "")
+        elif gen_path and os.path.exists(gen_path):
+            code_content = read_file(gen_path)
+        if code_content:
+            template_content = replace_tag_content(
+                template_content,
+                f"----------CODE_CONTENT_{tag}_START----------",
+                f"----------CODE_CONTENT_{tag}_END----------",
+                code_content,
+            )
 
-        # driver.ext -> CODE_BASE64_{LANG}
-        driver_path = os.path.join(base_dir, f"driver.{ext}")
+        if mode == "practice" and os.path.exists(debugger_path):
+            debugger_content = read_file(debugger_path)
+            template_content = replace_tag_content(
+                template_content,
+                f"----------DEBUG_HELPER_CODE_{tag}_START----------",
+                f"----------DEBUG_HELPER_CODE_{tag}_END----------",
+                debugger_content,
+            )
+
+        # Driver / base64 — skip for non-fn exam (empty repos in JSON)
+        driver_content = ""
         if os.path.exists(driver_path):
             driver_content = read_file(driver_path)
-            template_content = replace_tag_content(template_content, f"----------CODE_BASE64_{tag}_START----------", f"----------CODE_BASE64_{tag}_END----------", driver_content)
+        elif gen_path and os.path.exists(gen_path) and not (non_fn and mode == "exam"):
+            driver_content = read_file(gen_path)
+        if driver_content:
+            template_content = replace_tag_content(
+                template_content,
+                f"----------CODE_BASE64_{tag}_START----------",
+                f"----------CODE_BASE64_{tag}_END----------",
+                driver_content,
+            )
 
-        # solution.ext -> SOLUTIONS_{LANG} (Only for practice)
-        if mode == "practice":
-            solution_path = os.path.join(base_dir, f"solution.{ext}")
-            if os.path.exists(solution_path):
-                solution_content = read_file(solution_path)
-                template_content = replace_tag_content(template_content, f"----------SOLUTIONS_{tag}_START----------", f"----------SOLUTIONS_{tag}_END----------", solution_content)
+        if mode == "practice" and os.path.exists(solution_path):
+            solution_content = read_file(solution_path)
+            template_content = replace_tag_content(
+                template_content,
+                f"----------SOLUTIONS_{tag}_START----------",
+                f"----------SOLUTIONS_{tag}_END----------",
+                solution_content,
+            )
+        elif mode == "practice" and non_fn and gen_path and os.path.exists(gen_path):
+            solution_content = read_file(gen_path)
+            template_content = replace_tag_content(
+                template_content,
+                f"----------SOLUTIONS_{tag}_START----------",
+                f"----------SOLUTIONS_{tag}_END----------",
+                solution_content,
+            )
             
     # Inject node.h if applicable
     if question_type in ["binary tree", "linked list"]:

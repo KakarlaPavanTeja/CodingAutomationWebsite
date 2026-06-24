@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import concurrent.futures
 import copy
 import glob
 import json
@@ -21,6 +22,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -46,11 +49,77 @@ from testcase_helpers import (
 
 DEFAULT_MIN_KILL = 0.90
 DEFAULT_RUN_TIMEOUT = 10.0
+# Tighter per-input cap during benchmark (override via BENCHMARK_RUN_TIMEOUT env).
+BENCHMARK_RUN_TIMEOUT = float(os.environ.get("BENCHMARK_RUN_TIMEOUT", "3"))
 DEFAULT_FUZZ_COUNT = 500
+BENCHMARK_FUZZ_COUNT = int(os.environ.get("BENCHMARK_FUZZ_COUNT", "100"))
 MUTANT_CAP = 120
+# Max cases used when filtering equivalent mutants (small inputs only; stress in kill phase).
+EQUIV_FILTER_CASES = 12
+# Inputs larger than this are excluded from equiv filter and run last in kill phase.
+BENCHMARK_STRESS_INPUT_CHARS = int(os.environ.get("BENCHMARK_STRESS_INPUT_CHARS", "8000"))
+
+_BATCH_RUNNER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_batch_runner.py")
 
 SIZE_PREFIX = "size_"
 SIZE_BUCKETS = ("edge", "small", "medium", "large")
+
+
+def _log_banner(title: str) -> None:
+    print(f"── {title} ──", flush=True)
+
+
+def _log_detail(msg: str) -> None:
+    print(f"    ▸ {msg}", flush=True)
+
+
+def _log_ok(msg: str) -> None:
+    print(f"    ✓ {msg}", flush=True)
+
+
+def _log_warn(msg: str) -> None:
+    print(f"    ⚠ {msg}", flush=True)
+
+
+def _log_fail(msg: str) -> None:
+    print(f"    ✗ {msg}", flush=True)
+
+
+def _log_progress(label: str, current: int, total: int, extra: str = "") -> None:
+    suffix = f" · {extra}" if extra else ""
+    print(f"    ▸ {label} {current}/{total}{suffix}", flush=True)
+
+
+def _input_chars(tc: dict) -> int:
+    return len(tc.get("input", ""))
+
+
+def _partition_cases(
+    test_cases: list[dict],
+    max_small: int = BENCHMARK_STRESS_INPUT_CHARS,
+) -> tuple[list[dict], list[dict]]:
+    small: list[dict] = []
+    stress: list[dict] = []
+    for tc in test_cases:
+        (stress if _input_chars(tc) > max_small else small).append(tc)
+    return small, stress
+
+
+def _filter_input_pool(test_cases: list[dict]) -> list[str]:
+    """Small-input cases for equivalence filter — never include megabyte stress tests."""
+    small, _ = _partition_cases(test_cases)
+    pool = small if small else test_cases
+    return [tc.get("input", "") for tc in pool[:EQUIV_FILTER_CASES]]
+
+
+def _fuzz_inputs(test_cases: list[dict], n: int = 5) -> list[str]:
+    small, _ = _partition_cases(test_cases)
+    pool = small if small else test_cases
+    if not pool:
+        return []
+    picks = random.sample(pool, min(n, len(pool)))
+    return [tc.get("input", "") for tc in picks]
+
 
 # Scenario tags expected per problem type (subset check).
 _TYPE_SCENARIO_HINTS: dict[str, tuple[str, ...]] = {
@@ -115,17 +184,76 @@ def run_solution(
             pass
 
 
+def run_solutions_batch(
+    code_str: str,
+    inputs: list[str],
+    timeout: float = BENCHMARK_RUN_TIMEOUT,
+) -> list[tuple[str, str]]:
+    """Run many stdin inputs in one Python process (much faster than N subprocess spawns)."""
+    if not inputs:
+        return []
+    if not os.path.exists(_BATCH_RUNNER):
+        return [run_solution(code_str, inp, timeout) for inp in inputs]
+
+    fd, path = tempfile.mkstemp(suffix=".py", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(code_str)
+        timeout_sec = max(1, int(math.ceil(timeout)))
+        wall = timeout * len(inputs) + 15
+        try:
+            proc = subprocess.run(
+                [_python_executable(), _BATCH_RUNNER, path, str(timeout_sec)],
+                input=json.dumps(inputs),
+                capture_output=True,
+                text=True,
+                timeout=wall,
+            )
+        except subprocess.TimeoutExpired:
+            return [("", "timeout") for _ in inputs]
+        if proc.returncode != 0:
+            return [run_solution(code_str, inp, timeout) for inp in inputs]
+        rows = json.loads(proc.stdout or "[]")
+        out: list[tuple[str, str]] = []
+        for row in rows:
+            out.append((row.get("out", ""), row.get("status", "error")))
+        while len(out) < len(inputs):
+            out.append(("", "error"))
+        return out[: len(inputs)]
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def build_output_cache(
+    code_str: str,
+    inputs: list[str],
+    timeout: float = BENCHMARK_RUN_TIMEOUT,
+) -> dict[str, tuple[str, str]]:
+    """input string -> (normalized output, status)"""
+    cache: dict[str, tuple[str, str]] = {}
+    if not inputs:
+        return cache
+    for inp, (out, status) in zip(inputs, run_solutions_batch(code_str, inputs, timeout)):
+        cache[inp] = (normalize(out) if status == "ok" else "", status)
+    return cache
+
+
 def run_against_suite(
     code_str: str,
     test_cases: list[dict],
-    timeout: float = DEFAULT_RUN_TIMEOUT,
+    timeout: float = BENCHMARK_RUN_TIMEOUT,
 ) -> list[tuple[int, bool, str]]:
     """Run code against each case. Returns [(index, passed, status), ...]."""
+    if not test_cases:
+        return []
+    inputs = [tc.get("input", "") for tc in test_cases]
+    outputs = run_solutions_batch(code_str, inputs, timeout)
     results = []
-    for i, tc in enumerate(test_cases):
-        inp = tc.get("input", "")
+    for i, (tc, (out, status)) in enumerate(zip(test_cases, outputs)):
         expected = normalize(tc.get("output", ""))
-        out, status = run_solution(code_str, inp, timeout)
         if status == "timeout":
             results.append((i, False, "timeout"))
             continue
@@ -327,91 +455,160 @@ def generate_mutants(optimal_code: str, cap: int = MUTANT_CAP) -> list[Mutant]:
 
 
 
-def _outputs_on_inputs(code: str, inputs: list[str], timeout: float) -> list[str | None]:
-    outs = []
-    for inp in inputs:
-        out, status = run_solution(code, inp, timeout)
-        if status != "ok":
-            outs.append(None)
-        else:
-            outs.append(normalize(out))
-    return outs
-
-
 def is_equivalent_mutant(
     mutant: Mutant,
-    optimal_code: str,
-    test_cases: list[dict],
-    extra_inputs: list[str] | None = None,
-    timeout: float = DEFAULT_RUN_TIMEOUT,
+    filter_inputs: list[str],
+    opt_cache: dict[str, tuple[str, str]],
+    timeout: float = BENCHMARK_RUN_TIMEOUT,
 ) -> bool:
-    inputs = [tc.get("input", "") for tc in test_cases]
-    if extra_inputs:
-        inputs.extend(extra_inputs)
-    opt_outs = _outputs_on_inputs(optimal_code, inputs, timeout)
-    mut_outs = _outputs_on_inputs(mutant.code, inputs, timeout)
-    if len(opt_outs) != len(mut_outs):
+    inputs = list(dict.fromkeys(filter_inputs))
+    if not inputs:
         return False
-    for o, m in zip(opt_outs, mut_outs):
-        if o is None or m is None:
+
+    mut_results = run_solutions_batch(mutant.code, inputs, timeout)
+    for inp, (mut_out, mut_status) in zip(inputs, mut_results):
+        opt_norm, opt_status = opt_cache.get(inp, ("", "error"))
+        if opt_status != "ok":
             continue
-        if o != m:
+        if mut_status != "ok":
+            return False
+        if normalize(mut_out) != opt_norm:
             return False
     return True
+
+
+def _mutant_workers(n: int) -> int:
+    """Thread count for evaluating mutants concurrently. Each mutant runs in its
+    own subprocess (which releases the GIL while it executes), so threads give a
+    real speedup. Bounded so we don't flood the host with Python processes.
+    Override with SUITE_MAX_WORKERS."""
+    if n <= 1:
+        return 1
+    env = os.environ.get("SUITE_MAX_WORKERS", "").strip()
+    cap = int(env) if env.isdigit() and int(env) > 0 else min(8, os.cpu_count() or 4)
+    return max(1, min(cap, n))
 
 
 def run_mutation_benchmark(
     optimal_code: str,
     test_cases: list[dict],
     mutants: list[Mutant] | None = None,
-    timeout: float = DEFAULT_RUN_TIMEOUT,
+    timeout: float = BENCHMARK_RUN_TIMEOUT,
     progress: bool = False,
 ) -> dict[str, Any]:
     if mutants is None:
         mutants = generate_mutants(optimal_code)
 
     if progress:
-        print(f"  Generated {len(mutants)} mutant(s); filtering equivalents "
-              f"against {len(test_cases)} case(s)...", flush=True)
+        small_n, stress_n = _partition_cases(test_cases)
+        _log_detail(
+            f"Generated {len(mutants)} mutant(s); filtering equivalents "
+            f"({len(_filter_input_pool(test_cases))} quick inputs, "
+            f"{len(small_n)} quick + {len(stress_n)} stress in kill phase)"
+        )
 
     random.seed(42)
-    fuzz_inputs = [tc.get("input", "") for tc in random.sample(
-        test_cases, min(5, len(test_cases))
-    )] if test_cases else []
+    filter_inputs = list(dict.fromkeys(
+        _filter_input_pool(test_cases) + _fuzz_inputs(test_cases, 5)
+    ))
+    opt_cache = build_output_cache(optimal_code, filter_inputs, timeout)
 
-    non_equivalent: list[Mutant] = []
-    for i, m in enumerate(mutants):
-        if not is_equivalent_mutant(m, optimal_code, test_cases, fuzz_inputs, timeout):
-            non_equivalent.append(m)
-        if progress and (i + 1) % 20 == 0:
-            print(f"    filtered {i + 1}/{len(mutants)} "
-                  f"({len(non_equivalent)} non-equivalent so far)", flush=True)
+    # Equivalence filter — run mutants concurrently (each is a subprocess), with
+    # live progress so a long phase doesn't look frozen.
+    eq_workers = _mutant_workers(len(mutants))
+    _eq_done = [0]
+    _eq_lock = threading.Lock()
+
+    def _is_equiv(m: Mutant) -> bool:
+        r = is_equivalent_mutant(m, filter_inputs, opt_cache, timeout)
+        if progress:
+            with _eq_lock:
+                _eq_done[0] += 1
+                if _eq_done[0] % 10 == 0 or _eq_done[0] == len(mutants):
+                    _log_progress("filter", _eq_done[0], len(mutants), "checked")
+        return r
+
+    if eq_workers > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=eq_workers) as ex:
+            equiv_flags = list(ex.map(_is_equiv, mutants))  # preserves order
+        non_equivalent = [m for m, equiv in zip(mutants, equiv_flags) if not equiv]
+    else:
+        non_equivalent = [m for m in mutants if not _is_equiv(m)]
 
     if progress:
-        print(f"  Testing {len(non_equivalent)} non-equivalent mutant(s) "
-              f"against the suite...", flush=True)
+        _log_ok(
+            f"Equivalence filter done — {len(non_equivalent)}/{len(mutants)} mutants need testing"
+        )
+        small_cases, stress_cases = _partition_cases(test_cases)
+        _log_detail(
+            f"Running kill phase: {len(small_cases)} quick case(s)"
+            + (f" + {len(stress_cases)} stress case(s) if still alive" if stress_cases else "")
+        )
 
     killed: list[str] = []
     survivors: list[dict] = []
+    small_cases, stress_cases = _partition_cases(test_cases)
+    if not small_cases:
+        small_cases = test_cases
+        stress_cases = []
 
-    for idx, m in enumerate(non_equivalent):
-        is_killed = False
-        for tc in test_cases:
-            inp = tc.get("input", "")
-            expected = normalize(tc.get("output", ""))
-            out, status = run_solution(m.code, inp, timeout)
+    def _evaluate_mutant(m: Mutant, cases: list[dict], opt_cache: dict[str, tuple[str, str]]) -> bool:
+        if not cases:
+            return False
+        inputs = [tc.get("input", "") for tc in cases]
+        expected_by_input = {tc.get("input", ""): normalize(tc.get("output", "")) for tc in cases}
+        mut_results = run_solutions_batch(m.code, inputs, timeout)
+        for inp, (out, status) in zip(inputs, mut_results):
+            expected = expected_by_input[inp]
             if status == "timeout":
-                opt_out, opt_status = run_solution(optimal_code, inp, timeout)
+                _, opt_status = opt_cache.get(inp, ("", "error"))
                 if opt_status == "ok":
-                    is_killed = True
-                    break
+                    return True
                 continue
             if status == "error":
-                is_killed = True
-                break
+                return True
             if normalize(out) != expected:
-                is_killed = True
-                break
+                return True
+        return False
+
+    quick_inputs = [tc.get("input", "") for tc in small_cases]
+    opt_quick_cache = build_output_cache(optimal_code, quick_inputs, timeout)
+    stress_inputs = [tc.get("input", "") for tc in stress_cases]
+    opt_stress_cache = (
+        build_output_cache(optimal_code, stress_inputs, timeout) if stress_cases else {}
+    )
+
+    # Kill phase — evaluate mutants concurrently (each is a subprocess). Quick
+    # cases first, then stress cases only if still alive (kept inside the worker).
+    _kill_done = [0]
+    _kill_count = [0]
+    _kill_lock = threading.Lock()
+
+    def _kill_one(m: Mutant) -> bool:
+        is_killed = _evaluate_mutant(m, small_cases, opt_quick_cache)
+        if not is_killed and stress_cases:
+            is_killed = _evaluate_mutant(m, stress_cases, opt_stress_cache)
+        if progress:
+            with _kill_lock:
+                _kill_done[0] += 1
+                if is_killed:
+                    _kill_count[0] += 1
+                if _kill_done[0] % 10 == 0 or _kill_done[0] == len(non_equivalent):
+                    pct = int(100 * _kill_count[0] / _kill_done[0]) if _kill_done[0] else 0
+                    _log_progress("test", _kill_done[0], len(non_equivalent),
+                                  f"{_kill_count[0]} killed · {pct}% so far")
+        return is_killed
+
+    kill_workers = _mutant_workers(len(non_equivalent))
+    if progress and non_equivalent:
+        _log_detail(f"Kill phase: {len(non_equivalent)} mutant(s) across {kill_workers} worker(s)…")
+    if kill_workers > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=kill_workers) as ex:
+            kill_flags = list(ex.map(_kill_one, non_equivalent))  # preserves order
+    else:
+        kill_flags = [_kill_one(m) for m in non_equivalent]
+
+    for m, is_killed in zip(non_equivalent, kill_flags):
         if is_killed:
             killed.append(m.mutant_id)
         else:
@@ -421,12 +618,13 @@ def run_mutation_benchmark(
                 "bug_class": m.bug_class,
                 "diff": m.diff_summary,
             })
-        if progress and (idx + 1) % 20 == 0:
-            print(f"    tested {idx + 1}/{len(non_equivalent)} "
-                  f"({len(killed)} killed)", flush=True)
 
     total = len(non_equivalent)
     kill_rate = (len(killed) / total) if total else 1.0
+    if progress and total:
+        _log_ok(f"Mutation testing done — kill rate {kill_rate:.1%} ({len(killed)}/{total})")
+        if survivors:
+            _log_warn(f"{len(survivors)} survivor(s) — see final report for details")
     return {
         "kill_rate": kill_rate,
         "killed": len(killed),
@@ -443,21 +641,44 @@ def run_mutation_benchmark(
 def run_wrong_approach_gate(
     test_cases: list[dict],
     wrong_dir: str | None = None,
-    timeout: float = DEFAULT_RUN_TIMEOUT,
+    timeout: float = BENCHMARK_RUN_TIMEOUT,
+    progress: bool = False,
 ) -> dict[str, Any]:
     wrong_dir = wrong_dir or os.path.join("Outputs", "wrong_solutions")
     paths = sorted(glob.glob(os.path.join(wrong_dir, "*.py")))
     if not paths:
+        if progress:
+            _log_warn("No wrong_solutions/*.py found — skipping B2")
         return {"skipped": True, "note": "no wrong_solutions/*.py found", "hard_fail": False}
+
+    if progress:
+        _log_detail(f"Checking {len(paths)} wrong-approach file(s) against {len(test_cases)} cases…")
 
     failures = []
     for path in paths:
         code = load_text(path)
         results = run_against_suite(code, test_cases, timeout)
-        passed_any = any(p for _, p, _ in results)
-        if passed_any:
+        total = len(results)
+        passed_n = sum(1 for _, p, _ in results if p)
+        # A wrong solution is "killed" if AT LEAST ONE case catches it (it fails
+        # that case). It only SURVIVES the gate if it passes EVERY case, i.e. no
+        # case discriminates it. Requiring it to be rejected by *every* case
+        # (the old `passed_any`) is unachievable — a wrong approach naturally
+        # passes the inputs where its bug doesn't manifest (e.g. abs-sum on
+        # all-positive inputs), so that flagged genuinely-strong suites as fails.
+        survived = total > 0 and passed_n == total
+        killed_by = total - passed_n
+        name = os.path.basename(path)
+        if progress:
+            if survived:
+                _log_fail(f"{name} — passed ALL {total} case(s) (not caught by any)")
+            elif passed_n == 0:
+                _log_ok(f"{name} — rejected by all {total} case(s)")
+            else:
+                _log_ok(f"{name} — killed by {killed_by}/{total} case(s)")
+        if survived:
             failures.append({
-                "file": os.path.basename(path),
+                "file": name,
                 "passed_cases": [i for i, p, _ in results if p],
             })
     return {
@@ -589,27 +810,52 @@ def run_differential_fuzz(
     optimal_code: str,
     brute_code: str,
     description: str,
-    count: int = DEFAULT_FUZZ_COUNT,
-    timeout: float = DEFAULT_RUN_TIMEOUT,
+    test_cases: list[dict] | None = None,
+    count: int = BENCHMARK_FUZZ_COUNT,
+    timeout: float = BENCHMARK_RUN_TIMEOUT,
 ) -> dict[str, Any]:
-    max_n = parse_constraint_max_n(description) or 100
-    cap = min(max_n, 50)
+    """Cross-check the optimal against the brute force to catch a WRONG optimal.
+
+    Inputs are FORMAT-PRESERVING: the real test cases plus value-perturbations of
+    them. A generic numeric fuzz is only a fallback when no test cases are given —
+    the old generic-only fuzz produced inputs in a fixed "n / array" shape that
+    custom formats (e.g. "n m / values / decays") reject, so every comparison was
+    skipped and B4 passed vacuously, letting a buggy optimal slip through."""
+    inputs: list[str] = []
+    if test_cases:
+        inputs.extend(tc.get("input", "") for tc in test_cases if tc.get("input"))
+        inputs.extend(_perturb_numeric_inputs(test_cases, count))
+    if not inputs:
+        max_n = parse_constraint_max_n(description) or 100
+        cap = min(max_n, 50)
+        random.seed(42)
+        for _ in range(count):
+            n = random.randint(1, max(1, cap))
+            inputs.append(f"{n}\n" + " ".join(str(random.randint(-10, 10)) for _ in range(n)) + "\n0\n")
+
+    # Process in chunks with early-stop + a wall-time cap: a buggy optimal usually
+    # disagrees within the first chunk (stop fast), while a correct optimal must
+    # not run unbounded over a slow brute.
     disagreements = []
-    random.seed(42)
-    for _ in range(count):
-        n = random.randint(1, max(1, cap))
-        # generic numeric fuzz — problems may reject; skip non-ok
-        inp = f"{n}\n" + " ".join(str(random.randint(-10, 10)) for _ in range(n)) + "\n0\n"
-        opt_out, s1 = run_solution(optimal_code, inp, timeout)
-        bru_out, s2 = run_solution(brute_code, inp, timeout)
-        if s1 != "ok" or s2 != "ok":
-            continue
-        if normalize(opt_out) != normalize(bru_out):
-            disagreements.append({"input": inp[:200], "optimal": opt_out[:100], "brute": bru_out[:100]})
-            if len(disagreements) >= 5:
-                break
+    ran = 0
+    deadline = time.monotonic() + 30.0
+    chunk = 12
+    for start in range(0, len(inputs), chunk):
+        if time.monotonic() > deadline:
+            break
+        batch = inputs[start:start + chunk]
+        opt_results = run_solutions_batch(optimal_code, batch, timeout)
+        bru_results = run_solutions_batch(brute_code, batch, timeout)
+        ran += len(batch)
+        for inp, (opt_out, s1), (bru_out, s2) in zip(batch, opt_results, bru_results):
+            if s1 != "ok" or s2 != "ok":
+                continue
+            if normalize(opt_out) != normalize(bru_out):
+                disagreements.append({"input": inp[:200], "optimal": opt_out[:100], "brute": bru_out[:100]})
+        if len(disagreements) >= 5:
+            break
     return {
-        "runs": count,
+        "runs": ran,
         "disagreements": disagreements,
         "hard_fail": len(disagreements) > 0,
     }
@@ -639,53 +885,302 @@ def fuzz_kill_survivors(
     new_cases: list[dict] = []
     seen_inputs = {tc.get("input", "") for tc in test_cases}
 
-    def kills_survivor(inp: str, expected: str) -> bool:
-        for sid in survivor_ids:
-            m = mutant_map.get(sid)
-            if not m:
-                continue
-            out, status = run_solution(m.code, inp, timeout)
-            if status in ("timeout", "error"):
-                opt_out, opt_s = run_solution(optimal_code, inp, timeout)
-                if opt_s == "ok":
-                    return True
-                continue
-            if normalize(out) != expected:
-                return True
-        return False
-
-    candidates: list[str] = []
-    # boundary sizes
+    size_pool: list[int] = []
     for n in [1, 2, max(1, cap // 2), cap, max_n if max_n else cap]:
         if n and n <= (max_n or cap):
-            candidates.append(n)
-    for fi in range(count):
-        if progress and fi and fi % 100 == 0:
-            print(f"    fuzz {fi}/{count} ({len(new_cases)} killer case(s) so far)", flush=True)
-        n = random.choice(candidates) if candidates else random.randint(1, cap)
+            size_pool.append(n)
+
+    # Generate all candidate inputs up front (deduped), then execute in batches —
+    # one process for the optimal over all inputs, one for brute, and one per
+    # survivor mutant — instead of a subprocess per (input x solution).
+    gen_inputs: list[str] = []
+    for _fi in range(count):
+        n = random.choice(size_pool) if size_pool else random.randint(1, cap)
         inp = f"{n}\n" + " ".join(str(random.randint(-1000, 1000)) for _ in range(n))
         if inp in seen_inputs:
             continue
-        opt_out, s1 = run_solution(optimal_code, inp, timeout)
-        if s1 != "ok":
+        seen_inputs.add(inp)
+        gen_inputs.append(inp)
+    if not gen_inputs:
+        return []
+
+    # Keep inputs the optimal accepts; record expected output.
+    opt_results = run_solutions_batch(optimal_code, gen_inputs, timeout)
+    valid: list[tuple[str, str]] = [
+        (inp, normalize(out)) for inp, (out, s1) in zip(gen_inputs, opt_results) if s1 == "ok"
+    ]
+    # Cross-check against brute force where available.
+    if brute_code and valid:
+        bru_results = run_solutions_batch(brute_code, [inp for inp, _ in valid], timeout)
+        valid = [
+            (inp, exp)
+            for (inp, exp), (bout, bs) in zip(valid, bru_results)
+            if bs == "ok" and normalize(bout) == exp
+        ]
+    if not valid:
+        return []
+
+    valid_inputs = [inp for inp, _ in valid]
+    expected_by_input = dict(valid)
+
+    # An input kills a survivor when that mutant errors/timeouts or disagrees with
+    # the (already-validated) expected output. One batched run per survivor.
+    killer: set[str] = set()
+    for sid in survivor_ids:
+        m = mutant_map.get(sid)
+        if not m:
             continue
-        expected = normalize(opt_out)
-        if brute_code:
-            bru_out, s2 = run_solution(brute_code, inp, timeout)
-            if s2 != "ok" or normalize(bru_out) != expected:
-                continue
-        if kills_survivor(inp, expected):
-            n_val = parse_primary_n(inp)
-            bucket = derive_size_bucket(n_val, max_n, inp)
-            new_cases.append({
-                "input": inp,
-                "output": expected,
-                "weightage": 1.0,
-                "tags": [size_tag_from_bucket(bucket), "fuzz_harden", "adversarial"],
-                "order": 0,
-            })
-            seen_inputs.add(inp)
+        mres = run_solutions_batch(m.code, valid_inputs, timeout)
+        for inp, (mout, mstatus) in zip(valid_inputs, mres):
+            if mstatus in ("timeout", "error") or normalize(mout) != expected_by_input[inp]:
+                killer.add(inp)
+    if progress:
+        print(f"    fuzz: {len(valid_inputs)} valid input(s), {len(killer)} killer case(s)", flush=True)
+
+    for inp, exp in valid:
+        if inp not in killer:
+            continue
+        n_val = parse_primary_n(inp)
+        bucket = derive_size_bucket(n_val, max_n, inp)
+        new_cases.append({
+            "input": inp,
+            "output": exp,
+            "weightage": 1.0,
+            "tags": [size_tag_from_bucket(bucket), "fuzz_harden", "adversarial"],
+            "order": 0,
+        })
     return new_cases
+
+
+def _perturb_numeric_inputs(test_cases: list[dict], count: int, seed: int = 777) -> list[str]:
+    """Generate new inputs by perturbing the NUMERIC VALUES in existing test-case
+    inputs while keeping their line/token structure intact. This is format-
+    agnostic — it reuses each problem's real input shape (counts, line layout)
+    and only changes data values — so the optimal solution still accepts them.
+    Used to find inputs that distinguish the optimal from a surviving wrong
+    solution (B2 strengthening)."""
+    bases = [tc.get("input", "") for tc in test_cases if tc.get("input")]
+    if not bases:
+        return []
+    rng = random.Random(seed)
+    seen = {tc.get("input", "") for tc in test_cases}
+
+    # Observed integer range across all inputs — keep perturbed values IN this
+    # range (and don't introduce a negative if none were seen). Going out of the
+    # problem's value range can create inputs the constraints forbid, where the
+    # optimal and a correct brute may legitimately differ — which would cause
+    # spurious B4 failures. Staying in-distribution keeps inputs valid.
+    observed = []
+    for base in bases:
+        for line in base.split("\n"):
+            for t in line.split():
+                try:
+                    observed.append(int(t))
+                except ValueError:
+                    pass
+    lo = min(observed) if observed else 0
+    hi = max(observed) if observed else 100
+    deltas = [1, -1, 2, -2, 3, -3, 5, -5, 10, -10]
+    boundary = [lo, hi, lo + 1, hi - 1, (lo + hi) // 2]
+
+    def _clamp(x: int) -> int:
+        return max(lo, min(hi, x))
+
+    out: list[str] = []
+    attempts = 0
+    while len(out) < count and attempts < count * 8:
+        attempts += 1
+        base = rng.choice(bases)
+        lines = base.split("\n")
+        # Prefer perturbing data lines (after the first, which is usually counts);
+        # fall back to any non-empty line. Token COUNT per line is preserved so
+        # array lengths / declared sizes stay consistent.
+        data_idxs = [i for i in range(1, len(lines)) if lines[i].strip()] \
+            or [i for i in range(len(lines)) if lines[i].strip()]
+        if not data_idxs:
+            continue
+        new_lines = list(lines)
+        li = rng.choice(data_idxs)
+        toks = new_lines[li].split()
+        changed = False
+        for j in range(len(toks)):
+            if rng.random() < 0.5:
+                try:
+                    v = int(toks[j])
+                except ValueError:
+                    continue
+                v2 = v + rng.choice(deltas) if rng.random() < 0.7 else rng.choice(boundary)
+                toks[j] = str(_clamp(v2))
+                changed = True
+        if not changed:
+            continue
+        new_lines[li] = " ".join(toks)
+        cand = "\n".join(new_lines)
+        if cand in seen:
+            continue
+        seen.add(cand)
+        out.append(cand)
+    return out
+
+
+def fuzz_kill_wrong_solutions(
+    optimal_code: str,
+    test_cases: list[dict],
+    wrong_solutions: list[tuple[str, str]],
+    brute_code: str | None = None,
+    count: int = 200,
+    timeout: float = BENCHMARK_RUN_TIMEOUT,
+    description: str = "",
+    progress: bool = False,
+    chunk: int = 40,
+    target_per_solution: int = 3,
+    max_seconds: float = 45.0,
+) -> list[dict]:
+    """Find inputs that kill surviving WRONG solutions (B2). Perturbs existing
+    inputs (format-preserving), validates against optimal (+ brute), and keeps
+    cases where a wrong solution disagrees. Processed in CHUNKS with early-stop
+    and a wall-time cap — a handful of discriminating cases per wrong solution is
+    enough, and blind perturbation can't always find subtle ones, so it must not
+    run unbounded."""
+    if not wrong_solutions:
+        return []
+    candidates = _perturb_numeric_inputs(test_cases, count)
+    if not candidates:
+        return []
+    max_n = parse_constraint_max_n(description) or 100
+    deadline = time.monotonic() + max_seconds
+
+    killer_cases: dict[str, str] = {}  # input -> expected
+    kills_per_sol = {name: 0 for name, _ in wrong_solutions}
+
+    for start in range(0, len(candidates), chunk):
+        if time.monotonic() > deadline:
+            if progress:
+                print(f"    wrong-soln harden: time cap reached ({max_seconds:.0f}s)", flush=True)
+            break
+        batch = candidates[start:start + chunk]
+        opt_results = run_solutions_batch(optimal_code, batch, timeout)
+        valid = [(inp, normalize(o)) for inp, (o, s) in zip(batch, opt_results) if s == "ok"]
+        if brute_code and valid:
+            bru = run_solutions_batch(brute_code, [i for i, _ in valid], timeout)
+            valid = [(i, e) for (i, e), (bo, bs) in zip(valid, bru) if bs == "ok" and normalize(bo) == e]
+        if valid:
+            vin = [i for i, _ in valid]
+            exp_by = dict(valid)
+            for name, code in wrong_solutions:
+                wres = run_solutions_batch(code, vin, timeout)
+                for inp, (wout, wstatus) in zip(vin, wres):
+                    if wstatus in ("timeout", "error") or normalize(wout) != exp_by[inp]:
+                        killer_cases.setdefault(inp, exp_by[inp])
+                        kills_per_sol[name] += 1
+        if progress:
+            print(f"    wrong-soln harden: {len(killer_cases)} killer case(s) after "
+                  f"{min(start + chunk, len(candidates))} candidate(s)", flush=True)
+        # Stop once every surviving wrong solution has enough discriminating cases.
+        if all(kills_per_sol[name] >= target_per_solution for name, _ in wrong_solutions):
+            break
+
+    new_cases: list[dict] = []
+    for inp, exp in killer_cases.items():
+        n_val = parse_primary_n(inp)
+        bucket = derive_size_bucket(n_val, max_n, inp)
+        new_cases.append({
+            "input": inp,
+            "output": exp,
+            "weightage": 1.0,
+            "tags": [size_tag_from_bucket(bucket), "wrong_soln_harden", "adversarial"],
+            "order": 0,
+        })
+    return new_cases
+
+
+_EXAMPLE_INPUT_RE = re.compile(r"\*\*Input:\*\*\s*```[^\n]*\n(.*?)```", re.S)
+
+
+def extract_example_inputs(description: str) -> list[str]:
+    """Pull the stdin from each `**Input:** ``` ... ``` ` block in a description."""
+    out: list[str] = []
+    for m in _EXAMPLE_INPUT_RE.finditer(description or ""):
+        s = m.group(1).strip("\n")
+        if s.strip():
+            out.append(s + "\n")
+    return out
+
+
+def structured_random_inputs(examples: list[str], count: int = 100, seed: int = 7) -> list[str]:
+    """Generate fresh SMALL inputs in the problem's own format, inferred from the
+    example inputs: header tokens that equal an array length are treated as counts
+    (regenerated to a small n), other header tokens as small parameters, and array
+    lines as small random values (duplicates likely). Small inputs with small
+    params + clustered values expose many bugs that large/random fuzz misses."""
+    if not examples:
+        return []
+    rng = random.Random(seed)
+    out: list[str] = []
+    for _ in range(count):
+        lines = [l for l in rng.choice(examples).split("\n")]
+        header = lines[0].split() if lines else []
+        arr_lines = [l.split() for l in lines[1:] if l.strip()]
+        if not header or not arr_lines:
+            continue
+        arr_lens = {len(a) for a in arr_lines}
+        n = rng.randint(1, 4)
+        new_header = []
+        for tok in header:
+            try:
+                tv = int(tok)
+            except ValueError:
+                new_header.append(tok)
+                continue
+            new_header.append(str(n) if tv in arr_lens else str(rng.randint(1, max(2, n + 1))))
+        new_lines = [" ".join(new_header)]
+        for _a in arr_lines:
+            new_lines.append(" ".join(str(rng.randint(1, 12)) for _ in range(n)))
+        out.append("\n".join(new_lines) + "\n")
+    return out
+
+
+_OPEN_ENDED_RE = re.compile(
+    r"\b(return|print|output|construct|produce|find|report|give|build)\s+any\b"
+    r"|\bany\s+(valid|such|one|correct)\b"
+    r"|\bmultiple\s+(valid|correct|possible|right)\b"
+    r"|\bmore than one\b"
+    r"|\bif there (are|is)\s+(multiple|several|many)\b"
+    r"|\bany of (them|the)\b",
+    re.I,
+)
+
+
+def is_open_ended_problem(description: str) -> bool:
+    """True when the statement accepts more than one correct output (e.g. "return
+    any grid such that ..."). For these, optimal and brute legitimately differ
+    textually, so a plain output comparison would false-positive."""
+    return bool(_OPEN_ENDED_RE.search(description or ""))
+
+
+def crosscheck_optimal_brute(
+    optimal_code: str,
+    brute_code: str,
+    examples: list[str],
+    count: int = 100,
+    timeout: float = BENCHMARK_RUN_TIMEOUT,
+    max_report: int = 5,
+) -> list[dict]:
+    """Run the optimal and the (independent) brute on the example inputs plus a
+    structure-aware small-input sweep; return the inputs where they disagree. A
+    disagreement strongly indicates the reference/optimal solution is buggy."""
+    candidates = list(examples) + structured_random_inputs(examples, count)
+    if not candidates:
+        return []
+    opt = run_solutions_batch(optimal_code, candidates, timeout)
+    bru = run_solutions_batch(brute_code, candidates, timeout)
+    out: list[dict] = []
+    for inp, (o, s1), (br, s2) in zip(candidates, opt, bru):
+        if s1 == "ok" and s2 == "ok" and normalize(o) != normalize(br):
+            out.append({"input": inp, "optimal": normalize(o)[:80], "brute": normalize(br)[:80]})
+            if len(out) >= max_report:
+                break
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -714,7 +1209,8 @@ def run_benchmark(
     brute_path: str | None = None,
     min_kill: float = DEFAULT_MIN_KILL,
     advisory_size: bool = False,
-    timeout: float = DEFAULT_RUN_TIMEOUT,
+    timeout: float = BENCHMARK_RUN_TIMEOUT,
+    fuzz_count: int = BENCHMARK_FUZZ_COUNT,
 ) -> BenchmarkReport:
     optimal_path = optimal_path or os.path.join("Outputs", "generatedFullCode", "PYTHON.py")
     testcases_path = testcases_path or os.path.join("Outputs", "testcases.json")
@@ -731,39 +1227,79 @@ def run_benchmark(
     description = load_text(description_path) if os.path.exists(description_path) else ""
     brute_code = load_text(brute_path) if brute_path else None
 
-    print(f"Loaded {len(test_cases)} test case(s)"
-          f"{' with brute force' if brute_code else ' (no brute force)'}", flush=True)
+    _log_banner("Benchmark test-case suite")
+    _log_detail(f"Optimal solution: {optimal_path}")
+    _log_detail(f"Test cases: {len(test_cases)} from {testcases_path}")
+    if brute_code:
+        _log_detail(f"Brute force: {brute_path}")
+    else:
+        _log_warn("No brute-force reference — B4 differential fuzz will be skipped")
 
     report = BenchmarkReport()
-    print("[B1] Mutation kill rate - generating and testing mutants...", flush=True)
+    print("[B1] Mutation kill rate", flush=True)
     report.b1 = run_mutation_benchmark(optimal_code, test_cases, timeout=timeout, progress=True)
     report.kill_rate = report.b1["kill_rate"]
-    print(f"[B1] kill rate {report.kill_rate:.1%} "
-          f"({report.b1.get('killed', 0)}/{report.b1.get('non_equivalent_total', 0)} killed, "
-          f"{len(report.b1.get('survivors', []))} survivor(s))", flush=True)
+    threshold_ok = report.kill_rate >= min_kill
+    if threshold_ok:
+        _log_ok(
+            f"[B1] kill rate {report.kill_rate:.1%} "
+            f"({report.b1.get('killed', 0)}/{report.b1.get('non_equivalent_total', 0)} killed) "
+            f"— meets {min_kill:.0%} target"
+        )
+    else:
+        _log_fail(
+            f"[B1] kill rate {report.kill_rate:.1%} "
+            f"({report.b1.get('killed', 0)}/{report.b1.get('non_equivalent_total', 0)} killed) "
+            f"— below {min_kill:.0%} target"
+        )
 
-    print("[B2] Wrong-approach gate...", flush=True)
-    report.b2 = run_wrong_approach_gate(test_cases, timeout=timeout)
-    if report.b2.get("hard_fail"):
+    print("[B2] Wrong-approach gate", flush=True)
+    report.b2 = run_wrong_approach_gate(test_cases, timeout=timeout, progress=True)
+    if report.b2.get("skipped"):
+        pass
+    elif report.b2.get("hard_fail"):
+        _log_fail(f"[B2] FAIL — wrong solution(s) passed tests")
         report.hard_failures.append(
             f"B2: wrong solution(s) passed: {report.b2.get('failures')}"
         )
+    else:
+        _log_ok(f"[B2] PASS — all {report.b2.get('wrong_files', 0)} wrong files rejected")
 
-    print("[B3] Coverage-shape audit...", flush=True)
+    print("[B3] Coverage-shape audit", flush=True)
+    _log_detail("Checking subtask count, size distribution, and scenario tags…")
     report.b3 = audit_coverage_shape(
         test_cases, description, brute_code=brute_code, advisory_size=advisory_size
     )
     report.warnings.extend(report.b3.get("warnings", []))
     if report.b3.get("hard_fail"):
+        _log_fail(f"[B3] FAIL — {len(report.b3.get('issues', []))} issue(s)")
+        for issue in report.b3.get("issues", [])[:5]:
+            _log_fail(f"  {issue}")
         report.hard_failures.extend(report.b3.get("issues", []))
+    else:
+        _log_ok(
+            f"[B3] PASS — {report.b3.get('total')} cases, "
+            f"{report.b3.get('subtask_count')} subtask(s), "
+            f"type={report.b3.get('problem_type')}"
+        )
+        if report.b3.get("size_split"):
+            _log_detail(f"Size split: {report.b3['size_split']}")
 
     if brute_code:
-        print("[B4] Differential fuzz vs brute force...", flush=True)
-        report.b4 = run_differential_fuzz(optimal_code, brute_code, description, timeout=timeout)
+        print("[B4] Differential fuzz vs brute force", flush=True)
+        _log_detail(f"Generating up to {fuzz_count} random inputs…")
+        report.b4 = run_differential_fuzz(
+            optimal_code, brute_code, description,
+            test_cases=test_cases, count=fuzz_count, timeout=timeout,
+        )
+        d = len(report.b4.get("disagreements", []))
         if report.b4.get("hard_fail"):
+            _log_fail(f"[B4] FAIL — {d} optimal/brute disagreement(s)")
             report.hard_failures.append(
-                f"B4: optimal vs brute disagreements: {len(report.b4.get('disagreements', []))}"
+                f"B4: optimal vs brute disagreements: {d}"
             )
+        else:
+            _log_ok(f"[B4] PASS — no disagreements in {fuzz_count} fuzz inputs")
     else:
         report.b4 = {"skipped": True, "note": "no brute force"}
 
@@ -771,46 +1307,62 @@ def run_benchmark(
 
 
 def print_report(report: BenchmarkReport, min_kill: float) -> None:
-    print("\n=== Benchmark Report ===")
-    print(f"B1 Mutation kill rate: {report.kill_rate:.1%} "
+    _log_banner("Final report")
+
+    print(f"[B1] Mutation kill rate: {report.kill_rate:.1%} "
           f"({report.b1.get('killed', 0)}/{report.b1.get('non_equivalent_total', 0)})")
     if report.b1.get("survivors"):
-        print(f"  Survivors ({len(report.b1['survivors'])}):")
+        _log_warn(f"Survivors ({len(report.b1['survivors'])}) — mutants your tests did not kill:")
         for s in report.b1["survivors"][:10]:
-            print(f"    {s['id']} [{s['bug_class']}] {s['operator']}: {s['diff']}")
+            _log_detail(f"{s['id']} [{s['bug_class']}] {s['operator']}: {s['diff']}")
         if len(report.b1["survivors"]) > 10:
-            print(f"    ... and {len(report.b1['survivors']) - 10} more")
+            _log_detail(f"… and {len(report.b1['survivors']) - 10} more (see benchmark output JSON if saved)")
 
     if report.b2.get("skipped"):
-        print(f"B2 Wrong-approach gate: SKIPPED ({report.b2.get('note')})")
+        _log_warn(f"B2 Wrong-approach gate: SKIPPED ({report.b2.get('note')})")
     else:
-        status = "PASS" if not report.b2.get("hard_fail") else "FAIL"
-        print(f"B2 Wrong-approach gate: {status} ({report.b2.get('wrong_files', 0)} files)")
+        if report.b2.get("hard_fail"):
+            _log_fail(f"B2 Wrong-approach gate: FAIL ({report.b2.get('wrong_files', 0)} files checked)")
+        else:
+            _log_ok(f"B2 Wrong-approach gate: PASS ({report.b2.get('wrong_files', 0)} files)")
 
-    print(f"B3 Coverage-shape: {'FAIL' if report.b3.get('hard_fail') else 'PASS'}")
-    print(f"  total={report.b3.get('total')} subtasks={report.b3.get('subtask_count')}")
+    if report.b3.get("hard_fail"):
+        _log_fail(f"B3 Coverage-shape: FAIL")
+    else:
+        _log_ok(f"B3 Coverage-shape: PASS")
+    _log_detail(
+        f"total={report.b3.get('total')} subtasks={report.b3.get('subtask_count')} "
+        f"type={report.b3.get('problem_type')}"
+    )
     if report.b3.get("size_split"):
-        print(f"  size split: {report.b3['size_split']}")
+        _log_detail(f"size split: {report.b3['size_split']}")
     for issue in report.b3.get("issues", []):
-        print(f"  ISSUE: {issue}")
+        _log_fail(f"ISSUE: {issue}")
 
     if report.b4.get("skipped"):
-        print(f"B4 Differential fuzz: SKIPPED ({report.b4.get('note')})")
+        _log_warn(f"B4 Differential fuzz: SKIPPED ({report.b4.get('note')})")
     else:
         d = len(report.b4.get("disagreements", []))
-        print(f"B4 Differential fuzz: {'FAIL' if d else 'PASS'} ({d} disagreements)")
+        if d:
+            _log_fail(f"B4 Differential fuzz: FAIL ({d} disagreements)")
+        else:
+            _log_ok(f"B4 Differential fuzz: PASS")
 
     if report.warnings:
-        print("Warnings:")
+        _log_warn(f"{len(report.warnings)} warning(s):")
         for w in report.warnings[:8]:
-            print(f"  - {w}")
+            _log_detail(w)
 
     gate = "PASS" if report.passes_gate(min_kill) else "FAIL"
-    print(f"\nGate (min_kill={min_kill:.0%}): {gate}")
+    print(f"\nGate (min_kill={min_kill:.0%}): {gate}", flush=True)
+    if gate == "PASS":
+        _log_ok("Benchmark gate passed — test suite is strong enough to continue")
+    else:
+        _log_fail("Benchmark gate failed — review survivors/issues above or run Strengthen Test Cases")
     if report.hard_failures:
-        print("Hard failures:")
+        _log_fail(f"{len(report.hard_failures)} hard failure(s):")
         for hf in report.hard_failures:
-            print(f"  - {hf}")
+            _log_detail(str(hf))
 
 
 def main():
@@ -820,7 +1372,7 @@ def main():
                         help="Informational mode: do not exit non-zero on failures")
     parser.add_argument("--advisory-size", action="store_true",
                         help="Size distribution violations are warnings only")
-    parser.add_argument("--timeout", type=float, default=DEFAULT_RUN_TIMEOUT)
+    parser.add_argument("--timeout", type=float, default=BENCHMARK_RUN_TIMEOUT)
     args = parser.parse_args()
 
     root_dir = os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(
