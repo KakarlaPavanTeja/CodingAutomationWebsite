@@ -25,7 +25,7 @@ import type {
   StepStatus,
   SubStepRunState,
 } from "@/types/pipeline";
-import { Check, FileText, List, Loader2, Play, Square } from "lucide-react";
+import { Check, FileText, List, Loader2, Play, Square, Unlock } from "lucide-react";
 
 const MAX_OPEN_LOGS = 3;
 
@@ -224,8 +224,6 @@ export function PipelineSidePanel({
     .map((k) => entries.find((e) => e.keyStr === k))
     .filter(Boolean) as ReturnType<typeof buildPipelineStepList>;
 
-  let lastSection = "";
-
   return (
     <div className="flex flex-col h-full min-h-0 border rounded-lg bg-card overflow-hidden">
       <div className="flex items-center border-b shrink-0">
@@ -269,9 +267,9 @@ export function PipelineSidePanel({
       >
         {tab === "steps" && (
           <div className="p-1.5 space-y-0.5">
-            {entries.map((entry) => {
-              const showHeader = entry.sectionTitle !== lastSection;
-              if (showHeader) lastSection = entry.sectionTitle;
+            {entries.map((entry, index) => {
+              const showHeader =
+                index === 0 || entries[index - 1].sectionTitle !== entry.sectionTitle;
               const isSelected = entry.keyStr === selectedKeyStr;
               const locked = isEntryLocked?.(entry.keyStr) ?? false;
               const showRun =
@@ -282,7 +280,16 @@ export function PipelineSidePanel({
                 entry.status !== "running" &&
                 entry.status !== "stopping" &&
                 entry.status !== "stopped";
-              const onCooldown = (stopCooldownUntil[entry.keyStr] ?? 0) > Date.now();
+              const onCooldown = (stopCooldownUntil[entry.keyStr] ?? 0) > now;
+              // Override for locked-but-pending workflow/language steps (e.g. split,
+              // execute on previously-generated questions whose upstream state didn't
+              // restore as completed). The lock is advisory and the server doesn't
+              // re-check prerequisites, so allow an explicit "Run anyway".
+              const showRunAnyway =
+                !entry.disabled &&
+                locked &&
+                entry.status === "pending" &&
+                (entry.key.kind === "step" || entry.key.kind === "lang");
 
               return (
                 <div key={entry.keyStr}>
@@ -425,6 +432,22 @@ export function PipelineSidePanel({
                               <Play className="w-3 h-3 mr-1" />
                               Run
                             </Button>
+                          ) : showRunAnyway ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-6 text-[10px] px-2 border-amber-500/50 text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
+                              disabled={onCooldown}
+                              title="Prerequisites aren't marked complete for this question — run this step anyway."
+                              onClick={() => {
+                                if (entry.key.kind !== "lang") return;
+                                onRunLangStep(entry.key.stepId, entry.key.langId);
+                              }}
+                            >
+                              <Unlock className="w-3 h-3 mr-1" />
+                              Run anyway
+                            </Button>
                           ) : null}
                         </>
                       )}
@@ -461,6 +484,22 @@ export function PipelineSidePanel({
                             >
                               <Play className="w-3 h-3 mr-1" />
                               Run
+                            </Button>
+                          ) : showRunAnyway ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-6 text-[10px] px-2 border-amber-500/50 text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
+                              disabled={onCooldown}
+                              title="Prerequisites aren't marked complete for this question — run this step anyway."
+                              onClick={() => {
+                                if (entry.key.kind !== "step") return;
+                                onRunStep(entry.key.id);
+                              }}
+                            >
+                              <Unlock className="w-3 h-3 mr-1" />
+                              Run anyway
                             </Button>
                           ) : null}
                         </>
