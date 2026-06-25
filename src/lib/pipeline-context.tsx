@@ -1693,6 +1693,12 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       if (!state || state.status === "completed" || state.status === "running") {
         continue;
       }
+      // Non-blocking steps (e.g. Strengthen Test Cases) are best-effort: once
+      // they've failed, drop them from the queue instead of retrying, so Run All
+      // continues to the next steps rather than looping on the failure.
+      if (state.status === "failed" && getStepConfig(id).nonBlocking) {
+        continue;
+      }
       if (launchingStepsRef.current.has(id)) {
         remaining.push(id);
         alive.add(id);

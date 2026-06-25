@@ -8,6 +8,9 @@ export function isTrackedStepComplete(
   questionPhaseComplete: boolean
 ): boolean {
   if (stepId === "generate_question") return questionPhaseComplete;
+  // Non-blocking steps (e.g. Strengthen Test Cases) never gate downstream work —
+  // treat as satisfied regardless of their own pending/failed/completed status.
+  if (getStepConfig(stepId).nonBlocking) return true;
   return stepStates.get(stepId)?.status === "completed";
 }
 

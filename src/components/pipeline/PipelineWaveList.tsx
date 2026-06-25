@@ -4,10 +4,20 @@ import { useEffect, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { stepKeyStr, type PipelineStepKey } from "@/lib/pipeline-step-list";
 import type { PipelineSection, PipelineWaveItem } from "@/lib/pipeline-waves";
-import type { StepStatus } from "@/types/pipeline";
+import type { StepId, StepStatus } from "@/types/pipeline";
+import { getStepConfig } from "@/lib/pipeline-config";
 import { formatPipelineCost } from "@/lib/pipeline-usage-match";
 import { cn } from "@/lib/utils";
-import { ArrowDown, ArrowRight, Check, Loader2, Lock, Unlock, Zap } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowRight,
+  Check,
+  Loader2,
+  Lock,
+  Unlock,
+  Zap,
+} from "lucide-react";
 
 interface PipelineWaveListProps {
   sections: PipelineSection[];
@@ -69,6 +79,12 @@ function WaveStepButton({
     !disabled &&
     !!onRunItem &&
     (item.kind === "step" || item.kind === "lang");
+  // Non-blocking steps (e.g. Strengthen Test Cases) surface a failure as a
+  // warning rather than a hard error, since they don't block the pipeline.
+  const nonBlocking =
+    item.kind === "step" && getStepConfig(item.id as StepId).nonBlocking === true;
+  const warn = status === "failed" && nonBlocking;
+  const ringClass = warn ? "border-amber-500/55 bg-amber-500/10" : STATUS_RING[status];
 
   let sub = "Pending";
   if (disabled) sub = "Disabled";
@@ -85,7 +101,7 @@ function WaveStepButton({
   } else if (status === "stopped") {
     sub = "Stopped";
   } else if (status === "failed") {
-    const parts: string[] = ["Failed"];
+    const parts: string[] = [warn ? "Warning · not strengthened" : "Failed"];
     if (durationSec != null) parts.push(`${durationSec}s`);
     if (costUsd != null && costUsd > 0) parts.push(formatPipelineCost(costUsd));
     sub = parts.join(" · ");
@@ -96,7 +112,7 @@ function WaveStepButton({
       data-step-key={itemKey(item)}
       className={cn(
         "flex flex-col rounded-md border px-2.5 py-2 gap-1 min-w-[120px] max-w-full transition-all",
-        STATUS_RING[status],
+        ringClass,
         disabled && "opacity-40 border-dashed",
         showLocked && "opacity-60",
         selected && "ring-2 ring-blue-500 ring-offset-1 ring-offset-background"
@@ -115,6 +131,7 @@ function WaveStepButton({
           <span className="text-xs font-semibold leading-snug">{item.label}</span>
           <div className="flex items-center shrink-0">
             {showLocked && <Lock className="w-3 h-3 text-muted-foreground" />}
+            {warn && <AlertTriangle className="w-3 h-3 text-amber-500" />}
             {status === "completed" && !showLocked && <Check className="w-3 h-3 text-green-500" />}
             {status === "skipped" && !showLocked && (
               <span className="text-[9px] text-muted-foreground">skip</span>

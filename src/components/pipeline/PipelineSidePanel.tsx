@@ -15,6 +15,7 @@ import {
   type PipelineStepUsageMap,
 } from "@/lib/pipeline-step-list";
 import { formatStepCostDisplay } from "@/lib/pipeline-usage-match";
+import { getStepConfig } from "@/lib/pipeline-config";
 import type { PipelineSection } from "@/lib/pipeline-waves";
 import { cn } from "@/lib/utils";
 import type {
@@ -290,6 +291,12 @@ export function PipelineSidePanel({
                 locked &&
                 entry.status === "pending" &&
                 (entry.key.kind === "step" || entry.key.kind === "lang");
+              // Non-blocking steps (e.g. Strengthen Test Cases) show a failure as
+              // a warning, since they don't block the pipeline.
+              const nonBlockingFail =
+                entry.status === "failed" &&
+                entry.key.kind === "step" &&
+                getStepConfig(entry.key.id).nonBlocking === true;
 
               return (
                 <div key={entry.keyStr}>
@@ -329,12 +336,17 @@ export function PipelineSidePanel({
                           <div className="flex flex-wrap items-center gap-1.5 mt-1">
                             <Badge
                               variant="outline"
-                              className={cn("text-[9px] h-4 px-1 capitalize", STATUS_BADGE[entry.status])}
+                              className={cn(
+                                "text-[9px] h-4 px-1 capitalize",
+                                nonBlockingFail
+                                  ? "bg-amber-500/15 text-amber-400 border-amber-500/30"
+                                  : STATUS_BADGE[entry.status]
+                              )}
                             >
                               {(entry.status === "running" || entry.status === "stopping") && (
                                 <Loader2 className="w-2.5 h-2.5 mr-0.5 animate-spin inline" />
                               )}
-                              {entry.status}
+                              {nonBlockingFail ? "warning" : entry.status}
                             </Badge>
                             <span className="text-[10px] text-muted-foreground tabular-nums">
                               {formatDuration(

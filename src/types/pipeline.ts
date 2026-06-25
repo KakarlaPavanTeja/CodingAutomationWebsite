@@ -66,6 +66,12 @@ export interface PipelineStepConfig {
   needsMode: boolean;
   llmUsage: LlmUsage;
   prerequisite?: StepId;
+  /**
+   * When true, this step never gates downstream steps: it's treated as
+   * satisfied for prerequisite/unlock checks regardless of its own status, and
+   * a failure is surfaced as a warning rather than a hard error.
+   */
+  nonBlocking?: boolean;
 }
 
 export interface SubStepRunState {

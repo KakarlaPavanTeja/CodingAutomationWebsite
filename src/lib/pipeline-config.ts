@@ -91,6 +91,9 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasTestcaseCount: false,
     needsMode: false,
     llmUsage: "conditional",
+    // Best-effort enhancement: never blocks downstream steps, and a failure is
+    // shown as a warning so the pipeline can continue.
+    nonBlocking: true,
   },
   {
     id: "split_code",
