@@ -32,48 +32,63 @@ const lastReconcileAt = new Map<string, number>();
  * Only writes when the derived status differs, to avoid churn.
  */
 export async function recomputeProblemStatus(problemId: string): Promise<void> {
-  const rows = await db
-    .select({
-      stepId: pipelineRuns.stepId,
-      status: pipelineRuns.status,
-      exitCode: pipelineRuns.exitCode,
-      startedAt: pipelineRuns.startedAt,
-    })
-    .from(pipelineRuns)
-    .where(eq(pipelineRuns.problemId, problemId));
+  // Serialize all status derivations for this problem inside a transaction that
+  // locks the problem row (`SELECT … FOR UPDATE`). Without the lock two
+  // concurrent recomputes (a throttled reconcile + a step close-handler, say)
+  // can interleave: one reads "X running → processing", the other reads the now
+  // -completed rows and writes "completed", then the first writes its stale
+  // "processing" on top — and the problem sticks. The lock forces the later
+  // recompute to re-read the fresh run rows under the same lock, so the last
+  // writer always reflects reality (P1-H6).
+  await db.transaction(async (tx) => {
+    const prob = await tx
+      .select({ status: problems.status })
+      .from(problems)
+      .where(eq(problems.id, problemId))
+      .for("update")
+      .limit(1);
+    if (!prob[0]) return; // problem gone — nothing to derive
 
-  if (rows.length === 0) return; // nothing to derive from — leave as-is
+    // Read run rows *inside* the lock so the snapshot can't predate a concurrent
+    // recompute's writes.
+    const rows = await tx
+      .select({
+        stepId: pipelineRuns.stepId,
+        status: pipelineRuns.status,
+        exitCode: pipelineRuns.exitCode,
+        startedAt: pipelineRuns.startedAt,
+      })
+      .from(pipelineRuns)
+      .where(eq(pipelineRuns.problemId, problemId));
 
-  let next: "processing" | "completed" | "failed" | "draft";
-  if (rows.some((r) => r.status === "running")) {
-    next = "processing";
-  } else {
-    const latest = rows.reduce((a, b) =>
-      (a.startedAt?.getTime() ?? 0) >= (b.startedAt?.getTime() ?? 0) ? a : b
-    );
-    const parent = parsePipelineRunStepKey(latest.stepId).parentStepId;
-    if (parent === "prepare_platform_json" && latest.status === "completed" && latest.exitCode === 0) {
-      next = "completed";
-    } else if (latest.exitCode === -1) {
-      next = "draft"; // stopped
-    } else if (latest.status === "failed") {
-      next = "failed";
+    if (rows.length === 0) return; // nothing to derive from — leave as-is
+
+    let next: "processing" | "completed" | "failed" | "draft";
+    if (rows.some((r) => r.status === "running")) {
+      next = "processing";
     } else {
-      next = "draft"; // partial / non-final success with nothing running
+      const latest = rows.reduce((a, b) =>
+        (a.startedAt?.getTime() ?? 0) >= (b.startedAt?.getTime() ?? 0) ? a : b
+      );
+      const parent = parsePipelineRunStepKey(latest.stepId).parentStepId;
+      if (parent === "prepare_platform_json" && latest.status === "completed" && latest.exitCode === 0) {
+        next = "completed";
+      } else if (latest.exitCode === -1) {
+        next = "draft"; // stopped
+      } else if (latest.status === "failed") {
+        next = "failed";
+      } else {
+        next = "draft"; // partial / non-final success with nothing running
+      }
     }
-  }
 
-  const prob = await db
-    .select({ status: problems.status })
-    .from(problems)
-    .where(eq(problems.id, problemId))
-    .limit(1);
-  if (prob[0] && prob[0].status !== next) {
-    await db
-      .update(problems)
-      .set({ status: next, updatedAt: new Date() })
-      .where(eq(problems.id, problemId));
-  }
+    if (prob[0].status !== next) {
+      await tx
+        .update(problems)
+        .set({ status: next, updatedAt: new Date() })
+        .where(eq(problems.id, problemId));
+    }
+  });
 }
 
 function isProcessAlive(pid: number): boolean {
