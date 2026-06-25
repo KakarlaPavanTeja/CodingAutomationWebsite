@@ -7,7 +7,7 @@ import type { PipelineSection, PipelineWaveItem } from "@/lib/pipeline-waves";
 import type { StepStatus } from "@/types/pipeline";
 import { formatPipelineCost } from "@/lib/pipeline-usage-match";
 import { cn } from "@/lib/utils";
-import { ArrowDown, ArrowRight, Check, Loader2, Lock, Zap } from "lucide-react";
+import { ArrowDown, ArrowRight, Check, Loader2, Lock, Unlock, Zap } from "lucide-react";
 
 interface PipelineWaveListProps {
   sections: PipelineSection[];
@@ -19,6 +19,8 @@ interface PipelineWaveListProps {
   isLocked: (item: PipelineWaveItem) => boolean;
   isSelected: (item: PipelineWaveItem) => boolean;
   onSelect: (item: PipelineWaveItem) => void;
+  /** Run a locked-but-pending step/lang node anyway (lock is advisory). */
+  onRunItem?: (item: PipelineWaveItem) => void;
 }
 
 const STATUS_RING: Record<StepStatus, string> = {
@@ -47,6 +49,7 @@ function WaveStepButton({
   locked,
   selected,
   onSelect,
+  onRunItem,
 }: {
   item: PipelineWaveItem;
   status: StepStatus;
@@ -55,9 +58,17 @@ function WaveStepButton({
   locked: boolean;
   selected: boolean;
   onSelect: () => void;
+  onRunItem?: (item: PipelineWaveItem) => void;
 }) {
   const disabled = item.enabledInConfig === false;
   const showLocked = locked && status === "pending";
+  // A locked-but-pending workflow/language node can still be run (the lock is
+  // advisory). Sub-steps keep their real ordering, so no override there.
+  const canRunAnyway =
+    showLocked &&
+    !disabled &&
+    !!onRunItem &&
+    (item.kind === "step" || item.kind === "lang");
 
   let sub = "Pending";
   if (disabled) sub = "Disabled";
@@ -81,33 +92,55 @@ function WaveStepButton({
   } else if (status === "skipped") sub = "Skipped";
 
   return (
-    <button
-      type="button"
+    <div
       data-step-key={itemKey(item)}
-      disabled={disabled}
-      onClick={onSelect}
       className={cn(
-        "flex flex-col text-left rounded-md border px-2.5 py-2 gap-1 min-w-[120px] max-w-full transition-all",
+        "flex flex-col rounded-md border px-2.5 py-2 gap-1 min-w-[120px] max-w-full transition-all",
         STATUS_RING[status],
-        disabled && "opacity-40 border-dashed cursor-not-allowed",
-        showLocked && "opacity-50",
+        disabled && "opacity-40 border-dashed",
+        showLocked && "opacity-60",
         selected && "ring-2 ring-blue-500 ring-offset-1 ring-offset-background"
       )}
     >
-      <div className="flex items-start justify-between gap-1.5">
-        <span className="text-xs font-semibold leading-snug">{item.label}</span>
-        <div className="flex items-center shrink-0">
-          {showLocked && <Lock className="w-3 h-3 text-muted-foreground" />}
-          {status === "completed" && !showLocked && <Check className="w-3 h-3 text-green-500" />}
-          {status === "skipped" && !showLocked && (
-            <span className="text-[9px] text-muted-foreground">skip</span>
-          )}
-          {status === "running" && <Loader2 className="w-3 h-3 text-blue-400 animate-spin" />}
-          {status === "stopping" && <Loader2 className="w-3 h-3 text-amber-400 animate-spin" />}
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onSelect}
+        className={cn(
+          "flex flex-col text-left gap-1 w-full",
+          disabled && "cursor-not-allowed"
+        )}
+      >
+        <div className="flex items-start justify-between gap-1.5">
+          <span className="text-xs font-semibold leading-snug">{item.label}</span>
+          <div className="flex items-center shrink-0">
+            {showLocked && <Lock className="w-3 h-3 text-muted-foreground" />}
+            {status === "completed" && !showLocked && <Check className="w-3 h-3 text-green-500" />}
+            {status === "skipped" && !showLocked && (
+              <span className="text-[9px] text-muted-foreground">skip</span>
+            )}
+            {status === "running" && <Loader2 className="w-3 h-3 text-blue-400 animate-spin" />}
+            {status === "stopping" && <Loader2 className="w-3 h-3 text-amber-400 animate-spin" />}
+          </div>
         </div>
-      </div>
-      <span className="text-[10px] text-muted-foreground">{sub}</span>
-    </button>
+        <span className="text-[10px] text-muted-foreground">{sub}</span>
+      </button>
+
+      {canRunAnyway && (
+        <button
+          type="button"
+          title="Prerequisites aren't marked complete for this question — run this step anyway."
+          onClick={(e) => {
+            e.stopPropagation();
+            onRunItem?.(item);
+          }}
+          className="mt-1 inline-flex items-center justify-center gap-1 rounded border border-amber-500/50 px-2 py-0.5 text-[10px] font-medium text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
+        >
+          <Unlock className="w-3 h-3" />
+          Run anyway
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -121,6 +154,7 @@ export function PipelineWaveList({
   isLocked,
   isSelected,
   onSelect,
+  onRunItem,
 }: PipelineWaveListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const selectedKeyStr = stepKeyStr(selectedKey);
@@ -203,6 +237,7 @@ export function PipelineWaveList({
                             locked={isLocked(item)}
                             selected={isSelected(item)}
                             onSelect={() => onSelect(item)}
+                            onRunItem={onRunItem}
                           />
                         </span>
                       ))}
@@ -220,6 +255,7 @@ export function PipelineWaveList({
                         locked={isLocked(item)}
                         selected={isSelected(item)}
                         onSelect={() => onSelect(item)}
+                        onRunItem={onRunItem}
                       />
                     ))}
                   </div>

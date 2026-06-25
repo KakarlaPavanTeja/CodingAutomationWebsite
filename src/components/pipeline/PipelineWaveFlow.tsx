@@ -226,6 +226,14 @@ export function PipelineWaveFlow({
           isLocked={isItemLocked}
           isSelected={isItemSelected}
           onSelect={handleSelectItem}
+          onRunItem={(item) => {
+            if (item.kind === "lang" && item.parentStepId && item.langId) {
+              onRunLangStep?.(item.parentStepId, item.langId);
+            } else if (item.kind === "step") {
+              const st = stepStates.get(item.id as StepId);
+              if (st) onRunStep(st);
+            }
+          }}
         />
       </CardContent>
     </Card>
