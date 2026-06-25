@@ -120,8 +120,19 @@ export interface AnthropicCallUsage {
 
 /** Tunable options for the routine. */
 export interface PrepOptions {
-  /** OpenRouter model id. Defaults to OPENROUTER_MODEL_CP_PREP or anthropic/claude-opus-4.5. */
+  /**
+   * OpenRouter model id. When set, it PINS a single model and disables tier
+   * escalation. Leave unset to use the cheap→expensive ladder (see modelTiers).
+   */
   model?: string;
+  /**
+   * Cheap→expensive model ladder. PORT-mode runs start on the cheapest rung and
+   * escalate one rung whenever the examples fail (or the reply can't be parsed,
+   * or the call errors); AUTHOR-mode runs start at the top rung. Overrides both
+   * `model` and OPENROUTER_CP_PREP_MODEL_TIERS. Defaults to
+   * [anthropic/claude-sonnet-4.6, anthropic/claude-opus-4.5].
+   */
+  modelTiers?: string[];
   /** Max repair attempts after the first generation. Defaults to 3. */
   maxRepairAttempts?: number;
   /** Per-example execution timeout in milliseconds. Defaults to 10000. */

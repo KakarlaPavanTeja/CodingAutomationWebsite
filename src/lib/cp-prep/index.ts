@@ -31,14 +31,37 @@ import type {
   AnthropicCallUsage,
 } from "./types";
 
+// Strong fallback model — also the top rung of the default escalation ladder.
 const DEFAULT_CP_PREP_MODEL = "anthropic/claude-opus-4.5";
 
+// Cheap → expensive ladder. A faithful PORT starts on the cheap rung and only
+// climbs when the examples don't pass; a hard call error also escalates.
+const DEFAULT_MODEL_TIERS = ["anthropic/claude-sonnet-4.6", DEFAULT_CP_PREP_MODEL];
+
 const DEFAULTS = {
-  model: process.env.OPENROUTER_MODEL_CP_PREP?.trim() || DEFAULT_CP_PREP_MODEL,
   maxRepairAttempts: 3,
   perExampleTimeoutMs: 10_000,
   pythonBin: "python3",
 };
+
+/**
+ * Resolve the cheap→expensive model ladder. Precedence:
+ *  1. options.modelTiers (explicit ladder, e.g. from tests)
+ *  2. options.model or OPENROUTER_MODEL_CP_PREP — pins a single model (escalation off)
+ *  3. OPENROUTER_CP_PREP_MODEL_TIERS — comma-separated ladder
+ *  4. the built-in DEFAULT_MODEL_TIERS
+ */
+function resolveModelTiers(options: PrepOptions): string[] {
+  if (options.modelTiers && options.modelTiers.length > 0) return options.modelTiers;
+  const pinned = options.model?.trim() || process.env.OPENROUTER_MODEL_CP_PREP?.trim();
+  if (pinned) return [pinned];
+  const envTiers = process.env.OPENROUTER_CP_PREP_MODEL_TIERS?.trim();
+  if (envTiers) {
+    const tiers = envTiers.split(",").map((s) => s.trim()).filter(Boolean);
+    if (tiers.length > 0) return tiers;
+  }
+  return DEFAULT_MODEL_TIERS;
+}
 
 interface ModelJson {
   slug: string;
@@ -104,6 +127,11 @@ export async function prepProblem(
   const inputExamples = input.examples ?? [];
   const isRefine = Boolean(input.refine?.instruction?.trim());
 
+  const modelTiers = resolveModelTiers(opts);
+  // PORT mode leans on a reference, so start on the cheapest tier and escalate on
+  // failure. AUTHOR mode (no reference) must design the algorithm — start at the top.
+  let tierIndex = hasRef ? 0 : modelTiers.length - 1;
+
   const messages: OpenRouterChatMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
     {
@@ -119,24 +147,46 @@ export async function prepProblem(
   const usageCalls: AnthropicCallUsage[] = [];
   let callIndex = 0;
 
+  // One model call at the current tier, climbing the ladder on a hard call error
+  // (bad slug, upstream 5xx) until the top rung is reached, then rethrowing.
+  async function callCurrentTier() {
+    for (;;) {
+      const model = modelTiers[tierIndex];
+      try {
+        return await openRouterChatCompletion({
+          apiKey: opts.apiKey,
+          model,
+          messages,
+          maxTokens: 8000,
+          signal: opts.signal,
+        });
+      } catch (err) {
+        if (tierIndex >= modelTiers.length - 1) throw err;
+        const next = modelTiers[tierIndex + 1];
+        tierIndex++;
+        emitProgress(opts, {
+          type: "warning",
+          message: `Model ${model} call failed (${
+            err instanceof Error ? err.message : String(err)
+          }); escalating to ${next}.`,
+        });
+      }
+    }
+  }
+
   for (let attempt = 0; attempt <= opts.maxRepairAttempts; attempt++) {
     const isRepair = attempt > 0;
+    const model = modelTiers[tierIndex];
     emitProgress(opts, {
       type: "status",
       message: isRepair
-        ? `Calling model (repair attempt ${attempt}/${opts.maxRepairAttempts})…`
+        ? `Calling ${model} (repair attempt ${attempt}/${opts.maxRepairAttempts})…`
         : isRefine
-          ? "Calling model (applying your changes)…"
-          : "Calling model (generation)…",
+          ? `Calling ${model} (applying your changes)…`
+          : `Calling ${model} (generation)…`,
     });
 
-    const completion = await openRouterChatCompletion({
-      apiKey: opts.apiKey,
-      model: opts.model,
-      messages,
-      maxTokens: 8000,
-      signal: opts.signal,
-    });
+    const completion = await callCurrentTier();
 
     const callUsage = usageFromOpenRouterCompletion(completion, {
       callIndex: callIndex++,
@@ -166,6 +216,8 @@ export async function prepProblem(
         );
       }
       repairAttempts++;
+      // A garbled/truncated reply often means the tier was overwhelmed — climb.
+      tierIndex = Math.min(tierIndex + 1, modelTiers.length - 1);
       emitProgress(opts, {
         type: "warning",
         message: "Model reply was not valid JSON — asking it to resend as JSON.",
@@ -218,6 +270,14 @@ export async function prepProblem(
     if (failing.length === 0 || attempt === opts.maxRepairAttempts) break;
 
     repairAttempts++;
+    // Examples failed → the current tier wasn't strong enough. Escalate the repair.
+    if (tierIndex < modelTiers.length - 1) {
+      tierIndex++;
+      emitProgress(opts, {
+        type: "status",
+        message: `Escalating to ${modelTiers[tierIndex]} for the repair.`,
+      });
+    }
     messages.push({
       role: "user",
       content: buildRepairPrompt(failing, verifyExamples, hasRef),
