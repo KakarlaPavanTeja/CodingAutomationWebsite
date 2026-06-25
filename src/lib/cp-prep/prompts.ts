@@ -25,7 +25,7 @@ Follow these rules exactly.
 - If the problem already specifies an I/O format, keep it and just tidy the wording.
 
 ## Python solution
-- PORT MODE: mirror the reference logic EXACTLY — same algorithm, same edge cases. AUTHOR MODE: implement a correct algorithm of your own. In both, keep a clearly named core function (e.g. solve) separate from main().
+- PORT MODE: first mirror the reference logic EXACTLY — same algorithm, same edge cases — so correctness is judged against a faithful port. AUTHOR MODE: implement a correct algorithm of your own. In both, keep a clearly named core function (e.g. solve) separate from main().
 - The program MUST read from STDIN and print to STDOUT per the documented I/O format, so it can be run directly: \`python3 solution.py < input\`.
 - Choose the parser to match the data, never by habit:
   - Numeric / single-token data -> data = sys.stdin.read().split() then index/slice (handles size-0 arrays for free).
@@ -34,13 +34,27 @@ Follow these rules exactly.
   - Single free-text line -> sys.stdin.readline().rstrip("\\n").
   Ask: does any field contain a space, or does line structure carry meaning? If yes, parse by lines.
 
+## Optimality pass
+After correctness, judge efficiency in terms of the documented constraints, and SHIP THE BEST CORRECT SOLUTION.
+- PORT MODE: state the reference's time and space complexity. If the reference is already optimal (no better-known approach, or it meets the constraints with margin), ship the faithful port. If it is sub-optimal — it would TLE/MLE at the stated bounds, or a strictly better standard approach exists (O(n²)->O(n log n) with a BIT/segment tree; exponential recursion->memoized/iterative DP; repeated recompute->prefix sums; brute scan->two-pointer/sliding window; naive match->KMP/Z) — ship the optimized version instead. Reuse the same core function name/signature and the reference's variable names wherever they still apply, so the change reads as a reviewable diff. The optimized version must still mirror the reference's input/output behavior on every case. Add a short top-of-file comment noting it is an optimized version of the reference and the old -> new complexity.
+- AUTHOR MODE: write an efficient solution from the start; state its complexity.
+
+## Python performance hygiene
+Apply to whichever solution you ship (constant-factor, not asymptotic, but matters on tight judges):
+- Prefer \`from functools import cache\` over \`lru_cache(maxsize=None)\`.
+- Digit DP: memoize only the non-tight branch keyed on (pos, prev, started); handle the tight branch inline without caching.
+- Prefer iterative bottom-up DP for hot loops; raise sys.setrecursionlimit only when recursion is unavoidable.
+- Read all input at once (sys.stdin.buffer.read()) and, for large output, build a list and "\\n".join(...) once instead of print-in-a-loop.
+- Hoist attribute lookups out of hot loops.
+
 ## Verification mindset
 - The solution will be executed against every provided example by the calling system. Write it to pass all of them AND to handle boundary cases you can reason about (empty/size-0, single element, all-negative/all-equal/all-zero, duplicates, min/max from constraints, cases the wording implies but examples skip).
+- The given examples are necessary but not sufficient — a wrong solution often passes the samples and fails on inputs they never exercise. Reason as if diffing against an INDEPENDENT brute force derived straight from the statement (enumerate/simulate directly; do NOT reuse the reference's idea, or you copy its bug). Mentally stress the small/degenerate end hard (n = 0 and 1, k at its min and max, l == r for ranges) — that is where bugs surface. If you optimize in the optimality pass, confirm the optimized version still agrees with the faithful port on these cases before shipping it.
 
 ## Report
-- PORT MODE: state plainly whether the reference solution is correct. For each genuine mistake give 2–3 lines: what's wrong, why, the fix.
+- PORT MODE: state plainly whether the reference solution is correct. For each genuine mistake give 2–3 lines: what's wrong, why, the fix. Then give an OPTIMALITY VERDICT: the reference's complexity, whether it meets the constraints, and — if you rewrote it — the original vs improved complexity and a one-line description of the better approach.
 - AUTHOR MODE: state that you authored the solution yourself (nothing to port), and note its approach and complexity in 1–2 lines.
-- In both modes, cover statement issues: constraints contradicting examples, ambiguous wording, mismatched examples, undefined duplicate behavior, missing/garbled constraints (state what you inferred and on what basis). Also cover solution bugs you hit and fixed during your own reasoning (wrong edge cases, overflow, off-by-one, tie-breaking). If there are no issues, say so in one line. Never invent problems to seem thorough.
+- In both modes, cover statement issues: constraints contradicting examples, ambiguous wording, mismatched examples, undefined duplicate behavior, missing/garbled constraints (state what you inferred and on what basis). Also cover solution bugs you hit and fixed during your own reasoning (wrong edge cases, overflow, off-by-one, tie-breaking). If there are no issues and the reference is already optimal, say so in one line. Never invent problems to seem thorough.
 
 ## Output contract — CRITICAL
 Respond with a SINGLE JSON object and nothing else. No Markdown code fences, no preamble, no trailing text. The object must have exactly these string fields:
