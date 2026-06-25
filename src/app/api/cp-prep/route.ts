@@ -23,6 +23,7 @@ const MAX_SOLUTION_LEN = 60_000;
 const MAX_LANGUAGE_LEN = 40;
 const MAX_EXAMPLES = 50;
 const MAX_EXAMPLE_FIELD_LEN = 20_000;
+const MAX_REFINE_INSTRUCTION_LEN = 10_000;
 
 function isValid(body: unknown): body is PrepInput {
   if (typeof body !== "object" || body === null) return false;
@@ -37,7 +38,24 @@ function isValid(body: unknown): body is PrepInput {
     (b.referenceSolution === undefined ||
       (typeof b.referenceSolution === "string" && b.referenceSolution.length <= MAX_SOLUTION_LEN)) &&
     (b.referenceLanguage === undefined ||
-      (typeof b.referenceLanguage === "string" && b.referenceLanguage.length <= MAX_LANGUAGE_LEN))
+      (typeof b.referenceLanguage === "string" && b.referenceLanguage.length <= MAX_LANGUAGE_LEN)) &&
+    isValidRefine(b.refine)
+  );
+}
+
+/** The optional `refine` block: absent, or a well-formed { instruction, current* } object. */
+function isValidRefine(raw: unknown): boolean {
+  if (raw === undefined) return true;
+  if (typeof raw !== "object" || raw === null) return false;
+  const r = raw as Record<string, unknown>;
+  return (
+    typeof r.instruction === "string" &&
+    r.instruction.trim().length > 0 &&
+    r.instruction.length <= MAX_REFINE_INSTRUCTION_LEN &&
+    typeof r.currentProblemMarkdown === "string" &&
+    r.currentProblemMarkdown.length <= MAX_STATEMENT_LEN &&
+    typeof r.currentSolutionPython === "string" &&
+    r.currentSolutionPython.length <= MAX_SOLUTION_LEN
   );
 }
 
@@ -180,7 +198,18 @@ export async function POST(req: NextRequest) {
           referenceSolution: body.referenceSolution?.trim() || undefined,
           referenceLanguage: body.referenceLanguage?.trim() || undefined,
           examples: inputExamples,
+          refine: body.refine
+            ? {
+                instruction: body.refine.instruction.trim(),
+                currentProblemMarkdown: body.refine.currentProblemMarkdown,
+                currentSolutionPython: body.refine.currentSolutionPython,
+              }
+            : undefined,
         };
+
+        if (prepInput.refine) {
+          send("status", { message: "Applying your requested changes…" });
+        }
 
         const problemTitle = prepInput.title;
 

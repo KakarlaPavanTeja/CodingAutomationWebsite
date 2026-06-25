@@ -35,6 +35,21 @@ export interface PrepInput {
    * the report will flag that no empirical verification was possible.
    */
   examples?: Example[];
+  /**
+   * Refinement request. OPTIONAL. When present, the routine does NOT generate
+   * from scratch — it takes the previously generated outputs below and applies
+   * the user's free-text instruction (e.g. "rename variables to match the
+   * reference", "tighten the constraints", "fix the off-by-one on empty input"),
+   * then re-verifies. Everything not covered by the instruction is preserved.
+   */
+  refine?: {
+    /** Free-text instruction describing the changes to make. */
+    instruction: string;
+    /** The current problem.md to edit. */
+    currentProblemMarkdown: string;
+    /** The current solution.py to edit. */
+    currentSolutionPython: string;
+  };
 }
 
 /** Result of one example run during verification. */

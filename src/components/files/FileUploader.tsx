@@ -17,6 +17,7 @@ import {
   XCircle,
   ChevronDown,
   ChevronUp,
+  Wand2,
 } from "lucide-react";
 import { BinaryTreeIcon, LinkedListIcon } from "@/components/icons/structure-icons";
 import { Button } from "@/components/ui/button";
@@ -276,6 +277,7 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
   const [generatedSolutionPy, setGeneratedSolutionPy] = useState("");
   const [prepResult, setPrepResult] = useState<PrepResult | null>(null);
   const [reportExpanded, setReportExpanded] = useState(false);
+  const [refineInstruction, setRefineInstruction] = useState("");
 
   const [problemName, setProblemName] = useState("");
   const [scenarioLevel, setScenarioLevel] = useState<"none" | "light" | "moderate" | "heavy">("none");
@@ -302,6 +304,7 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
       setPrepResult(result);
       setGeneratedProblemMd(result.problemMarkdown);
       setGeneratedSolutionPy(result.solutionPython);
+      setRefineInstruction("");
       if (!problemName.trim() && result.slug) {
         setProblemName(
           result.slug
@@ -373,6 +376,32 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
       problemStatement,
       referenceSolution,
       referenceLanguage: referenceSolution ? referenceLanguage : undefined,
+    });
+  };
+
+  const handleRefine = () => {
+    const instruction = refineInstruction.trim();
+    if (!instruction) {
+      setError("Describe what you'd like to change");
+      return;
+    }
+    if (!hasReviewedContent) {
+      setError("Generate problem.md and solution.py first");
+      return;
+    }
+    const { problemStatement, referenceSolution } = resolveRawInput();
+    setError(null);
+    setPrepResult(null);
+    generate({
+      title: problemName.trim() || "problem",
+      problemStatement,
+      referenceSolution,
+      referenceLanguage: referenceSolution ? referenceLanguage : undefined,
+      refine: {
+        instruction,
+        currentProblemMarkdown: generatedProblemMd,
+        currentSolutionPython: generatedSolutionPy,
+      },
     });
   };
 
@@ -780,6 +809,7 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
               <Textarea
                 value={generatedProblemMd}
                 onChange={(e) => setGeneratedProblemMd(e.target.value)}
+                disabled={isRunning}
                 className="min-h-[360px] flex-1 resize-y border-2 border-border bg-background font-mono text-sm shadow-inner"
               />
             </div>
@@ -794,11 +824,63 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
               <Textarea
                 value={generatedSolutionPy}
                 onChange={(e) => setGeneratedSolutionPy(e.target.value)}
+                disabled={isRunning}
                 className="min-h-[360px] flex-1 resize-y border-2 border-border bg-background font-mono text-sm shadow-inner"
               />
             </div>
           </section>
         </div>
+
+        <section className="rounded-xl border-2 border-dashed border-border bg-muted/20 p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Wand2 className="h-4 w-4 text-primary" />
+            <h3 className="text-sm font-semibold">Refine with a prompt</h3>
+          </div>
+          <p className="text-xs text-muted-foreground -mt-1">
+            Describe a change and Claude will update the files above, then re-verify against the
+            examples. Anything you don&apos;t mention is kept as-is.
+          </p>
+          <Textarea
+            value={refineInstruction}
+            onChange={(e) => setRefineInstruction(e.target.value)}
+            disabled={isRunning}
+            placeholder="e.g. Rename variables to match the reference, tighten the constraints to 1 ≤ n ≤ 10^5, and handle the empty-array case."
+            className="min-h-[80px] resize-y border-2 border-border bg-background text-sm shadow-inner"
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !isRunning) {
+                e.preventDefault();
+                handleRefine();
+              }
+            }}
+          />
+          {isRunning && <PrepLogPanel logs={logs} />}
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[11px] text-muted-foreground">⌘/Ctrl + Enter to apply</span>
+            <div className="flex items-center gap-2">
+              {isRunning && (
+                <Button variant="ghost" size="sm" onClick={abort}>
+                  Stop
+                </Button>
+              )}
+              <Button
+                onClick={handleRefine}
+                disabled={isRunning || !refineInstruction.trim() || !hasReviewedContent}
+              >
+                {isRunning ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Applying…
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="mr-2 h-4 w-4" />
+                    Apply changes
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </section>
 
         {prepResult?.report && (
           <section className="rounded-xl border border-border bg-card">
@@ -819,16 +901,22 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
         )}
 
         <div className="flex items-center justify-between border-t pt-4">
-          <Button variant="outline" onClick={() => setPhase("prepare")}>
+          <Button variant="outline" onClick={() => setPhase("prepare")} disabled={isRunning}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             Regenerate
           </Button>
           <div className="flex items-center gap-2">
-            {error && <p className="text-sm text-destructive">{error}</p>}
-            <Button variant="outline" onClick={() => setPhase("advanced")} disabled={!hasReviewedContent}>
+            {(error || prepError) && (
+              <p className="text-sm text-destructive">{error || prepError}</p>
+            )}
+            <Button
+              variant="outline"
+              onClick={() => setPhase("advanced")}
+              disabled={!hasReviewedContent || isRunning}
+            >
               Advanced settings
             </Button>
-            <Button onClick={handleUpload} disabled={uploading || !canSubmit || createdRef.current}>
+            <Button onClick={handleUpload} disabled={uploading || isRunning || !canSubmit || createdRef.current}>
               {uploading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

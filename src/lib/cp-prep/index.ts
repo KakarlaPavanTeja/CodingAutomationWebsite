@@ -12,6 +12,7 @@ import { verifySolution } from "./python-runner";
 import {
   SYSTEM_PROMPT,
   buildGeneratePrompt,
+  buildRefinePrompt,
   buildRepairPrompt,
 } from "./prompts";
 import { resolveVerifyExamples, extractExamplesFromStatement } from "./example-extractor";
@@ -101,10 +102,14 @@ export async function prepProblem(
   };
   const hasRef = Boolean(input.referenceSolution?.trim());
   const inputExamples = input.examples ?? [];
+  const isRefine = Boolean(input.refine?.instruction?.trim());
 
   const messages: OpenRouterChatMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: buildGeneratePrompt(input) },
+    {
+      role: "user",
+      content: isRefine ? buildRefinePrompt(input) : buildGeneratePrompt(input),
+    },
   ];
 
   let current: ModelJson | null = null;
@@ -120,7 +125,9 @@ export async function prepProblem(
       type: "status",
       message: isRepair
         ? `Calling model (repair attempt ${attempt}/${opts.maxRepairAttempts})…`
-        : "Calling model (generation)…",
+        : isRefine
+          ? "Calling model (applying your changes)…"
+          : "Calling model (generation)…",
     });
 
     const completion = await openRouterChatCompletion({

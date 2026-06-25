@@ -103,6 +103,47 @@ ${renderExamples(input.examples ?? [])}
 Produce the JSON object now.`;
 }
 
+/**
+ * Refinement prompt — sent instead of the generate prompt when the user wants to
+ * adjust an already-generated result with a free-text instruction. The model gets
+ * the original problem context plus the current outputs and applies the change.
+ */
+export function buildRefinePrompt(input: PrepInput): string {
+  const hasRef = Boolean(input.referenceSolution?.trim());
+  const refine = input.refine!;
+
+  const modeBlock = hasRef
+    ? `MODE: PORT MODE — a reference solution (${input.referenceLanguage ?? "unknown language"}) was used to produce the outputs below.
+
+REFERENCE SOLUTION:
+${input.referenceSolution}`
+    : `MODE: AUTHOR MODE — the solution below was authored from the statement (there was no reference).`;
+
+  return `You previously produced the problem statement and Python solution below. Apply the user's requested change, keep everything else intact, and re-verify.
+
+USER INSTRUCTION (what to change):
+${refine.instruction}
+
+ORIGINAL TITLE:
+${input.title}
+
+ORIGINAL RAW PROBLEM STATEMENT (may be HTML — for context):
+${input.problemStatement}
+
+${modeBlock}
+
+CURRENT problem.md (edit only as the instruction requires):
+${refine.currentProblemMarkdown}
+
+CURRENT solution.py (edit only as the instruction requires):
+${refine.currentSolutionPython}
+
+WORKED EXAMPLES (the Python solution will be executed against these):
+${renderExamples(input.examples ?? [])}
+
+Apply the instruction faithfully. Do NOT make unrelated changes — preserve wording, structure, variable names, and logic that the instruction does not touch. If the instruction would break correctness or contradicts the examples, do the closest correct thing and explain the tension in the report. Keep the I/O format and the solution in sync with each other and with the statement. Re-emit the COMPLETE JSON object (all four fields) reflecting the change, with the report noting what you changed and why. Same strict output contract: a single JSON object, no fences, no extra text.`;
+}
+
 /** Repair prompt, sent when one or more examples fail on execution. */
 export function buildRepairPrompt(
   failing: ExampleRunResult[],
