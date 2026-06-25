@@ -118,8 +118,12 @@ export async function putObject(
   }
 
   const file = getBucket().file(objectPath);
+  // Small files use a single simple upload (low overhead); large files (e.g.
+  // multi-MB generated testcases/coding_questions JSON) use a resumable upload,
+  // which is the reliable path for big payloads.
+  const RESUMABLE_THRESHOLD = 8 * 1024 * 1024;
   await file.save(buf, {
-    resumable: false,
+    resumable: buf.length > RESUMABLE_THRESHOLD,
     contentType: contentType,
     metadata: contentType ? { contentType } : undefined,
   });

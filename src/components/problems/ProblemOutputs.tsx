@@ -137,11 +137,14 @@ export function ProblemOutputs({ problemId }: ProblemOutputsProps) {
       if (!tab) return;
 
       try {
-        const res = await fetch("/api/files/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path, content: tab.content, problemId }),
-        });
+        const res = await fetch(
+          `/api/files/save?problemId=${encodeURIComponent(problemId)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path, content: tab.content }),
+          }
+        );
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
         updateTab(path, { originalContent: tab.content, editing: false });

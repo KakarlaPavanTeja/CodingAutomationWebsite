@@ -12,3 +12,4 @@
 - [Cross-language function naming](cross-language-function-naming.md) — 4 lang solutions only share a function name via the canonical description_signature; naming step must run with "codes" and names used verbatim (no per-lang re-casing).
 - [Gateway idle-timeout vs hidden reasoning](gateway-idle-timeout-reasoning.md) — high-effort reasoning streams 0 bytes (OpenAI hides reasoning) → proxy cuts silent socket ~160s; only fix is lower effort, not retry/streaming.
 - [problem.md config headers](problem-config-headers.md) — `# Type:` = structure type (space-form: standard/linked list/binary tree), `# Question Type:` = function/nonfunction; UI underscores must map to spaces or Python treats node problems as standard.
+- [files/save size cap](files-save-size-cap.md) — generated outputs reach 50–120MB; save cap must be huge (FILE_SAVE_MAX_BYTES, 256MB) and route must authorize via ?problemId= BEFORE parsing the body.

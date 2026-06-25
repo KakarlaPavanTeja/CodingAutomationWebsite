@@ -422,11 +422,10 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     const pid = currentProblemIdRef.current;
     if (!pid || !ownerTitle.trim()) return;
 
-    await fetch("/api/files/save", {
+    await fetch(`/api/files/save?problemId=${encodeURIComponent(pid)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        problemId: pid,
         path: "Outputs/generated_titles.txt",
         content: ownerTitle.trim() + "\n",
       }),

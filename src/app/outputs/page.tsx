@@ -114,13 +114,17 @@ function OutputsContent() {
   const saveTab = useCallback(async (path: string) => {
     const tab = openTabs.find((t) => t.path === path);
     if (!tab) return;
+    if (!problemId) return false;
 
     try {
-      const res = await fetch("/api/files/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path, content: tab.content, problemId }),
-      });
+      const res = await fetch(
+        `/api/files/save?problemId=${encodeURIComponent(problemId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path, content: tab.content }),
+        }
+      );
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       updateTab(path, { originalContent: tab.content, editing: false });
@@ -128,7 +132,7 @@ function OutputsContent() {
     } catch {
       return false;
     }
-  }, [openTabs, updateTab]);
+  }, [openTabs, updateTab, problemId]);
 
   // Collect open tab paths for highlighting in browser
   const openPaths = new Set(openTabs.map((t) => t.path));

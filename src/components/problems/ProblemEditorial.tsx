@@ -633,11 +633,14 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
     const out = pendingContent;
     setSaveState("saving");
     try {
-      const res = await fetch("/api/files/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: "editorial.md", content: out, problemId }),
-      });
+      const res = await fetch(
+        `/api/files/save?problemId=${encodeURIComponent(problemId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: "editorial.md", content: out }),
+        }
+      );
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.error || "Save failed");
