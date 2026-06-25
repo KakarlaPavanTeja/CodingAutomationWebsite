@@ -530,6 +530,9 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
   const [content, setContent] = useState("");
   const [original, setOriginal] = useState("");
   const [editing, setEditing] = useState(false);
+  const [editMode, setEditMode] = useState<"blocks" | "raw">("blocks");
+  const [editBlocks, setEditBlocks] = useState<Block[]>([]);
+  const [rawText, setRawText] = useState("");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [copied, setCopied] = useState(false);
 
@@ -563,6 +566,7 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
         if (data) {
           setContent(data.content);
           setOriginal(data.content);
+          setEditing(false);
         }
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
@@ -593,21 +597,53 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
   }, [executeState?.status, onStatusChange]);
 
   const blocks = useMemo(() => parseEditorial(content), [content]);
-  const dirty = content !== original;
+
+  // While editing, the pending content is derived from the active editor's own
+  // local state (NOT re-parsed from `content` on every keystroke), so what the
+  // user types is preserved verbatim and only serialized once — on save.
+  const pendingContent = editing
+    ? editMode === "raw"
+      ? rawText
+      : serializeBlocks(editBlocks)
+    : content;
+  const dirty = pendingContent !== original;
+
+  const enterEdit = () => {
+    setEditBlocks(parseEditorial(content));
+    setRawText(content);
+    setEditing(true);
+  };
+
+  const exitEdit = () => {
+    setContent(pendingContent);
+    setEditing(false);
+  };
+
+  const switchEditMode = (next: "blocks" | "raw") => {
+    if (next === editMode) return;
+    if (next === "raw") {
+      setRawText(serializeBlocks(editBlocks));
+    } else {
+      setEditBlocks(parseEditorial(rawText));
+    }
+    setEditMode(next);
+  };
 
   const handleSave = async () => {
+    const out = pendingContent;
     setSaveState("saving");
     try {
       const res = await fetch("/api/files/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: "editorial.md", content, problemId }),
+        body: JSON.stringify({ path: "editorial.md", content: out, problemId }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.error || "Save failed");
       }
-      setOriginal(content);
+      setContent(out);
+      setOriginal(out);
       setSaveState("saved");
       setEditing(false);
       setTimeout(() => setSaveState("idle"), 2000);
@@ -618,13 +654,13 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
   };
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(content);
+    navigator.clipboard.writeText(pendingContent);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
 
   const handleDownload = () => {
-    const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+    const blob = new Blob([pendingContent], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     const safeName = (problemName || "editorial").replace(/[^a-z0-9-_]+/gi, "_").slice(0, 60);
@@ -763,7 +799,7 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
             variant={editing ? "secondary" : "outline"}
             size="sm"
             className="h-8"
-            onClick={() => setEditing((e) => !e)}
+            onClick={() => (editing ? exitEdit() : enterEdit())}
           >
             {editing ? <Eye className="mr-1.5 h-3.5 w-3.5" /> : <Pencil className="mr-1.5 h-3.5 w-3.5" />}
             {editing ? "Preview" : "Edit"}
@@ -817,7 +853,54 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
       {/* Body */}
       <div className="rounded-lg border bg-card p-5 sm:p-6">
         {editing ? (
-          <BlockEditor blocks={blocks} onChange={(b) => setContent(serializeBlocks(b))} />
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Editing
+              </span>
+              <div className="inline-flex overflow-hidden rounded-md border">
+                <button
+                  type="button"
+                  onClick={() => switchEditMode("blocks")}
+                  className={cn(
+                    "px-3 py-1 text-xs font-medium transition-colors",
+                    editMode === "blocks"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-background text-muted-foreground hover:bg-muted"
+                  )}
+                >
+                  Blocks
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchEditMode("raw")}
+                  className={cn(
+                    "px-3 py-1 text-xs font-medium transition-colors",
+                    editMode === "raw"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-background text-muted-foreground hover:bg-muted"
+                  )}
+                >
+                  Raw markdown
+                </button>
+              </div>
+              <span className="text-xs text-muted-foreground">
+                {editMode === "raw"
+                  ? "Edit the full editorial source — replace anything, then Save."
+                  : "Edit each section in place."}
+              </span>
+            </div>
+            {editMode === "raw" ? (
+              <textarea
+                value={rawText}
+                onChange={(e) => setRawText(e.target.value)}
+                spellCheck={false}
+                className="min-h-[60vh] w-full resize-y rounded-md border bg-background p-3 font-mono text-[13px] leading-relaxed focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            ) : (
+              <BlockEditor blocks={editBlocks} onChange={setEditBlocks} />
+            )}
+          </div>
         ) : (
           <div className="max-w-none">
             {blocks.map((b) => {
