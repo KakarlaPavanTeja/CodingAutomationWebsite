@@ -1,0 +1,14 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "c5ICx486THqDEBdOVy3rr"
+uri = "file://strengthen_run_files.tar.gz"
+type = "unspecified"
+title = "Strengthen Test Cases run files (all 8)"
+
+[[outputs]]
+id = "kNWRlY9U5suBPOqXG7oxm"
+uri = "file://strengthen_run_files/testcases.json"
+type = "unspecified"
+title = "testcases.json — 30-case suite (~13.9MB)"
