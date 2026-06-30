@@ -4,7 +4,20 @@ from __future__ import annotations
 
 import re
 
-from Prompts.testcasesprompt_v4 import MAX_SUBTASKS, SIZE_BUCKETS, size_tag, tier_from_tags
+import math
+
+from Prompts.testcasesprompt_v4 import (
+    MAX_CASES_PER_SUBTASK,
+    MAX_SUBTASKS,
+    MIN_SUBTASKS,
+    SIZE_BUCKETS,
+    SIZE_CATEGORY_TARGETS,
+    SIZE_TOLERANCE_PP,
+    SUBTASK_TAG_PREFIX,
+    size_tag,
+    subtask_tag,
+    tier_from_tags,
+)
 
 SIZE_TAG_PREFIX = "size_"
 
@@ -154,6 +167,73 @@ def sync_size_tags_json_root(data, description: str) -> int:
     return 0
 
 
+def audit_size_distribution(test_cases: list, description: str, tolerance_pp: float | None = None) -> dict:
+    """Audit the realized size-bucket distribution against SIZE_CATEGORY_TARGETS.
+
+    Buckets are DERIVED from each input (same logic the B3 coverage-shape gate uses),
+    not read from declared tags, so this matches what the benchmark will compute after
+    sync_size_tags. The generator uses the returned report to decide whether to
+    re-prompt the LLM for a size-diverse regeneration:
+
+      ok        — every bucket within +/- tolerance of its target.
+      deficient — buckets BELOW target by more than tolerance (need MORE such cases;
+                  typically size_large/size_medium when the script never scaled n up).
+      excessive — buckets ABOVE target by more than tolerance.
+
+    Returns realized %, raw counts, targets, and the deficient/excessive lists.
+    """
+    cases = [tc for tc in (test_cases or []) if isinstance(tc, dict)]
+    tol = SIZE_TOLERANCE_PP if tolerance_pp is None else tolerance_pp
+    total = len(cases)
+    counts = {b: 0 for b in SIZE_BUCKETS}
+    if total == 0:
+        return {
+            "ok": True,
+            "total": 0,
+            "counts": counts,
+            "realized": {b: 0.0 for b in SIZE_BUCKETS},
+            "targets": dict(SIZE_CATEGORY_TARGETS),
+            "tolerance_pp": tol,
+            "deficient": [],
+            "excessive": [],
+        }
+    max_n = parse_constraint_max_n(description)
+    for tc in cases:
+        inp = tc.get("input", "") or ""
+        bucket = derive_size_bucket(parse_primary_n(inp), max_n, inp)
+        if bucket in counts:
+            counts[bucket] += 1
+    realized = {b: 100.0 * counts[b] / total for b in SIZE_BUCKETS}
+    deficient, excessive = [], []
+    for b in SIZE_BUCKETS:
+        target = SIZE_CATEGORY_TARGETS.get(b, 0.0)
+        delta = realized[b] - target
+        if delta < -tol:
+            deficient.append({
+                "bucket": b,
+                "realized": round(realized[b], 1),
+                "target": target,
+                "shortfall_pp": round(-delta, 1),
+            })
+        elif delta > tol:
+            excessive.append({
+                "bucket": b,
+                "realized": round(realized[b], 1),
+                "target": target,
+                "excess_pp": round(delta, 1),
+            })
+    return {
+        "ok": not deficient and not excessive,
+        "total": total,
+        "counts": counts,
+        "realized": {b: round(realized[b], 1) for b in SIZE_BUCKETS},
+        "targets": dict(SIZE_CATEGORY_TARGETS),
+        "tolerance_pp": tol,
+        "deficient": deficient,
+        "excessive": excessive,
+    }
+
+
 def testcase_payload_byte_size(tc: dict) -> int:
     inp = tc.get("input", "") or ""
     out = tc.get("output", "") or ""
@@ -179,6 +259,82 @@ def has_subtask_tags(test_cases: list) -> bool:
         for tc in test_cases
         if isinstance(tc, dict)
     )
+
+
+def _strip_subtask_tags(tags: list) -> list:
+    kept: list = []
+    for t in tags or []:
+        if isinstance(t, str) and t.startswith(SUBTASK_TAG_PREFIX):
+            continue
+        if isinstance(t, dict) and str(t.get("name_enum", "")).startswith(SUBTASK_TAG_PREFIX):
+            continue
+        kept.append(t)
+    return kept
+
+
+def _valid_subtask_partition(test_cases: list) -> bool:
+    """True when every case carries exactly one subtask tag, the distinct subtask
+    count is within [MIN_SUBTASKS, MAX_SUBTASKS], and no tier exceeds the cap that
+    audit_coverage_shape (B3) enforces."""
+    cases = [tc for tc in test_cases if isinstance(tc, dict)]
+    if not cases:
+        return True
+    counts: dict[int, int] = {}
+    for tc in cases:
+        tier = tier_from_testcase(tc)
+        if tier is None:
+            return False
+        counts[tier] = counts.get(tier, 0) + 1
+    k = len(counts)
+    if not (MIN_SUBTASKS <= k <= MAX_SUBTASKS):
+        return False
+    cap = max(MAX_CASES_PER_SUBTASK, math.ceil(len(cases) / max(k, 1)))
+    return all(c <= cap for c in counts.values())
+
+
+def sync_subtask_tags(test_cases: list, description: str) -> int:
+    """Partition the suite into MIN..MAX_SUBTASKS difficulty-ordered subtasks.
+
+    Strengthen (harden) only ever added mutant / wrong-solution killer cases — it
+    never repaired coverage SHAPE. A suite generated without subtask_<n> tags
+    therefore fails B3 ("subtask count 0 outside [3, 6]") on every run, and no
+    amount of re-running Strengthen could fix it. This assigns each case a
+    subtask tier ordered by size bucket then payload size, so the partition is
+    meaningful (tier 1 = smallest cases, tier k = largest). Returns the number of
+    cases whose tags changed (0 when the partition was already valid)."""
+    cases = [tc for tc in test_cases if isinstance(tc, dict)]
+    n = len(cases)
+    if n == 0 or _valid_subtask_partition(cases):
+        return 0
+
+    # At least MIN subtasks; enough that no tier exceeds the per-subtask cap;
+    # never more than MAX or the number of cases.
+    k = max(MIN_SUBTASKS, math.ceil(n / MAX_CASES_PER_SUBTASK))
+    k = min(k, MAX_SUBTASKS, n)
+
+    max_n = parse_constraint_max_n(description)
+    rank = {"edge": 0, "small": 1, "medium": 2, "large": 3}
+
+    def _difficulty_key(tc: dict):
+        inp = tc.get("input", "") or ""
+        bucket = derive_size_bucket(parse_primary_n(inp), max_n, inp)
+        return (rank.get(bucket, 1), testcase_payload_byte_size(tc), parse_primary_n(inp) or 0)
+
+    ordered = sorted(cases, key=_difficulty_key)
+
+    changed = 0
+    base, rem = divmod(n, k)
+    idx = 0
+    for tier in range(1, k + 1):
+        group_size = base + (1 if tier <= rem else 0)
+        for _ in range(group_size):
+            tc = ordered[idx]
+            idx += 1
+            new_tags = _strip_subtask_tags(tc.get("tags") or []) + [subtask_tag(tier)]
+            if tc.get("tags") != new_tags:
+                tc["tags"] = new_tags
+                changed += 1
+    return changed
 
 
 def reorder_testcases_by_subtask(test_cases: list) -> tuple[list, bool]:

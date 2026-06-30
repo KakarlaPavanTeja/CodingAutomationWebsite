@@ -535,10 +535,19 @@ def run_mutation_benchmark(
     else:
         non_equivalent = [m for m in mutants if not _is_equiv(m)]
 
+    vacuous_equiv = bool(mutants) and not non_equivalent
     if progress:
         _log_ok(
             f"Equivalence filter done — {len(non_equivalent)}/{len(mutants)} mutants need testing"
         )
+        if vacuous_equiv:
+            _log_warn(
+                f"All {len(mutants)} mutant(s) were classified equivalent on "
+                f"{len(filter_inputs)} filter input(s) — the mutation kill rate is "
+                f"VACUOUS (0 mutants actually tested, so 100% is not meaningful). "
+                f"The inputs are almost certainly too weak; add edge/large cases so "
+                f"comparison/off-by-one mutations can be distinguished."
+            )
         small_cases, stress_cases = _partition_cases(test_cases)
         _log_detail(
             f"Running kill phase: {len(small_cases)} quick case(s)"
@@ -630,6 +639,10 @@ def run_mutation_benchmark(
         "killed": len(killed),
         "non_equivalent_total": total,
         "mutants_generated": len(mutants),
+        # True when every generated mutant was filtered as equivalent, so 0 were
+        # tested and kill_rate defaulted to 1.0 — a meaningless "100%". Consumers
+        # should treat this as "no mutation signal", not a strong suite.
+        "vacuous_equiv": vacuous_equiv,
         "survivors": survivors,
         "mutant_objects": {m.mutant_id: m for m in non_equivalent},
     }
@@ -787,7 +800,19 @@ def audit_coverage_shape(
         small = test_cases[0]
         opt_out, s1 = run_solution(brute_code, small.get("input", ""))
         if s1 == "ok" and normalize(opt_out) != normalize(small.get("output", "")):
-            warnings.append("brute disagrees with expected output on spot-check case")
+            # Surface the disagreeing input/expected/actual so this is actionable:
+            # a brute that disagrees with the stored output (while B4 fuzz passes)
+            # usually means the case's expected output is wrong or the brute reads
+            # the format differently — not something the suite can self-correct.
+            def _clip(s: str, n: int = 120) -> str:
+                s = (s or "").replace("\n", "\\n")
+                return s if len(s) <= n else s[:n] + "…"
+            warnings.append(
+                "brute disagrees with expected output on spot-check case "
+                f"(input='{_clip(small.get('input', ''))}' "
+                f"expected='{_clip(normalize(small.get('output', '')), 80)}' "
+                f"brute='{_clip(normalize(opt_out), 80)}')"
+            )
 
     return {
         "total": total,

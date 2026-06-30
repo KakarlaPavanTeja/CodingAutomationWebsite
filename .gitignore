@@ -12,11 +12,11 @@
 
 # testing
 /coverage
-
+.gitignore
 # next.js
 /.next/
 /out/
-
+/graphify-out
 # production
 /build
 

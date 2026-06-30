@@ -46,6 +46,7 @@ from testcase_helpers import (
     parse_primary_n,
     reorder_testcases_json_root,
     sync_size_tags,
+    sync_subtask_tags,
 )
 
 
@@ -419,6 +420,18 @@ def main():
         print(f"Corrected size_* tags on {tags_fixed} case(s) from derived input sizes.")
         _save_testcases(testcases_path, test_cases, description)
 
+    # Repair coverage SHAPE (B3): a suite generated without subtask_<n> tags has
+    # subtask count 0, which fails the [3, 6] gate forever — and the harden rounds
+    # below only target mutants (B1) / wrong solutions (B2), never the partition.
+    # Assign difficulty-ordered subtasks up front so the suite can actually pass.
+    subtasks_fixed = sync_subtask_tags(test_cases, description)
+    if subtasks_fixed:
+        print(
+            f"Assigned/repaired subtask tags on {subtasks_fixed} case(s) to satisfy "
+            f"coverage shape (B3)."
+        )
+        _save_testcases(testcases_path, test_cases, description)
+
     prev_survivor_key = None
     total_added = 0
 
@@ -493,17 +506,27 @@ def main():
     print_report(report, args.min_kill)
     if report.passes_gate(args.min_kill):
         sys.exit(0)
-    # Non-blocking fallback: if the mutation kill rate (B1) is met and the ONLY
-    # remaining hard failures are B2 wrong-solution survivors we couldn't kill,
-    # complete the step (with a warning) so packaging can proceed, rather than
-    # hard-failing the pipeline forever. Any B1/B4 failure still hard-fails.
+
+    # Non-blocking completion. The correctness signals are B1 (mutation kill rate)
+    # and B4 (optimal vs brute-force disagreement) — if either fails the step must
+    # still hard-fail (exit 1). B2 (a wrong solution we couldn't auto-kill) and B3
+    # (coverage SHAPE: subtask layout / size mix) are best-effort quality checks.
+    # Since this step is non-blocking, complete it with a warning when only those
+    # remain, so packaging can proceed and the report is surfaced — instead of the
+    # step dying red and inviting futile re-runs (it cannot fix B3 by re-running).
     b1_ok = report.b1.get("kill_rate", 0.0) >= args.min_kill
-    only_b2 = bool(report.hard_failures) and all(hf.startswith("B2:") for hf in report.hard_failures)
-    if b1_ok and only_b2:
+    correctness_blocking = any(hf.startswith("B4:") for hf in report.hard_failures)
+    if b1_ok and report.hard_failures and not correctness_blocking:
         print(
-            "\nWARNING: a wrong solution still passes every test case and could not be "
-            "killed automatically (perturbation + LLM). Completing this step so packaging "
-            "can proceed — review the surviving wrong solution(s) before publishing.",
+            "\nWARNING: the suite is correct on mutation (B1) and brute-equivalence (B4), "
+            "but has best-effort issues that could not be auto-resolved:",
+            flush=True,
+        )
+        for hf in report.hard_failures:
+            print(f"  - {hf}", flush=True)
+        print(
+            "Completing this non-blocking step so packaging can proceed — review the "
+            "items above before publishing.",
             flush=True,
         )
         sys.exit(0)

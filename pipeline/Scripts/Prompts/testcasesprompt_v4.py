@@ -25,16 +25,21 @@ Public API mirrors v3 so the manager can import the same names.
 
 DEFAULT_DISTRIBUTION_PRESET = "assessment"
 MIN_SUBTASKS = 3
-MAX_SUBTASKS = 6
+MAX_SUBTASKS = 8
 MAX_CASES_PER_SUBTASK = 12
 MIN_TESTCASES = 25                          # raised from 20 — LeetCode Easy floor
 
 # Size-category distribution targets (count %, enforced by B3 in benchmark_suite).
+# Philosophy (matches real judges like LeetCode): the suite is dominated by cheap
+# small/edge CORRECTNESS cases; large/stress cases are FEW but high-value. You don't
+# need 50-100 max-size cases — a handful of well-constructed worst cases gates TLE
+# just as hard. The few large cases carry most of the WEIGHT (see scoring block), not
+# most of the COUNT.
 SIZE_CATEGORY_TARGETS = {
     "edge": 20.0,
-    "small": 40.0,
+    "small": 52.0,
     "medium": 8.0,
-    "large": 32.0,
+    "large": 20.0,
 }
 SIZE_TOLERANCE_PP = 7.0  # +/- percentage points
 SIZE_TAG_PREFIX = "size_"
@@ -67,18 +72,26 @@ TYPE_COUNT_HINT = {
 }
 
 # Weight % per subtask (must sum to 100). Later subtasks = stress tiers.
+# IMPORTANT: every subtask count in [MIN_SUBTASKS, MAX_SUBTASKS] MUST have a row in
+# BOTH presets, or the generated script's DISTRIBUTION_BY_COUNT[preset][k] lookup
+# KeyErrors. Keep the highest key == MAX_SUBTASKS. Each row sums to 100, is monotonic
+# increasing, and the top tier holds >= 35% (scoring-block invariant).
 DISTRIBUTION_BY_MODE = {
     "assessment": {
         3: [12, 28, 60],
         4: [10, 18, 24, 48],
         5: [9, 13, 17, 22, 39],
         6: [6, 10, 13, 16, 19, 36],
+        7: [5, 7, 9, 11, 14, 19, 35],
+        8: [4, 5, 7, 8, 10, 13, 18, 35],
     },
     "contest": {
         3: [8, 27, 65],
         4: [6, 14, 25, 55],
         5: [6, 11, 16, 24, 43],
         6: [5, 9, 13, 16, 22, 35],
+        7: [4, 6, 8, 10, 13, 21, 38],
+        8: [3, 4, 6, 8, 10, 13, 18, 38],
     },
 }
 
@@ -175,6 +188,18 @@ def get_testcases_prompt(
     num_hint = _count_hint(difficulty, problem_type, num_testcases)
     has_brute = bool(brute_force_code and brute_force_code.strip())
 
+    # Single source of truth for the size targets shown in the prompt — interpolated
+    # from SIZE_CATEGORY_TARGETS so the prompt can never drift from what B3 enforces.
+    st = SIZE_CATEGORY_TARGETS
+    tol = SIZE_TOLERANCE_PP
+    size_targets_block = (
+        f"  * size_edge   (~{st['edge']:g}%): min/degenerate sizes, singleton, all-equal, boundary extremes.\n"
+        f"  * size_small  (~{st['small']:g}%): n in [2, ~20], hand-traceable correctness cluster (the MAJORITY).\n"
+        f"  * size_medium (~{st['medium']:g}%): sparse middle (n between ~21 and ~0.5*max N); keep thin.\n"
+        f"  * size_large  (~{st['large']:g}%): n at/near max constraint N; FEW but high-value stress cases."
+    )
+    size_targets_inline = ", ".join(f"{b} {st[b]:g}%" for b in ("edge", "small", "medium", "large"))
+
     # ---- shared blocks -----------------------------------------------------
 
     oracle_block = (
@@ -221,7 +246,8 @@ Every case carries subtask structure and per-case weights.
 - Within a subtask, skew weight toward stress/adversarial scenarios (see multiplier fn).
 - Output case keys IN ORDER: `input`, `output`, `weightage`, `tags`, `order`.
 - Invariants: weights sum to TOTAL_WEIGHTAGE (±0.01); top subtask holds >= 35% of weight;
-  stress-tagged cases hold >= 30% of weight; all weights > 0.
+  stress/large cases carry ~50% of weight (target 50%, assert >= 45%) — they are FEW in
+  COUNT but high-value, so passing them gates most of the score; all weights > 0.
 """
 
     system_prompt = f"""
@@ -242,17 +268,31 @@ Inputs:
 {oracle_block}
 {scoring_block}
 
-(SIZE DISTRIBUTION — BIMODAL WITH EXPLICIT % TARGETS — CRITICAL):
-Real judge sets cluster at TWO ends with a sparse middle. Each case MUST carry
-exactly ONE size tag: `size_edge`, `size_small`, `size_medium`, or `size_large`.
-Target COUNT distribution (within +/-7 percentage points):
-  * size_edge  (~20%): min/degenerate sizes, singleton, all-equal, boundary extremes.
-  * size_small (~40%): n in [2, ~20], hand-traceable correctness cluster (majority).
-  * size_medium (~8%): sparse middle (n between ~21 and ~0.5*max N); keep thin.
-  * size_large (~32%): n at or near max constraint N; TLE/overflow/stress cluster.
-Do NOT spread sizes evenly and do NOT push half the cases to max only. The small
-cluster and the max cluster should each be substantial; the middle stays thin.
-Self-check: assert realized size_* tag counts match targets within tolerance.
+(SIZE DISTRIBUTION — CORRECTNESS-HEAVY, FEW HIGH-VALUE STRESS — CRITICAL):
+Like real judges (LeetCode): MANY cheap small/edge correctness cases, FEW large
+stress cases. Each case MUST carry exactly ONE size tag: `size_edge`, `size_small`,
+`size_medium`, or `size_large`.
+Target COUNT distribution (within +/-{tol:g} percentage points):
+{size_targets_block}
+Do NOT spread sizes evenly and do NOT push half the cases to max. The small cluster
+DOMINATES the count; large cases are deliberately FEW — but they carry ~50% of the
+WEIGHT (see scoring block), so for large cases quality matters far more than quantity.
+A few worst-case stress inputs at/near MAX_N fail a slow solution just as hard as fifty.
+
+MANDATORY SIZE-LADDER RECIPE (do this explicitly IN CODE — do NOT hand-wave):
+  1. Parse MAX_N (the largest primary-size constraint) from the Constraints section into
+     a variable. If several sizes exist (n, m, q...), scale the dominant one.
+  2. In SCENARIO_PLAN, assign every planned case a TARGET size bucket UP FRONT, then pick
+     its n FROM that bucket's range:
+        edge   -> min / degenerate (n = min, singleton, all-equal, boundary)
+        small  -> n in [2, 20]
+        medium -> n in [21, 0.5*MAX_N]
+        large  -> n in [0.8*MAX_N, MAX_N]   (REAL stress sizes — fill with legal values)
+  3. size_large cases MUST use n at/near MAX_N. This is the #1 failure we see: a suite
+     that is 100% small is REJECTED by the coverage-shape gate (B3) AND makes mutation
+     testing vacuous — small inputs cannot kill off-by-one / comparison / boundary mutants.
+Self-check: assert realized size_* tag counts match targets ({size_targets_inline}) within
++/-{tol:g}pp; if a bucket is short, ADD constraint-scaled cases for it before writing JSON.
 
 (PER-PROBLEM-TYPE REQUIRED SCENARIOS):
 Detect the problem family from the statement + solution and include its mandatory cases.
@@ -363,18 +403,23 @@ def case_weight_multiplier(tags, tier, top_tier):
     m, ts = 1.0, set(tags)
     if "example" in ts: m *= 0.5
     if "random" in ts and not ts & STRESS_SCENARIO_TAGS: m *= 0.75
-    if ts & STRESS_SCENARIO_TAGS: m *= 2.0
+    if ts & STRESS_SCENARIO_TAGS: m *= 2.5
     if "stress" in ts or "max_constraint" in ts: m *= 1.25
     if tier == top_tier: m *= 1.3
     return max(m, 0.25)
 ```
 Use integer-cents splitting so weights sum exactly; ensure every weight > 0.
+STRESS SHARE TARGET (~50%): after applying multipliers, compute the total weight held by
+stress/large cases (tags in STRESS_SCENARIO_TAGS or size_large). If it is < 45% of
+TOTAL_WEIGHTAGE, scale stress/large weights UP (and/or non-stress weights down) until the
+stress/large share is ~50%, THEN re-normalize so the grand total is exact. This is
+intentional: large cases are few in count but must gate roughly half the score.
 
 (SELF-CHECK BEFORE WRITE):
   * Every case validated by the optimal{" and cross-checked by brute (where size permits)" if has_brute else ""}.
   * `seen_inputs` dedup; all inputs constraint-legal.
   * Bimodal size check: assert there exist cases with small n AND cases at/near max n.
-  * Size distribution: assert each size_* bucket within +/-7pp of targets (edge 20%, small 40%, medium 8%, large 32%).
+  * Size distribution: assert each size_* bucket within +/-{tol:g}pp of targets ({size_targets_inline}).
   * Scenario diversity: distinct scenario tags >= max(2, non_example_count // 3).
   * `order` == 1..N sequential.
   * Weight asserts: weight-sum, top-tier-share, stress-share (see scoring block).
@@ -407,3 +452,85 @@ Return ONLY the Python script. No markdown fences, no prose outside comments.
 {solution_code}
 {brute_section}"""
     return system_prompt, user_prompt
+
+
+def _size_audit_lines(audit) -> str:
+    realized = audit.get("realized", {})
+    targets = audit.get("targets", SIZE_CATEGORY_TARGETS)
+    rows = []
+    for b in SIZE_BUCKETS:
+        rows.append(
+            f"  size_{b}: realized {realized.get(b, 0.0)}%  vs target {targets.get(b, 0.0)}%"
+        )
+    return "\n".join(rows)
+
+
+def get_size_fix_prompt(failed_script, description, audit):
+    """Build (system, user) to repair a generator script whose realized SIZE mix
+    missed SIZE_CATEGORY_TARGETS.
+
+    The script RAN fine — it just produced the wrong size distribution (almost
+    always all-small: the script never scaled the primary size n toward the
+    constraint maximum). That fails B3 coverage-shape downstream and makes
+    mutation testing vacuous, so this re-prompt asks the model to fix the SIZE
+    LADDER only, preserving the dual-oracle / scoring / JSON-shape behavior.
+    """
+    deficient = audit.get("deficient") or []
+    excessive = audit.get("excessive") or []
+    def_str = ", ".join(
+        f"size_{d['bucket']} (short by {d['shortfall_pp']}pp)" for d in deficient
+    ) or "none"
+    exc_str = ", ".join(
+        f"size_{d['bucket']} (over by {d['excess_pp']}pp)" for d in excessive
+    ) or "none"
+
+    system = (
+        "You are a Python expert fixing a competitive-programming test-case GENERATOR "
+        "script. The script runs correctly but the suite it emits has the WRONG SIZE "
+        "DISTRIBUTION: it does not match the required edge/small/medium/large mix. Almost "
+        "always the cause is that the script never scales the primary input size n up "
+        "toward the constraint maximum, so every case lands in 'small'. Fix the script so "
+        "the realized size mix matches the targets within tolerance, WITHOUT changing the "
+        "dual-oracle / scoring behavior, the JSON shape, or the I/O format, and keeping all "
+        "existing correctness asserts. "
+        "OUTPUT HYGIENE (CRITICAL): your entire response is written verbatim to a .py file "
+        "and executed. The first character MUST be valid Python (import/#/from); no preamble, "
+        "no sign-off, no markdown fences. "
+        "IMPORT CORRECTNESS: only import names that exist; round/abs/min/max/sum/pow are "
+        "built-ins, not in math."
+    )
+
+    user = f"""The generator script below RAN successfully but produced a suite whose size
+distribution is out of spec.
+
+REALIZED vs TARGET size distribution ({audit.get('total', 0)} cases):
+{_size_audit_lines(audit)}
+
+DEFICIENT buckets (need MANY MORE of these): {def_str}
+EXCESSIVE buckets (have too many): {exc_str}
+Tolerance: +/- {audit.get('tolerance_pp', SIZE_TOLERANCE_PP)} percentage points per bucket.
+
+HOW TO FIX (do ALL of these):
+1. Parse the constraint maximum N from the problem (call it MAX_N). If several sizes
+   exist (n, m, q...), scale the dominant one.
+2. Build an explicit SIZE LADDER and assign every case a target bucket BEFORE building it:
+     * size_edge   (~{SIZE_CATEGORY_TARGETS['edge']}%): degenerate / min sizes (n = min, singleton, all-equal, boundary).
+     * size_small  (~{SIZE_CATEGORY_TARGETS['small']}%): n in [2, 20], hand-traceable.
+     * size_medium (~{SIZE_CATEGORY_TARGETS['medium']}%): n in [21, 0.5*MAX_N] (keep thin).
+     * size_large  (~{SIZE_CATEGORY_TARGETS['large']}%): n in [0.8*MAX_N, MAX_N] — REAL stress sizes, NOT small.
+3. For deficient buckets, ADD cases constructed at the right n. For size_large you MUST
+   generate inputs with n near MAX_N (fill with constraint-legal values; keep the
+   brute-force cross-check guarded by its own size cap so large cases are validated by the
+   optimal alone).
+4. Re-tag each case with the correct size_<bucket> from its ACTUAL n, and keep the
+   self-check assert that realized bucket counts are within tolerance of the targets.
+
+Do not reduce the total below the current count. Return ONLY the corrected Python script.
+
+### Problem Description (for constraint parsing):
+{description}
+
+### Current generator script:
+{failed_script}
+"""
+    return system, user

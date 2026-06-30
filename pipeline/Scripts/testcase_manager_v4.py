@@ -19,10 +19,16 @@ from Prompts.testcasesprompt_v4 import (
     subtask_tag,
     tier_from_tags,
     get_testcases_prompt,
+    get_size_fix_prompt,
 )
 from llm_client import call_llm
 from usage_tracker import update_usage
-from testcase_helpers import detect_problem_type, sync_size_tags_json_root
+from testcase_helpers import (
+    audit_size_distribution,
+    detect_problem_type,
+    sync_size_tags_json_root,
+    sync_subtask_tags,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -216,6 +222,138 @@ def _retry_fix_script(script_path: str, first_error: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Size-diversity feedback loop (re-prompt the LLM when the realized size mix
+# misses targets — e.g. an all-small suite that fails B3 / vacuous mutation)
+# --------------------------------------------------------------------------- #
+def _move_testcases_to_outputs() -> str:
+    """Move a freshly written ./testcases.json into Outputs/. Returns the path."""
+    out_path = os.path.join("Outputs", "testcases.json")
+    if os.path.exists("testcases.json"):
+        os.rename("testcases.json", out_path)
+    return out_path
+
+
+def _cleanup(path: str | None) -> None:
+    if path and os.path.exists(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def _size_fix_rounds() -> int:
+    """Max LLM-regeneration rounds for size diversity (default 1, 0 disables).
+
+    Each round is one extra LLM call + script run, so it is bounded and cheap to
+    turn off. Override with TESTCASE_SIZE_FIX_ROUNDS.
+    """
+    raw = os.environ.get("TESTCASE_SIZE_FIX_ROUNDS", "").strip()
+    if raw:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    return 1
+
+
+def _print_size_audit(audit: dict, prefix: str = "Size distribution") -> None:
+    realized = audit.get("realized", {})
+    order = ("edge", "small", "medium", "large")
+    parts = [f"{b} {realized.get(b, 0.0)}%" for b in order]
+    print(f"{prefix}: " + ", ".join(parts) + f"  (n={audit.get('total', 0)})")
+
+
+def _reformat_and_audit(out_path: str, description: str) -> dict:
+    """Load the suite, sync size + subtask tags, reorder, save, and return a size audit."""
+    with open(out_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    tags_fixed = sync_size_tags_json_root(data, description)
+    # Guarantee a valid subtask partition (B3). LLM generator scripts sometimes emit
+    # NO subtask_<n> tags despite the prompt, which fails "subtask count outside [3,6]"
+    # downstream and can't be fixed by re-running Strengthen. Assign difficulty-ordered
+    # subtasks here so a freshly generated suite is shape-valid from the start.
+    tcs = (
+        data[0]["test_cases"]
+        if isinstance(data, list) and data and isinstance(data[0], dict)
+        else data.get("test_cases") if isinstance(data, dict) else []
+    )
+    subtasks_fixed = sync_subtask_tags(tcs, description) if tcs else 0
+    # Reorder AFTER subtask tags exist so the subtask-aware sort applies.
+    did_reorder = _reorder_testcases_json_root(data)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+    if tags_fixed:
+        print(f"Corrected size_* tags on {tags_fixed} case(s) from derived input sizes.")
+    if subtasks_fixed:
+        print(f"Assigned subtask tags on {subtasks_fixed} case(s) (generator emitted none/invalid).")
+    if did_reorder:
+        if _has_subtask_tags(tcs):
+            print("Reordered within subtask tag blocks (payload sort for subtask >= 3).")
+        else:
+            print("Reordered cases by input+output size (ascending); stress cases last.")
+    return audit_size_distribution(tcs, description)
+
+
+def _regenerate_for_size(script_path: str, out_path: str, description: str,
+                         audit: dict, round_no: int) -> bool:
+    """Re-prompt the LLM to fix the generator's size ladder, re-run, and keep the
+    result only if it is valid. The current suite is backed up first and restored
+    on any failure, so a bad round never destroys a usable suite. Returns True when
+    a new suite was produced, False when we degraded to the previous one."""
+    import shutil
+
+    backup = out_path + ".sizebak"
+    had_backup = False
+    try:
+        shutil.copyfile(out_path, backup)
+        had_backup = True
+    except OSError:
+        backup = None
+
+    def _degrade(reason: str) -> bool:
+        print(f"Size-fix round {round_no}: {reason} — keeping previous suite.")
+        if had_backup:
+            try:
+                shutil.copyfile(backup, out_path)
+            except OSError:
+                pass
+        _cleanup(backup)
+        return False
+
+    with open(script_path, "r", encoding="utf-8") as f:
+        current_script = f.read()
+    system_prompt, user_prompt = get_size_fix_prompt(current_script, description, audit)
+    print(f"--- Size-diversity round {round_no}: re-prompting LLM to regenerate for size targets ---")
+    try:
+        content, usage = call_llm(system_prompt, user_prompt, purpose="testcases_size_fix")
+        content = _sanitize_generated_script(content)
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        update_usage(
+            usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
+            "testcase_generation_size_fix",
+            model=usage.get("model", "unknown"),
+            purpose="testcases",
+            step_id="generate_testcases",
+            cost=usage.get("cost", 0.0),
+        )
+    except Exception as e:
+        return _degrade(f"LLM call failed ({e})")
+
+    result = _run_generator(script_path)
+    if result.returncode != 0:
+        return _degrade(f"regenerated script crashed:\n{result.stderr.strip()[-600:]}")
+
+    _move_testcases_to_outputs()
+    if not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
+        return _degrade("regenerated script produced no testcases.json")
+
+    _cleanup(backup)
+    return True
+
+
+# --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
 def main():
@@ -364,24 +502,34 @@ def main():
             sys.exit(1)
         print("Successfully generated testcases.json")
 
-        # 9. Reorder + reformat
+        # 9. Reorder + reformat + size-diversity feedback loop.
+        #    A suite that is all-small fails the B3 coverage-shape gate and makes
+        #    mutation testing vacuous. When the realized size mix misses targets we
+        #    re-prompt the LLM to regenerate the script with a proper size ladder
+        #    (bounded by TESTCASE_SIZE_FIX_ROUNDS; degrades safely on any failure).
         try:
-            with open(out_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            did_reorder = _reorder_testcases_json_root(data)
-            tags_fixed = sync_size_tags_json_root(data, description)
-            with open(out_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4, ensure_ascii=False)
-            if tags_fixed:
-                print(f"Corrected size_* tags on {tags_fixed} case(s) from derived input sizes.")
-            if did_reorder:
-                tcs = data[0]["test_cases"] if isinstance(data, list) and data else []
-                if _has_subtask_tags(tcs):
-                    print("Reordered within subtask tag blocks (payload sort for subtask >= 3).")
-                else:
-                    print("Reordered cases by input+output size (ascending); stress cases last.")
+            audit = _reformat_and_audit(out_path, description)
+            _print_size_audit(audit, "Realized size distribution")
+            rounds = _size_fix_rounds()
+            attempt = 0
+            while not audit["ok"] and attempt < rounds:
+                attempt += 1
+                deficient = ", ".join(f"size_{d['bucket']}" for d in audit["deficient"]) or "none"
+                excessive = ", ".join(f"size_{d['bucket']}" for d in audit["excessive"]) or "none"
+                print(f"Size distribution off-target (deficient: {deficient}; excessive: {excessive}). "
+                      f"Regeneration attempt {attempt}/{rounds}.")
+                if not _regenerate_for_size(output_script_path, out_path, description, audit, attempt):
+                    break
+                audit = _reformat_and_audit(out_path, description)
+                _print_size_audit(audit, f"After size-fix round {attempt}")
+            if audit["ok"]:
+                print("Size distribution within tolerance of targets.")
+            else:
+                print("WARNING: size distribution still off-target after regeneration. "
+                      "The coverage-shape gate (B3) may flag this and mutation testing "
+                      "may stay weak — large/edge buckets need constraint-scaled inputs.")
         except Exception as e:
-            print(f"Warning: could not reformat testcases.json: {e}")
+            print(f"Warning: could not reformat/audit testcases.json: {e}")
 
     except Exception as e:
         print(f"An error occurred: {e}")

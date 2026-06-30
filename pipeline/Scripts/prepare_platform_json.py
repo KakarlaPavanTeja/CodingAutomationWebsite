@@ -37,6 +37,93 @@ JSON_PREP_DIR = os.path.join(OUTPUTS_DIR, "forJSONPreparation")
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+# INVARIANT: no test case may have weightage <= 0. WEIGHT_FLOOR is the smallest
+# strictly-positive weight a case can be assigned/repaired to.
+WEIGHT_FLOOR = 0.01
+
+
+def _ensure_positive_weights(weights):
+    """Guarantee every weight is strictly > 0 (the hard invariant).
+
+    Any weight <= 0 (e.g. from a negative rounding residue) is lifted to WEIGHT_FLOOR
+    and the cost is borrowed from the largest weight that can still stay >= WEIGHT_FLOOR
+    afterwards, so the grand total is preserved whenever that is feasible. In the
+    degenerate regime where the total is too small for every case to clear the floor
+    (e.g. score 1 spread over 500 cases — impossible at 2-decimal precision), positivity
+    is prioritized over the exact sum. Mutates and returns the list.
+    """
+    n = len(weights)
+    if n == 0:
+        return weights
+    for i in range(n):
+        if weights[i] <= 0:
+            deficit = round(WEIGHT_FLOOR - weights[i], 2)
+            weights[i] = WEIGHT_FLOOR
+            # Borrow from the largest donor that remains >= WEIGHT_FLOOR after paying.
+            for j in sorted((k for k in range(n) if k != i),
+                            key=lambda k: weights[k], reverse=True):
+                if round(weights[j] - deficit, 2) >= WEIGHT_FLOOR:
+                    weights[j] = round(weights[j] - deficit, 2)
+                    break
+            # else: infeasible to preserve the sum — keep positivity, accept drift.
+    return weights
+
+
+def _scale_weights_to_total(test_cases, total_score):
+    """Scale existing per-case weightage to sum exactly to total_score, preserving
+    their RELATIVE proportions (the subtask/stress weighting baked into the generated
+    suite). This is what makes EXAM scoring use the same mechanism as PRACTICE instead
+    of a flat random spread. Guarantees every weight > 0.
+
+    Returns True if it scaled from real generated weights; False if the suite carries
+    no usable weights (some missing or <= 0), so the caller can fall back.
+    """
+    n = len(test_cases)
+    if n == 0:
+        return True
+    raw = []
+    for tc in test_cases:
+        try:
+            raw.append(float(tc.get("weightage")))
+        except (TypeError, ValueError):
+            raw.append(None)
+    if any(w is None or w <= 0 for w in raw):
+        return False
+    s = sum(raw)
+    if s <= 0:
+        return False
+    weights = [round(w / s * total_score, 2) for w in raw]
+    # Absorb the rounding residual into the largest weight, then guarantee positivity.
+    diff = round(total_score - sum(weights), 2)
+    if diff:
+        j = max(range(n), key=lambda k: weights[k])
+        weights[j] = round(weights[j] + diff, 2)
+    _ensure_positive_weights(weights)
+    for tc, w in zip(test_cases, weights):
+        tc["weightage"] = w
+    return True
+
+
+def _generated_weight_total(test_cases):
+    """Sum of the generated per-case weights, or None if any is missing/<=0.
+
+    Lets exam use the SAME total-score fallback as practice (sum of generated weights)
+    when no owner score is set, instead of the difficulty default.
+    """
+    if not test_cases:
+        return None
+    total = 0.0
+    for tc in test_cases:
+        try:
+            w = float(tc.get("weightage"))
+        except (TypeError, ValueError):
+            return None
+        if w <= 0:
+            return None
+        total += w
+    return round(total, 2)
+
+
 def parse_section(content, start_marker, end_marker):
     """Extract and trim the text between two tag markers.
 
@@ -352,7 +439,9 @@ def exam_parse_test_cases(container):
             "input": tc["input"],
             "output": tc.get("output", ""),
             "is_hidden": order_update > 2,
-            "weightage": None,
+            # Preserve the generated subtask/stress weight so exam can reuse the same
+            # scoring mechanism as practice (scaled to total_score in build_exam_json).
+            "weightage": tc.get("weightage"),
             "evaluation_type": "DEFAULT",
             "display_text": None,
             "criteria": None,
@@ -379,16 +468,26 @@ def exam_assign_weights(test_cases, difficulty_level, total_score_override=None)
     # The owner-set total score is FINAL. If it is too small to give every test
     # case the usual 0.1 floor, shrink the floor so the distribution still sums
     # to exactly total_score instead of raising.
-    min_weight = min(0.1, round(total_score / n, 2)) if total_score < n * 0.1 else 0.1
+    # INVARIANT: every test case ends with weightage > 0 (never <= 0).
+    # If the owner-set total is too small to give every case the usual 0.1 floor,
+    # shrink the floor but keep it strictly positive (>= WEIGHT_FLOOR).
+    min_weight = 0.1
+    if total_score < n * min_weight:
+        min_weight = max(round(total_score / n, 2), WEIGHT_FLOOR)
     weights = [min_weight] * n
-    remaining = total_score - n * min_weight
+    remaining = max(round(total_score - n * min_weight, 2), 0.0)
     random_parts = [random.random() for _ in range(n)]
     total_parts = sum(random_parts) if sum(random_parts) > 0 else 1
     for i in range(n):
         extra = (random_parts[i] / total_parts) * remaining
         weights[i] = round(weights[i] + extra, 2)
+    # Absorb the rounding residual into the LARGEST weight (not the last case) so a
+    # negative residual can never drive a small case to <= 0.
     diff = round(total_score - sum(weights), 2)
-    weights[-1] = round(weights[-1] + diff, 2)
+    if diff:
+        j = max(range(n), key=lambda k: weights[k])
+        weights[j] = round(weights[j] + diff, 2)
+    _ensure_positive_weights(weights)
     for i, tc in enumerate(test_cases):
         tc["weightage"] = weights[i]
     return test_cases
@@ -399,14 +498,19 @@ def build_exam_json(lua, container, difficulty, enabled_langs=None):
     non_fn = is_non_function()
     fn_based = not non_fn
     owner_total_score = get_owner_total_score()
-    test_cases = exam_assign_weights(
-        exam_parse_test_cases(container), difficulty, owner_total_score
-    )
-    total_score = (
-        owner_total_score
-        if owner_total_score is not None
-        else {"EASY": 20, "MEDIUM": 25, "HARD": 30}[difficulty]
-    )
+    # Use the SAME subtask/stress scoring as practice: preserve the generated per-case
+    # weights, scaled to total_score. Total-score resolution also mirrors practice:
+    # owner score if set, else the sum of the generated weights, else (no usable
+    # weights) the difficulty default with a flat fallback distribution.
+    test_cases = exam_parse_test_cases(container)
+    if owner_total_score is not None:
+        total_score = owner_total_score
+    else:
+        total_score = _generated_weight_total(test_cases) or {
+            "EASY": 20, "MEDIUM": 25, "HARD": 30
+        }[difficulty]
+    if not _scale_weights_to_total(test_cases, total_score):
+        test_cases = exam_assign_weights(test_cases, difficulty, owner_total_score)
     question_id = get_question_id()
     coding_details_id = str(uuid.uuid4())
 
@@ -627,6 +731,11 @@ def practice_parse_test_cases(container):
             raise ValueError(f"Test case at index {i} is missing 'input'.")
         if tc.get("weightage") is None:
             raise ValueError(f"Test case at index {i} is missing 'weightage'.")
+        if float(tc["weightage"]) <= 0:
+            raise ValueError(
+                f"Test case at index {i} has non-positive weightage "
+                f"{tc['weightage']}; every test case must have weightage > 0."
+            )
         if tc.get("order") is None:
             raise ValueError(f"Test case at index {i} is missing 'order'.")
 

@@ -10,7 +10,7 @@
     "db:push": "drizzle-kit push --force",
     "db:studio": "drizzle-kit studio",
     "db": "tsx scripts/db.mts",
-    "test:json": "PYTHONPATH=pipeline/Scripts python3 -m unittest pipeline.Scripts.tests.test_prepare_platform_json -v"
+    "test:json": "cd pipeline/Scripts && PYTHONPATH=. python3 -m unittest discover -s tests -p 'test_*.py'"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
