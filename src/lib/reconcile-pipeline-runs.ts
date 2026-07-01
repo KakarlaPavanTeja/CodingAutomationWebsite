@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { pipelineLogs, pipelineRuns, problems } from "@/lib/db/schema";
 import { getProcessPidAsync } from "@/lib/process-registry";
@@ -30,8 +30,20 @@ const CONTENT_RERUN_STEPS = new Set<StepId>([
   "package_platform",
 ]);
 
+// Exit-code sentinel for a *soft* orphan: a still-running run the reconciler only
+// suspects is dead (its pid looked gone). Distinct from -1 (user stop / hard
+// timeout) so the run close handler may overwrite it with the real exit code if
+// the process was in fact alive and finishes cleanly.
+export const ORPHAN_EXIT_CODE = -2;
+
 const STALE_ORPHAN_MS = 5 * 60 * 1000;
 const EMPTY_LOG_ORPHAN_MS = 3 * 60 * 1000;
+// A soft orphan (-2) that never recovers — its process really is gone and its
+// log never logged an exit — is escalated to a hard, terminal failure (-1) once
+// it is this old. This bounds how long a genuinely dead run can appear "running"
+// on the client while still leaving a live-but-mis-detected run time to finish
+// and correct itself via the run close handler.
+const ORPHAN_HARD_MS = 10 * 60 * 1000;
 // Hard ceiling: a run "running" longer than the pipeline timeout (45 min) plus a
 // buffer is force-failed regardless of pid liveness, so a recycled PID that
 // process.kill(pid,0) reports as alive can't keep a dead run stuck forever (P1-H8).
@@ -125,8 +137,8 @@ export async function recomputeProblemStatus(problemId: string): Promise<void> {
         // Never packaged (or the latest packaging attempt failed). Classify from
         // the most recent run overall.
         const latest = rows.reduce((a, b) => (startMs(a) >= startMs(b) ? a : b));
-        if (latest.exitCode === -1) {
-          next = "draft"; // stopped / aborted
+        if (latest.exitCode != null && latest.exitCode < 0) {
+          next = "draft"; // stopped / aborted / orphaned (-1 or -2)
         } else if (latest.status === "failed") {
           next = "failed";
         } else {
@@ -167,17 +179,30 @@ export async function reconcileStalePipelineRuns(problemId: string): Promise<num
   if (nowTs - last < RECONCILE_THROTTLE_MS) return 0;
   lastReconcileAt.set(problemId, nowTs);
 
-  const running = await db
+  // Reconcile still-`running` rows AND prior *soft* orphans (failed / -2): the
+  // latter must be revisited so a live process that has since closed can be
+  // recovered to `completed` from its log, or a truly dead one escalated to a
+  // terminal hard failure. (`reconcileStalePipelineRuns` used to only ever see
+  // `running` rows, so a -2 could never be re-evaluated.)
+  const candidates = await db
     .select()
     .from(pipelineRuns)
-    .where(and(eq(pipelineRuns.problemId, problemId), eq(pipelineRuns.status, "running")));
+    .where(
+      and(
+        eq(pipelineRuns.problemId, problemId),
+        or(
+          eq(pipelineRuns.status, "running"),
+          and(eq(pipelineRuns.status, "failed"), eq(pipelineRuns.exitCode, ORPHAN_EXIT_CODE))
+        )
+      )
+    );
 
-  if (running.length === 0) return 0;
+  if (candidates.length === 0) return 0;
 
   const now = Date.now();
   let fixed = 0;
 
-  for (const run of running) {
+  for (const run of candidates) {
     const runAge = now - (run.startedAt?.getTime() ?? now);
     const pid = (await getProcessPidAsync(run.id)) ?? run.pid ?? undefined;
     // Trust "alive" only within the max-runtime ceiling; beyond it the pid is
@@ -217,11 +242,29 @@ export async function reconcileStalePipelineRuns(problemId: string): Promise<num
     const isOrphan = overMaxRuntime || !pid || !isProcessAlive(pid);
 
     if (isOrphan && (overMaxRuntime || age > STALE_ORPHAN_MS || (!content.trim() && age > EMPTY_LOG_ORPHAN_MS))) {
+      // Sentinel choice matters. A user stop writes exitCode -1, and the run
+      // close handler treats a prior -1 as "was stopped" and keeps the run
+      // failed even when the process ends cleanly. If we also wrote -1 here, a
+      // run we only *suspect* is orphaned (its pid looked dead — unreliable
+      // after a server restart or a pid read race) would be permanently pinned
+      // to "failed" the instant its still-live process exits 0. So a *soft*
+      // orphan is marked -2, which the close handler may overwrite with the true
+      // exit code; only a run past the hard-orphan window (or the runtime
+      // ceiling) becomes a terminal -1 that cannot recover.
+      const hardFail = overMaxRuntime || age >= ORPHAN_HARD_MS;
+
+      // Leave an in-window soft orphan untouched: no state change, so its still
+      // -running client keeps polling and its live process can still close and
+      // self-correct. Only re-write on the first soft mark or a hard escalation.
+      if (!hardFail && run.status === "failed" && run.exitCode === ORPHAN_EXIT_CODE) {
+        continue;
+      }
+
       await db
         .update(pipelineRuns)
         .set({
           status: "failed",
-          exitCode: -1,
+          exitCode: hardFail ? -1 : ORPHAN_EXIT_CODE,
           finishedAt: run.finishedAt ?? new Date(),
           pid: null,
         })
