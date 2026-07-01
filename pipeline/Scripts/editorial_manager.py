@@ -10,6 +10,7 @@ recorded like every other step. Follows the enrichment_manager.py pattern.
 """
 
 import os
+import re
 
 from llm_client import call_llm
 from usage_tracker import update_usage as track_usage
@@ -86,6 +87,38 @@ def load_file(filepath):
         return ""
     with open(filepath, "r", encoding="utf-8") as f:
         return f.read()
+
+
+def resolve_short_title(outputs_dir):
+    """The problem's short title (short_text) — the SAME source the platform LUA
+    uses in prepare_lua_and_testcases.get_problem_name(): the owner-set title
+    (verbatim, final) if present, otherwise the first line of generated_titles.txt.
+    Returns '' when neither is available."""
+    owner = os.environ.get("PIPELINE_OWNER_TITLE", "").strip()
+    if owner:
+        return owner
+    titles_path = os.path.join(outputs_dir, "generated_titles.txt")
+    if os.path.exists(titles_path):
+        with open(titles_path, "r", encoding="utf-8") as f:
+            line = f.readline().strip()
+        # Strip list markers / trailing "- 95%" annotations, e.g. "- Pair Sum - 95%".
+        if line.startswith("- "):
+            line = line[2:]
+        line = line.split("-")[0].strip()
+        return line
+    return ""
+
+
+def apply_short_title(content, title):
+    """Force the editorial's H1 to the problem's short title so it always matches
+    the problem, instead of whatever name the model chose. Replaces the first H1
+    (`# ...`) line; if the editorial has none, prepends one."""
+    if not title:
+        return content
+    new_content, n = re.subn(r"(?m)^#[ \t]+.*$", f"# {title}", content, count=1)
+    if n == 0:
+        return f"# {title}\n\n{content}"
+    return new_content
 
 
 # lang_key -> (generatedFullCode filename, CodeContentFiles folder, extension)
@@ -194,10 +227,20 @@ def generate_editorial():
         print("Error: editorial generation returned empty content.")
         return 1
 
+    # Force the editorial title to the problem's short title (same as the
+    # platform short_text), overriding whatever name the model produced.
+    final_content = content.strip()
+    short_title = resolve_short_title(outputs_dir)
+    if short_title:
+        final_content = apply_short_title(final_content, short_title)
+        print(f"Editorial title set to problem short title: {short_title}")
+    else:
+        print("No owner/generated short title found; keeping model-generated editorial title.")
+
     output_path = os.path.join(outputs_dir, "editorial.md")
     os.makedirs(outputs_dir, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(content.strip() + "\n")
+        f.write(final_content + "\n")
 
     print(f"\n✅ SUCCESS! Editorial saved to {output_path} "
           f"({len(content)} chars, cost=${usage.get('cost', 0.0):.6f})")
