@@ -2,6 +2,7 @@
 """Run one solution file against many stdin inputs in a single Python process."""
 from __future__ import annotations
 
+import io
 import json
 import signal
 import sys
@@ -17,6 +18,15 @@ def _on_alarm(_signum, _frame) -> None:
     raise InputTimeout()
 
 
+def _fake_stdin(inp: str) -> io.TextIOWrapper:
+    """A stand-in for sys.stdin that, like the real one, exposes a binary
+    `.buffer`. A plain StringIO does NOT, so solutions that read bytes via
+    `sys.stdin.buffer.read()` would raise AttributeError and be misreported as
+    a crashing (buggy) solution. Wrapping BytesIO in a TextIOWrapper supports
+    both `input()`/`sys.stdin.read()` and `sys.stdin.buffer.read()`."""
+    return io.TextIOWrapper(io.BytesIO(inp.encode("utf-8")), encoding="utf-8")
+
+
 def run_one(code: str, inp: str, timeout_sec: int) -> tuple[str, str]:
     signal.signal(signal.SIGALRM, _on_alarm)
     signal.alarm(max(1, timeout_sec))
@@ -24,7 +34,7 @@ def run_one(code: str, inp: str, timeout_sec: int) -> tuple[str, str]:
     err_buf = StringIO()
     old_stdin = sys.stdin
     try:
-        sys.stdin = StringIO(inp)
+        sys.stdin = _fake_stdin(inp)
         with redirect_stdout(out_buf), redirect_stderr(err_buf):
             exec(compile(code, "<solution>", "exec"), {"__name__": "__main__"})
         signal.alarm(0)
