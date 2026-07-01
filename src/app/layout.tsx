@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Providers } from "@/components/Providers";
 import { Header } from "@/components/layout/Header";
@@ -33,9 +34,13 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col" suppressHydrationWarning>
-        <script
+        {/* Inline theme-init runs before paint to prevent a flash of the wrong
+            theme. Uses next/script (beforeInteractive) so it's injected into the
+            initial HTML without tripping Next 16's raw-<script> render error. */}
+        <Script
+          id="theme-init"
+          strategy="beforeInteractive"
           dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }}
-          suppressHydrationWarning
         />
         <Providers>
           <Header />
