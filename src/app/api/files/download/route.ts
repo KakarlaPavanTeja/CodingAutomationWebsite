@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import archiver from "archiver";
 import { PassThrough } from "stream";
-import { downloadAllOutputs, readStorageFileBuffer } from "@/lib/storage-sync";
+import { downloadAllOutputs, exportRunLogsFromDb, readStorageFileBuffer } from "@/lib/storage-sync";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { assertSafeProblemId, assertSafeRelativePath } from "@/lib/storage-path";
 
@@ -70,7 +70,17 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  if (outputFiles.length === 0) {
+  // Every run's log from the DB (complete history — object storage keeps only
+  // the latest run per step). Non-fatal: a log-read failure must not block the
+  // outputs download.
+  let runLogs: { path: string; buffer: Buffer }[] = [];
+  try {
+    runLogs = await exportRunLogsFromDb(safeProblemId);
+  } catch {
+    // Non-fatal — proceed with outputs only.
+  }
+
+  if (outputFiles.length === 0 && runLogs.length === 0) {
     return NextResponse.json({ error: "No output files found" }, { status: 404 });
   }
 
@@ -85,6 +95,9 @@ export async function GET(request: NextRequest) {
 
   for (const file of outputFiles) {
     archive.append(file.buffer, { name: `Outputs/${file.path}` });
+  }
+  for (const log of runLogs) {
+    archive.append(log.buffer, { name: log.path });
   }
 
   archive.finalize();

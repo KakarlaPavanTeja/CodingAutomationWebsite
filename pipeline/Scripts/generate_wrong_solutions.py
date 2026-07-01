@@ -21,6 +21,60 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from Prompts.wrongsolutionsprompt import get_wrong_solutions_prompt
 from llm_client import call_llm
 from usage_tracker import update_usage
+from benchmark_suite import (
+    BENCHMARK_RUN_TIMEOUT,
+    extract_example_inputs,
+    normalize,
+    run_solutions_batch,
+    structured_random_inputs,
+)
+
+
+def _valid_input_sample(description: str, testcases_path: str, limit: int = 60) -> list[str]:
+    """Collect a set of VALID problem inputs to test candidate wrong solutions
+    against: the generated test-case inputs + the description's worked examples +
+    a structure-aware random sweep derived from them. Deduped, capped at `limit`."""
+    inputs: list[str] = []
+    if os.path.exists(testcases_path):
+        try:
+            with open(testcases_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            container = data[0] if isinstance(data, list) and data else data
+            for tc in (container.get("test_cases") or []):
+                inp = tc.get("input")
+                if inp:
+                    inputs.append(inp)
+        except Exception:
+            pass
+    examples = extract_example_inputs(description)
+    inputs.extend(examples)
+    inputs.extend(structured_random_inputs(examples, 30))
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for inp in inputs:
+        if inp and inp not in seen:
+            seen.add(inp)
+            uniq.append(inp)
+    return uniq[:limit]
+
+
+def _differs_from_optimal(
+    code: str, sample: list[str], expected: list[str | None], timeout: float
+) -> bool:
+    """True if `code` produces a DIFFERENT result from the optimal on at least one
+    valid sampled input (or crashes/times out where the optimal succeeds). A
+    candidate that matches the optimal everywhere is functionally equivalent or
+    only performance-wrong (e.g. O(n) vs required O(log n)) — it can never be
+    killed by an I/O test case, so it must not be kept as a 'wrong' solution."""
+    if not sample:
+        return True  # no oracle available — keep (previous behavior)
+    results = run_solutions_batch(code, sample, timeout)
+    for (out, status), exp in zip(results, expected):
+        if exp is None:
+            continue  # optimal itself failed here — not a usable discriminator
+        if status != "ok" or normalize(out) != exp:
+            return True
+    return False
 
 
 def _sanitize_code(content: str) -> str:
@@ -202,7 +256,34 @@ def main():
     saved = 0
     seen_names: set[str] = set()
 
+    # Upper bound on how many wrong solutions to keep. The prompt asks for 3–5, but
+    # a model can over-produce (e.g. 10), which only slows the B2 gate. Cap it so a
+    # runaway response stays bounded; override with PIPELINE_MAX_WRONG_SOLUTIONS.
+    try:
+        max_wrong = int(os.environ.get("PIPELINE_MAX_WRONG_SOLUTIONS", "8"))
+    except ValueError:
+        max_wrong = 8
+    if max_wrong < 1:
+        max_wrong = 8
+
+    # Oracle for execution-based validation: run the optimal once over a set of
+    # valid inputs so each candidate can be checked for ACTUALLY producing a wrong
+    # answer somewhere. Without this, functionally-correct or performance-only
+    # "wrong" solutions slip through and make the B2 gate unsatisfiable.
+    sample = _valid_input_sample(description, testcases_path)
+    expected: list[str | None] = []
+    if sample:
+        opt_results = run_solutions_batch(optimal_solution, sample, BENCHMARK_RUN_TIMEOUT)
+        expected = [normalize(out) if status == "ok" else None for out, status in opt_results]
+        usable = sum(1 for e in expected if e is not None)
+        print(f"Validating candidates against {usable} valid input(s) via the optimal oracle.")
+    else:
+        print("Warning: no valid input sample available — skipping execution validation of wrong solutions.")
+
     for i, prop in enumerate(proposals):
+        if saved >= max_wrong:
+            print(f"  Reached wrong-solution cap ({max_wrong}); skipping the remaining proposals.")
+            break
         if not isinstance(prop, dict):
             continue
         code = _sanitize_code(str(prop.get("code") or ""))
@@ -218,6 +299,12 @@ def main():
             continue
         if not _has_explanatory_comments(code):
             print(f"  Skipping entry {i + 1}: missing leading comment block in code")
+            continue
+        if not _differs_from_optimal(code, sample, expected, BENCHMARK_RUN_TIMEOUT):
+            print(
+                f"  Skipping entry {i + 1}: matches the optimal's output on all sampled "
+                "valid inputs (functionally equivalent or performance-only — not actually wrong)"
+            )
             continue
 
         fname = _safe_filename(str(prop.get("filename") or ""), i)

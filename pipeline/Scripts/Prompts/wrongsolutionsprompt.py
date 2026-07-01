@@ -34,11 +34,17 @@ Python comments inside "code" too.
   * Each solution MUST compile and run without syntax errors.
   * Each MUST read the SAME stdin format and print the SAME stdout format as the optimal
     (spacing, newlines, tie-breaking) so outputs can be compared to expected answers.
-  * Each MUST be algorithmically WRONG for at least some valid inputs — not a copy of
-    the optimal, not identical to brute force, not a trivial print of a constant.
+  * Each MUST produce a WRONG OUTPUT on at least some valid input — it must differ from
+    the optimal's answer on some allowed input, not a copy of the optimal, not identical
+    to brute force, not a trivial print of a constant.
+  * Do NOT submit a solution that is merely SLOWER but still correct (e.g. an O(n) linear
+    scan when O(log n) is required). Performance-only differences produce the SAME output
+    as the optimal and CANNOT be caught by input/output test cases — they are useless here.
+  * Do NOT submit a solution that is functionally EQUIVALENT to the optimal (same output on
+    every valid input) even if the code looks different — it cannot be distinguished by tests.
   * Prefer classic mistakes for this problem type: wrong initialization, greedy that fails,
     off-by-one bounds, early exit, wrong comparison, missing edge case, O(n) shortcut that
-    is incorrect, etc.
+    is incorrect (i.e. gives WRONG answers, not just slow), etc.
   * Solutions should look like something a real student might submit (not intentionally
     broken with `raise` or `pass` everywhere).
 

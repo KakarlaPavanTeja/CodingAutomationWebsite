@@ -57,6 +57,21 @@ def _ca_bundle() -> str | bool:
     return True
 
 
+def _condense_response(text: str) -> str:
+    """Collapse a (possibly HTML) response body into a single short log line.
+
+    A raw body is often the multi-line "This app isn't live yet" HTML splash the
+    Replit deployment returns before it is fully live. Printed verbatim, its
+    newlines get split into dozens of separate timestamped log lines. Collapse
+    all whitespace to single spaces, recognize the not-live splash, and truncate.
+    """
+    if not text:
+        return "(empty body)"
+    if "isn&#39;t live yet" in text or "isn't live yet" in text:
+        return "deployment not live yet (Replit splash page) — usage row not recorded remotely"
+    return " ".join(text.split())[:150]
+
+
 def _insert_remote(row: dict) -> bool:
     """POST a usage row to the internal /api/internal/llm-usage endpoint."""
     if not _INTERNAL_API_URL or not _INTERNAL_API_SECRET:
@@ -70,10 +85,13 @@ def _insert_remote(row: dict) -> bool:
         resp = _requests.post(url, json=row, headers=headers, timeout=10, verify=_ca_bundle())
         if resp.status_code in (200, 201):
             return True
-        print(f"[usage_tracker] internal insert failed ({resp.status_code}): {resp.text[:200]}", flush=True)
+        print(
+            f"[usage_tracker] internal insert failed ({resp.status_code}): {_condense_response(resp.text)}",
+            flush=True,
+        )
         return False
     except Exception as e:
-        print(f"[usage_tracker] internal insert error: {e}", flush=True)
+        print(f"[usage_tracker] internal insert error: {' '.join(str(e).split())[:150]}", flush=True)
         return False
 
 
