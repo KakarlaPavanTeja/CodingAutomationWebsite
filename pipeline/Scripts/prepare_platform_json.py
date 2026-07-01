@@ -405,13 +405,21 @@ def parse_difficulty(lua):
 # Exam format (ported from create_cq.py)
 # ---------------------------------------------------------------------------
 
+def _tag_display_name(name_enum):
+    """Human-readable label for a tag enum: "subtask_1" -> "Subtask 1",
+    "stress" -> "Stress", "size_large" -> "Size Large"."""
+    return " ".join(word.capitalize() for word in str(name_enum).split("_") if word)
+
+
 def normalize_tags(tc):
     """Carry the v4 subtask/scenario tags through to the platform JSON.
 
     v4 emits a per-case `tags` list of strings (e.g. ["subtask_3", "stress"]).
-    The platform expects each tag as an object `{"name_enum": "<tag>"}`, so we
-    wrap every tag accordingly. Already-wrapped dict tags are passed through
-    (idempotent). Empty/blank tags are dropped; default to [] when absent.
+    The platform expects each tag as an object with both an enum and a label:
+    `{"name_enum": "subtask_1", "display_name": "Subtask 1"}`, so we wrap every
+    tag accordingly. Already-wrapped dict tags are passed through, keeping any
+    display_name they already carry (idempotent). Empty/blank tags are dropped;
+    default to [] when absent.
     """
     raw = tc.get("tags", [])
     if isinstance(raw, str):
@@ -423,10 +431,12 @@ def normalize_tags(tc):
     for t in raw:
         if isinstance(t, dict):
             name = str(t.get("name_enum", "")).strip()
+            display = str(t.get("display_name", "")).strip()
         else:
             name = str(t).strip()
+            display = ""
         if name:
-            out.append({"name_enum": name})
+            out.append({"name_enum": name, "display_name": display or _tag_display_name(name)})
     return out
 
 
