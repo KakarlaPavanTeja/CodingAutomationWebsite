@@ -12,3 +12,33 @@ id = "kNWRlY9U5suBPOqXG7oxm"
 uri = "file://strengthen_run_files/testcases.json"
 type = "unspecified"
 title = "testcases.json — 30-case suite (~13.9MB)"
+
+[[outputs]]
+id = "fnklkL5KSKV9sruy2rt7s"
+uri = "file://.local/tc_logs/try1_failed_exit1_d25ff008.log"
+type = "unspecified"
+title = "Try 1 — failed (Internal Server Error)"
+
+[[outputs]]
+id = "jPRGuUgCatu_t6viwD0iI"
+uri = "file://.local/tc_logs/try2_failed_exit-1_cb4af4c3.log"
+type = "unspecified"
+title = "Try 2 — generated but superseded (exit -1)"
+
+[[outputs]]
+id = "tu_PLrQrU2mfy3792k8pc"
+uri = "file://.local/tc_logs/try3_failed_exit1_1c1a0d48.log"
+type = "unspecified"
+title = "Try 3 — failed (Internal Server Error)"
+
+[[outputs]]
+id = "RDjuBPQqQsx5Gl0uxq0dJ"
+uri = "file://.local/tc_logs/try4_failed_exit1_42fa2001.log"
+type = "unspecified"
+title = "Try 4 — failed (Internal Server Error)"
+
+[[outputs]]
+id = "ZM9W5eTWtoOJzw2O55hva"
+uri = "file://.local/tc_logs/try5_completed_exit0_5508d62c.log"
+type = "unspecified"
+title = "Try 5 — completed (success)"
