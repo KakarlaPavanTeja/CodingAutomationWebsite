@@ -1120,6 +1120,7 @@ def fuzz_kill_wrong_solutions(
 
 
 _EXAMPLE_INPUT_RE = re.compile(r"\*\*Input:\*\*\s*```[^\n]*\n(.*?)```", re.S)
+_EXAMPLE_OUTPUT_RE = re.compile(r"\*\*Output:\*\*\s*```[^\n]*\n(.*?)```", re.S)
 
 
 def extract_example_inputs(description: str) -> list[str]:
@@ -1130,6 +1131,47 @@ def extract_example_inputs(description: str) -> list[str]:
         if s.strip():
             out.append(s + "\n")
     return out
+
+
+def extract_example_io(description: str) -> list[tuple[str, str]]:
+    """Pair each `**Input:**` block with the `**Output:**` block that follows it,
+    yielding [(stdin, expected_stdout), ...] straight from the description. These
+    are the problem's GROUND TRUTH: the optimal solution must reproduce them, and a
+    failure here is brute-independent evidence the optimal is buggy."""
+    text = description or ""
+    ins = [(m.start(), m.group(1).strip("\n")) for m in _EXAMPLE_INPUT_RE.finditer(text)]
+    outs = [(m.start(), m.group(1).strip("\n")) for m in _EXAMPLE_OUTPUT_RE.finditer(text)]
+    pairs: list[tuple[str, str]] = []
+    for pos, inp in ins:
+        if not inp.strip():
+            continue
+        expected = next((o for (opos, o) in outs if opos > pos), None)
+        if expected is not None and expected.strip():
+            pairs.append((inp + "\n", expected))
+    return pairs
+
+
+def optimal_example_failures(
+    optimal_code: str,
+    description: str,
+    timeout: float = BENCHMARK_RUN_TIMEOUT,
+) -> list[dict]:
+    """Run the optimal on the description's worked examples and return the cases where
+    it does NOT reproduce the stated expected output. Unlike the brute cross-check,
+    this compares against the problem's own ground truth, so a non-empty result is
+    strong, tie-break-independent evidence the reference/optimal solution is buggy."""
+    pairs = extract_example_io(description)
+    if not pairs:
+        return []
+    inputs = [p[0] for p in pairs]
+    results = run_solutions_batch(optimal_code, inputs, timeout)
+    fails: list[dict] = []
+    for (inp, expected), (got, status) in zip(pairs, results):
+        if status != "ok":
+            fails.append({"input": inp, "expected": normalize(expected), "got": f"<{status}>"})
+        elif normalize(got) != normalize(expected):
+            fails.append({"input": inp, "expected": normalize(expected), "got": normalize(got)[:120]})
+    return fails
 
 
 def structured_random_inputs(examples: list[str], count: int = 100, seed: int = 7) -> list[str]:

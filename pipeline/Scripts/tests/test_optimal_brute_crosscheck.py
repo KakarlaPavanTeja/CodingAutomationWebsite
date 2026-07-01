@@ -136,5 +136,98 @@ class CrosscheckTests(unittest.TestCase):
         self.assertEqual(mm, [], "correct optimal should agree with the brute")
 
 
+# --------------------------------------------------------------------------- #
+# Ground-truth example check (anchors the "buggy optimal" verdict to the
+# description's own worked examples, so multiple-valid-answer problems no longer
+# false-positive — the Two-Sum-by-index regression).
+# --------------------------------------------------------------------------- #
+
+# Two-Sum "print the indices of a pair summing to target, else -1". Multiple valid
+# pairs may exist, so optimal (hash map, latest complement) and brute (nested loops,
+# earliest pair) legitimately differ — but both reproduce the worked examples.
+TWOSUM_DESC = """Locate two distinct elements whose combined value is exactly goal,
+and identify their zero-based positions. If none, print -1.
+
+**Example 1:**
+
+**Input:**
+
+```
+6
+7 14 -5 9 3 12
+7
+```
+
+**Output:**
+
+```
+2 5
+```
+
+**Example 2:**
+
+**Input:**
+
+```
+5
+4 1 10 -6 13
+20
+```
+
+**Output:**
+
+```
+-1
+```
+"""
+
+TWOSUM_OPTIMAL = (
+    "def main():\n"
+    "    n=int(input()); nums=list(map(int,input().split())); target=int(input())\n"
+    "    seen={}\n"
+    "    for i,x in enumerate(nums):\n"
+    "        if target-x in seen: print(seen[target-x], i); return\n"
+    "        seen[x]=i\n"
+    "    print(-1)\n"
+    "main()\n"
+)
+TWOSUM_BRUTE = (
+    "def main():\n"
+    "    n=int(input()); nums=list(map(int,input().split())); target=int(input())\n"
+    "    for i in range(len(nums)):\n"
+    "        for j in range(i+1,len(nums)):\n"
+    "            if nums[i]+nums[j]==target: print(i,j); return\n"
+    "    print(-1)\n"
+    "main()\n"
+)
+
+
+class ExtractExampleIOTests(unittest.TestCase):
+    def test_pairs_input_with_following_output(self):
+        io = bs.extract_example_io(DESC_WITH_EXAMPLES)
+        self.assertEqual(len(io), 2)
+        self.assertEqual(io[0], ("3 4\n6 5 4\n2 1 1\n", "8"))
+        self.assertEqual(io[1], ("2 5\n4 3\n5 4\n", "7"))
+
+    def test_no_examples_returns_empty(self):
+        self.assertEqual(bs.extract_example_io("no blocks"), [])
+
+
+class OptimalExampleFailuresTests(unittest.TestCase):
+    def test_correct_optimal_has_no_failures(self):
+        self.assertEqual(bs.optimal_example_failures(SUM_OPTIMAL, SUM_DESC), [])
+
+    def test_buggy_optimal_fails_worked_example(self):
+        fails = bs.optimal_example_failures(SUM_BUGGY, SUM_DESC)
+        self.assertTrue(fails, "buggy optimal must fail the worked example")
+        self.assertEqual(fails[0]["expected"], "6")
+
+    def test_multiple_valid_answers_optimal_still_passes_examples(self):
+        # The core regression: a correct optimal for a multi-answer problem must
+        # reproduce the worked examples exactly (so it is NOT branded buggy),
+        # even though it will differ from the brute on other inputs.
+        self.assertEqual(bs.optimal_example_failures(TWOSUM_OPTIMAL, TWOSUM_DESC), [])
+
+
 if __name__ == "__main__":
     unittest.main()
