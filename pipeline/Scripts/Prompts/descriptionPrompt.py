@@ -372,6 +372,14 @@ Write ONLY these four sections, in order: **Your Task**, **Constraints**, **Inpu
 - Bullet points describing outputs, matching `USER CODE` and the examples above.
 - State whether the result is **printed** or **returned**, exactly as in `USER CODE`.
 - Do NOT start bullets with the word "Print".
+- **DETERMINISTIC ANSWER (CRITICAL):** if the task could admit MORE THAN ONE valid
+  output (e.g. "return the indices of a pair summing to k" when several pairs qualify,
+  "any valid arrangement", multiple shortest paths), the Output Format MUST pin down a
+  SINGLE expected answer with an explicit tie-break rule — e.g. "return the pair with
+  the smallest first index, breaking ties by the smallest second index" or "return the
+  lexicographically smallest such sequence". The tie-break MUST be consistent with the
+  worked examples and with what `USER CODE` actually produces. Never leave the expected
+  output ambiguous; grading compares against one exact answer.
 
 **OUTPUT RULES:**
 1. Do NOT rewrite the problem statement or examples.
@@ -778,6 +786,13 @@ Use the `USER CODE` below as the absolute source of truth for **Input Format** a
 **Input Format / Output Format:**
 - Describe stdin/stdout line-by-line based on USER CODE
 - State explicitly whether output is printed or returned (usually printed for full programs)
+- **DETERMINISTIC ANSWER (CRITICAL):** if the task could admit MORE THAN ONE valid output
+  (e.g. indices of a pair summing to k when several pairs qualify, "any valid arrangement",
+  multiple shortest paths), the Output Format MUST pin down a SINGLE expected answer with an
+  explicit tie-break rule (e.g. "smallest first index, then smallest second index";
+  "lexicographically smallest sequence") that is consistent with the examples and with what
+  USER CODE produces. Never leave the expected output ambiguous — grading compares against one
+  exact answer.
 
 **Constraints:**
 - Explicit numeric bounds with inequalities, e.g. `1 ≤ n ≤ 10^5`
