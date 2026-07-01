@@ -25,12 +25,18 @@ import sys
 import uuid
 import random
 
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from testcase_helpers import sync_size_tags_json_root  # noqa: E402
+
 _BASE = os.environ.get("PIPELINE_BASE_DIR") or os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..")
 )
 OUTPUTS_DIR = os.path.join(_BASE, "Outputs")
 INPUTS_DIR = os.path.join(_BASE, "Inputs")
 JSON_PREP_DIR = os.path.join(OUTPUTS_DIR, "forJSONPreparation")
+# Canonical testcases file, produced by the generate-testcases step. The JSON
+# prep step reads it directly instead of a per-mode copy under forJSONPreparation/.
+TESTCASES_SOURCE = os.path.join(OUTPUTS_DIR, "testcases.json")
 
 
 # ---------------------------------------------------------------------------
@@ -194,53 +200,116 @@ def js_number(value):
     return f
 
 
-def locate_pair(mode, problem_name):
-    """Find the matching `.lua` + testcases JSON pair for the given mode."""
+def locate_lua(mode, problem_name):
+    """Find the packaged `.lua` file for the given mode.
+
+    Only the `.lua` is located here; the test cases are read directly from the
+    canonical `Outputs/testcases.json` (see `load_source_testcases`) rather than a
+    per-mode copy under forJSONPreparation/.
+    """
     suffix = "_exam" if mode == "exam" else ""
     lua_path = os.path.join(JSON_PREP_DIR, f"{problem_name}{suffix}.lua")
-    tc_path = os.path.join(JSON_PREP_DIR, f"testcases_{problem_name}{suffix}.json")
 
-    if os.path.exists(lua_path) and os.path.exists(tc_path):
-        return lua_path, tc_path
+    if os.path.exists(lua_path):
+        return lua_path
 
     # Fallback: glob in case the reconstructed problem name differs from what
     # package_platform wrote.
     all_lua = sorted(glob.glob(os.path.join(JSON_PREP_DIR, "*.lua")))
     if mode == "exam":
         cand_lua = [p for p in all_lua if p.endswith("_exam.lua")]
-        cand_tc = sorted(glob.glob(os.path.join(JSON_PREP_DIR, "testcases_*_exam.json")))
     else:
         cand_lua = [p for p in all_lua if not p.endswith("_exam.lua")]
-        cand_tc = [
-            p
-            for p in sorted(glob.glob(os.path.join(JSON_PREP_DIR, "testcases_*.json")))
-            if not p.endswith("_exam.json")
-        ]
 
-    if cand_lua and cand_tc:
-        return cand_lua[0], cand_tc[0]
+    if cand_lua:
+        return cand_lua[0]
 
     raise FileNotFoundError(
-        f"Could not locate the packaged .lua + testcases JSON pair for mode "
-        f"'{mode}' in {JSON_PREP_DIR}. Run the 'Package for Platform' step first.\n"
-        f"  expected lua: {lua_path}\n"
-        f"  expected testcases: {tc_path}"
+        f"Could not locate the packaged .lua file for mode '{mode}' in "
+        f"{JSON_PREP_DIR}. Run the 'Package for Platform' step first.\n"
+        f"  expected lua: {lua_path}"
     )
+
+
+def _validate_and_extract_container(data, source):
+    """Structural validation shared by load_testcases / load_source_testcases."""
+    if not isinstance(data, list) or len(data) == 0:
+        raise ValueError(
+            f"Testcases file {source} must be a non-empty JSON array of objects."
+        )
+    container = data[0]
+    if "test_cases" not in container or not isinstance(container["test_cases"], list):
+        raise ValueError(
+            f"Testcases file {source} is missing a 'test_cases' list."
+        )
+    return container
 
 
 def load_testcases(tc_path):
     with open(tc_path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    if not isinstance(data, list) or len(data) == 0:
-        raise ValueError(
-            f"Testcases file {tc_path} must be a non-empty JSON array of objects."
+    return _validate_and_extract_container(data, tc_path)
+
+
+def load_source_testcases():
+    """Read the canonical `Outputs/testcases.json`, apply the same validation and
+    corrections the `package_platform` step used to bake into
+    `forJSONPreparation/testcases_*.json`, and return the validated container.
+
+    Reading the canonical file directly avoids maintaining a second on-disk copy;
+    the corrections (dict->list, size_* tag sync, missing-key defaults, tag
+    normalization, sequential order) are applied in-memory here instead.
+    """
+    src = TESTCASES_SOURCE
+    if not os.path.exists(src):
+        raise FileNotFoundError(
+            f"Could not find {src}. Run the 'Generate Testcases' step first."
         )
-    container = data[0]
-    if "test_cases" not in container or not isinstance(container["test_cases"], list):
-        raise ValueError(
-            f"Testcases file {tc_path} is missing a 'test_cases' list."
-        )
-    return container
+
+    with open(src, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Auto-correct if root is a dictionary containing "test_cases".
+    if isinstance(data, dict) and "test_cases" in data:
+        print("Auto-correcting testcases.json structure from dictionary to list.")
+        data = [data]
+
+    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict) and "test_cases" in data[0]:
+        container = data[0]
+        desc_path = os.path.join(OUTPUTS_DIR, "generated_description.md")
+        if os.path.exists(desc_path):
+            with open(desc_path, "r", encoding="utf-8") as df:
+                description = df.read()
+            tags_fixed = sync_size_tags_json_root(data, description)
+            if tags_fixed:
+                print(f"Corrected size_* tags on {tags_fixed} case(s) from derived input sizes.")
+        tc_list = container["test_cases"]
+        print(f"Validating {len(tc_list)} test cases...")
+        for idx, tc in enumerate(tc_list, 1):
+            # Ensure all keys are present.
+            for key in ["input", "output", "weightage", "order"]:
+                if key not in tc:
+                    if key == "weightage":
+                        tc[key] = 5
+                    elif key == "order":
+                        tc[key] = idx
+                    else:
+                        tc[key] = ""  # fallback for input/output
+
+            # Preserve the v4 subtask/scenario tags so they survive into the
+            # platform JSON. Normalize to a list of strings.
+            raw_tags = tc.get("tags", [])
+            if isinstance(raw_tags, str):
+                raw_tags = [raw_tags]
+            elif not isinstance(raw_tags, list):
+                raw_tags = []
+            tc["tags"] = [str(t) for t in raw_tags]
+
+            # Fix order if incorrect.
+            if tc["order"] != idx:
+                tc["order"] = idx
+
+    return _validate_and_extract_container(data, src)
 
 
 def get_owner_total_score():
@@ -1062,13 +1131,13 @@ def main():
     print(f"Problem Name: {problem_name}")
     print(f"Question Type: {question_type} (node-based: {node_based})")
 
-    lua_path, tc_path = locate_pair(mode, problem_name)
+    lua_path = locate_lua(mode, problem_name)
     print(f"Using LUA file: {lua_path}")
-    print(f"Using testcases file: {tc_path}")
+    print(f"Using testcases file: {TESTCASES_SOURCE}")
 
     with open(lua_path, "r", encoding="utf-8") as f:
         lua = f.read()
-    container = load_testcases(tc_path)
+    container = load_source_testcases()
     difficulty = parse_difficulty(lua)
     print(f"Difficulty: {difficulty}")
     print(f"Test cases: {len(container['test_cases'])}")

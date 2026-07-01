@@ -1,11 +1,6 @@
 import os
 import json
-import shutil
 import re
-import sys
-
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from testcase_helpers import sync_size_tags_json_root
 
 _BASE = os.environ.get("PIPELINE_BASE_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 OUTPUTS_DIR = os.path.join(_BASE, "Outputs")
@@ -336,64 +331,11 @@ def main():
     with open(lua_out_path, "w") as f:
         f.write(template_content)
     print(f"Written LUA file to {lua_out_path}")
-    
-    # Copy and Validate testcases
-    testcases_in_path = os.path.join(OUTPUTS_DIR, "testcases.json")
-    if os.path.exists(testcases_in_path):
-        testcases_out_path = os.path.join(output_target_dir, f"testcases_{problem_name}{suffix}.json")
-        try:
-            with open(testcases_in_path, 'r') as fin:
-                testcases_data = json.load(fin)
-                
-            # Validation and Order Correction
-            # Auto-correct if root is a dictionary containing "test_cases"
-            if isinstance(testcases_data, dict) and "test_cases" in testcases_data:
-                print("Auto-correcting testcases.json structure from dictionary to list.")
-                testcases_data = [testcases_data]
 
-            if isinstance(testcases_data, list) and len(testcases_data) > 0:
-                container = testcases_data[0]
-                if "test_cases" in container:
-                    desc_path = os.path.join(OUTPUTS_DIR, "generated_description.md")
-                    if os.path.exists(desc_path):
-                        with open(desc_path, "r", encoding="utf-8") as df:
-                            description = df.read()
-                        tags_fixed = sync_size_tags_json_root(testcases_data, description)
-                        if tags_fixed:
-                            print(f"Corrected size_* tags on {tags_fixed} case(s) from derived input sizes.")
-                    tc_list = container["test_cases"]
-                    print(f"Validating {len(tc_list)} test cases...")
-                    for idx, tc in enumerate(tc_list, 1):
-                        # Ensure all keys are present
-                        for key in ["input", "output", "weightage", "order"]:
-                            if key not in tc:
-                                if key == "weightage": tc[key] = 5
-                                elif key == "order": tc[key] = idx
-                                else: tc[key] = "" # fallback for input/output
-
-                        # Preserve the v4 subtask/scenario tags so they survive
-                        # into the platform JSON. Normalize to a list of strings.
-                        raw_tags = tc.get("tags", [])
-                        if isinstance(raw_tags, str):
-                            raw_tags = [raw_tags]
-                        elif not isinstance(raw_tags, list):
-                            raw_tags = []
-                        tc["tags"] = [str(t) for t in raw_tags]
-
-                        # Fix order if incorrect
-                        if tc["order"] != idx:
-                            tc["order"] = idx
-                else:
-                    print("Warning: 'test_cases' key missing in testcases.json wrapper object.")
-            else:
-                 print("Warning: testcases.json format is unexpected (expected list of objects).")
-
-            with open(testcases_out_path, 'w') as fout:
-                json.dump(testcases_data, fout, indent=4)
-            print(f"Validated and copied testcases to {testcases_out_path}")
-        except Exception as e:
-            print(f"Error processing testcases.json: {e}. Copying raw file instead.")
-            shutil.copy(testcases_in_path, testcases_out_path)
+    # Test cases are NOT copied here. The final JSON prep step
+    # (prepare_platform_json.py) reads the canonical Outputs/testcases.json
+    # directly and applies validation/corrections in-memory, so there is no
+    # longer a per-mode testcases_*.json copy under forJSONPreparation/.
 
 if __name__ == "__main__":
     main()
