@@ -22,7 +22,10 @@ const TAG_COLORS: Record<WhatsNewFeature["tag"], string> = {
 };
 
 function formatDate(iso: string) {
-  return new Date(iso + "T00:00:00").toLocaleDateString(undefined, {
+  // Pin the locale (not the runtime default) so the server and client format
+  // the date identically — otherwise en-US SSR ("Jul 1, 2026") vs en-GB browser
+  // ("1 Jul 2026") triggers a hydration mismatch.
+  return new Date(iso + "T00:00:00").toLocaleDateString("en-US", {
     year: "numeric",
     month: "short",
     day: "numeric",
