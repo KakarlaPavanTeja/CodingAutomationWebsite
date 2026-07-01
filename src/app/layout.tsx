@@ -1,10 +1,9 @@
 import type { Metadata } from "next";
-import Script from "next/script";
+import { cookies } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Providers } from "@/components/Providers";
 import { Header } from "@/components/layout/Header";
 import { PageTransition } from "@/components/layout/PageTransition";
-import { THEME_INIT_SCRIPT } from "@/lib/theme-init-script";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -22,26 +21,26 @@ export const metadata: Metadata = {
   description: "Coding Question Automation Pipeline Dashboard",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Resolve the theme server-side from a cookie the ThemeProvider keeps in sync,
+  // and set the class directly on <html>. This prevents the theme flash WITHOUT
+  // an inline <script> — Next 16 / React 19 error on any script tag a component
+  // renders. First visit (no cookie) defaults to light; the client corrects it.
+  const themeCookie = (await cookies()).get("theme")?.value;
+  const themeClass = themeCookie === "dark" ? "dark" : themeCookie === "light" ? "light" : "";
+
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased ${themeClass}`}
+      style={themeClass ? { colorScheme: themeClass } : undefined}
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col" suppressHydrationWarning>
-        {/* Inline theme-init runs before paint to prevent a flash of the wrong
-            theme. Uses next/script (beforeInteractive) so it's injected into the
-            initial HTML without tripping Next 16's raw-<script> render error. */}
-        <Script
-          id="theme-init"
-          strategy="beforeInteractive"
-          dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }}
-        />
         <Providers>
           <Header />
           <main className="flex-1">

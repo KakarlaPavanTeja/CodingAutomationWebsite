@@ -30,11 +30,22 @@ function resolveTheme(theme: Theme): ResolvedTheme {
   return theme === "system" ? getSystemTheme() : theme;
 }
 
+function writeThemeCookie(resolved: ResolvedTheme) {
+  // Persist the RESOLVED theme so the server root layout can set the <html>
+  // class on SSR (no flash, no inline script). One year, path=/, lax.
+  try {
+    document.cookie = `theme=${resolved}; path=/; max-age=31536000; SameSite=Lax`;
+  } catch {
+    // document unavailable / disabled cookies
+  }
+}
+
 function applyTheme(resolved: ResolvedTheme) {
   const root = document.documentElement;
   root.classList.remove("light", "dark");
   root.classList.add(resolved);
   root.style.colorScheme = resolved;
+  writeThemeCookie(resolved);
 }
 
 function readStoredTheme(): Theme {
