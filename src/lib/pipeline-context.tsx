@@ -900,6 +900,18 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
             return;
           }
 
+          // A "soft orphan" (exit_code -2) is a run the server only *suspects*
+          // died (its pid looked gone). Its process may still be alive and about
+          // to exit cleanly — the run close handler will overwrite -2 with the
+          // real exit code. Treat it as still running so the tile keeps polling
+          // and recovers to the true terminal status instead of freezing on a
+          // spurious "Failed" with a half-parsed testcase count. A genuinely
+          // dead run escalates to a hard orphan (exit_code -1) past the runtime
+          // ceiling, which is terminal and stops polling below.
+          if (run.status === "failed" && run.exit_code === -2) {
+            run.status = "running";
+          }
+
           if (run.status === "running") {
             if (subStepId) {
               setStepStates((prev) => {
