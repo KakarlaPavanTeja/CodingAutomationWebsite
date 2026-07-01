@@ -216,8 +216,16 @@ export async function uploadLog(
   runId: string,
   content: string,
 ): Promise<void> {
-  // Upload to storage as backup
+  // Storage backup. Two objects are written:
+  //  - a "latest" pointer keyed by step, convenient for a quick current view;
+  //  - a per-RUN archive keyed by runId, so re-running the same step no longer
+  //    overwrites earlier runs in storage. Without the per-run copy an exported
+  //    folder only ever shows the latest run per step, even though the DB
+  //    (pipeline_logs, one row per runId) has kept them all.
   await uploadFile(`${problemId}/logs/${stepId}.log`, content);
+  if (runId) {
+    await uploadFile(`${problemId}/logs/runs/${stepId}/${runId}.log`, content);
+  }
 
   // Upsert into pipeline_logs table for fast retrieval
   await db
@@ -365,6 +373,46 @@ export async function downloadAllOutputs(
     }
   }
 
+  return results;
+}
+
+/**
+ * Every run's log for a problem, read from the pipeline_logs table (one row per
+ * run). Object storage keeps only the latest run per step, so the DB is the
+ * complete historical record — this lets the export include past runs too.
+ * Files are named logs/runs/<step>/<startedAt>__<status>__<runId8>.log so they
+ * sort chronologically per step.
+ */
+export async function exportRunLogsFromDb(
+  problemId: string,
+): Promise<{ path: string; buffer: Buffer }[]> {
+  const rows = await db
+    .select({
+      runId: pipelineLogs.runId,
+      stepId: pipelineLogs.stepId,
+      content: pipelineLogs.content,
+      startedAt: pipelineRuns.startedAt,
+      status: pipelineRuns.status,
+    })
+    .from(pipelineLogs)
+    .leftJoin(pipelineRuns, eq(pipelineLogs.runId, pipelineRuns.id))
+    .where(eq(pipelineLogs.problemId, problemId))
+    .orderBy(pipelineLogs.stepId, desc(pipelineRuns.startedAt));
+
+  const results: { path: string; buffer: Buffer }[] = [];
+  for (const r of rows) {
+    if (!r.content) continue;
+    const step = (r.stepId || "unknown").replace(/[^a-zA-Z0-9_.-]/g, "_");
+    const ts = r.startedAt
+      ? new Date(r.startedAt).toISOString().replace(/[:.]/g, "-")
+      : "unknown-time";
+    const status = r.status || "unknown";
+    const runShort = (r.runId || "no-run").slice(0, 8);
+    results.push({
+      path: `logs/runs/${step}/${ts}__${status}__${runShort}.log`,
+      buffer: Buffer.from(r.content, "utf-8"),
+    });
+  }
   return results;
 }
 

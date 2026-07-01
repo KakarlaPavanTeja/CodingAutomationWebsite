@@ -29,6 +29,7 @@ from benchmark_suite import (
     BENCHMARK_RUN_TIMEOUT,
     DEFAULT_MIN_KILL,
     DEFAULT_RUN_TIMEOUT,
+    extract_example_inputs,
     fuzz_kill_survivors,
     fuzz_kill_wrong_solutions,
     load_testcases,
@@ -38,7 +39,9 @@ from benchmark_suite import (
     run_benchmark,
     run_mutation_benchmark,
     run_solution,
+    run_solutions_batch,
     run_wrong_approach_gate,
+    structured_random_inputs,
 )
 from testcase_helpers import (
     derive_size_bucket,
@@ -380,6 +383,57 @@ def _llm_kill_wrong_solutions(optimal_code, test_cases, wrong_codes, brute_code,
     return new_cases
 
 
+def _quarantine_equivalent_wrong_solutions(
+    optimal_code: str,
+    wrong_codes: list[tuple[str, str]],
+    test_cases: list[dict],
+    description: str,
+    timeout: float,
+) -> list[str]:
+    """Detect surviving 'wrong' solutions that are actually functionally equivalent
+    to the optimal (same output on every VALID sampled input) and move their files
+    out of Outputs/wrong_solutions/ into a quarantine_equivalent/ subdir so the B2
+    gate stops treating them as unkillable survivors. Returns the quarantined names.
+
+    Sample = real test-case inputs + description worked examples + a structure-aware
+    random sweep. A solution is quarantined only if it matches the optimal on ALL of
+    them (and the optimal itself ran) — i.e. no I/O test case could ever kill it."""
+    sample: list[str] = [tc.get("input", "") for tc in test_cases if tc.get("input")]
+    examples = extract_example_inputs(description)
+    sample.extend(examples)
+    sample.extend(structured_random_inputs(examples, 40))
+    seen: set[str] = set()
+    sample = [s for s in sample if s and not (s in seen or seen.add(s))]
+    if not sample:
+        return []
+
+    opt_results = run_solutions_batch(optimal_code, sample, timeout)
+    expected = [normalize(out) if status == "ok" else None for out, status in opt_results]
+    if not any(e is not None for e in expected):
+        return []  # optimal unusable on the sample — cannot judge equivalence
+
+    wrong_dir = os.path.join("Outputs", "wrong_solutions")
+    quarantine_dir = os.path.join(wrong_dir, "quarantine_equivalent")
+    quarantined: list[str] = []
+    for name, code in wrong_codes:
+        results = run_solutions_batch(code, sample, timeout)
+        differs = False
+        for (out, status), exp in zip(results, expected):
+            if exp is None:
+                continue
+            if status != "ok" or normalize(out) != exp:
+                differs = True
+                break
+        if differs:
+            continue  # genuinely wrong somewhere — keep it for the gate
+        src = os.path.join(wrong_dir, name)
+        if os.path.exists(src):
+            os.makedirs(quarantine_dir, exist_ok=True)
+            os.replace(src, os.path.join(quarantine_dir, name))
+            quarantined.append(name)
+    return quarantined
+
+
 def main():
     parser = argparse.ArgumentParser(description="Harden test-case suite against surviving mutants")
     parser.add_argument("--min-kill", type=float, default=DEFAULT_MIN_KILL)
@@ -495,6 +549,22 @@ def main():
             seen_new.add(c["input"])
             uniq.append(c)
         if not uniq:
+            # Safety net: a "wrong" solution that no fuzz/LLM killer can catch is
+            # often not actually wrong — it is functionally equivalent to the optimal
+            # (or only slower). Such files make the B2 gate unsatisfiable forever.
+            # Quarantine any that match the optimal on a broad sample of VALID inputs
+            # so the gate can pass; the file is preserved under wrong_solutions/
+            # quarantine_equivalent/ for review, not deleted.
+            quarantined = _quarantine_equivalent_wrong_solutions(
+                optimal_code, wrong_codes, test_cases, description, args.timeout
+            )
+            if quarantined:
+                print(
+                    f"  Quarantined {len(quarantined)} functionally-equivalent 'wrong' "
+                    f"solution(s) (not actually wrong): {', '.join(quarantined)}"
+                )
+                # Re-evaluate B2 now that the mislabeled files are excluded.
+                continue
             print("  Could not generate killer cases for the remaining wrong solution(s) — leaving for review.")
             break
         print(f"  Added {len(uniq)} case(s) targeting surviving wrong solution(s).")
