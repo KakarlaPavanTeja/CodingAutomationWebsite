@@ -15,6 +15,7 @@ import {
   type PipelineStepUsageMap,
 } from "@/lib/pipeline-step-list";
 import { formatStepCostDisplay } from "@/lib/pipeline-usage-match";
+import { aggregateTestStats } from "@/lib/execution-parser";
 import { getStepConfig } from "@/lib/pipeline-config";
 import type { PipelineSection } from "@/lib/pipeline-waves";
 import { cn } from "@/lib/utils";
@@ -26,9 +27,22 @@ import type {
   StepStatus,
   SubStepRunState,
 } from "@/types/pipeline";
-import { Check, FileText, List, Loader2, Play, Square, Unlock } from "lucide-react";
+import { Check, FileText, List, Loader2, Play, RotateCcw, Square, Unlock, Wand2 } from "lucide-react";
 
 const MAX_OPEN_LOGS = 3;
+
+/**
+ * Which completed rows may be refined (re-run with an appended reviewer
+ * instruction). Any completed LLM step qualifies: PIPELINE_REFINE_NOTE is
+ * injected centrally in llm_client.call_llm, so every LLM step honors it.
+ */
+function isRefinable(
+  entry: ReturnType<typeof buildPipelineStepList>[number]
+): boolean {
+  // Every completed LLM entry can be refined — sub, step, and per-language (lang)
+  // all thread the note via RunRequest.refineNote, injected centrally in call_llm.
+  return entry.llmUsage !== "none" && entry.status === "completed";
+}
 
 type SideTab = "steps" | "logs";
 
@@ -80,11 +94,13 @@ interface PipelineSidePanelProps {
   selectedKey: PipelineStepKey;
   onSelectKey: (key: PipelineStepKey) => void;
   getSubStatus: (id: QuestionSubStepId) => StepStatus;
-  onRunSubStep?: (id: QuestionSubStepId) => void;
+  affectedStepIds?: Set<StepId>;
+  onRunSelected?: (ids: StepId[]) => void;
+  onRunSubStep?: (id: QuestionSubStepId, refineNote?: string) => void;
   onStopSubStep?: (id: QuestionSubStepId) => void;
-  onRunStep?: (stepId: StepId) => void;
+  onRunStep?: (stepId: StepId, refineNote?: string) => void;
   onStopStep?: (stepId: StepId) => void;
-  onRunLangStep?: (stepId: StepId, langId: string) => void;
+  onRunLangStep?: (stepId: StepId, langId: string, refineNote?: string) => void;
   onStopLangStep?: (stepId: StepId, langId: string) => void;
   isEntryLocked?: (keyStr: string) => boolean;
 }
@@ -130,6 +146,8 @@ export function PipelineSidePanel({
   selectedKey,
   onSelectKey,
   getSubStatus,
+  affectedStepIds,
+  onRunSelected,
   onRunSubStep,
   onStopSubStep,
   onRunStep,
@@ -142,6 +160,11 @@ export function PipelineSidePanel({
   const [openLogKeys, setOpenLogKeys] = useState<string[]>([]);
   const [expandedLogKeys, setExpandedLogKeys] = useState<string[]>([]);
   const [stopCooldownUntil, setStopCooldownUntil] = useState<Record<string, number>>({});
+  // Per-row "refine & re-run" boxes: which rows are open, and their draft text.
+  const [openRefineKeys, setOpenRefineKeys] = useState<string[]>([]);
+  const [refineText, setRefineText] = useState<Record<string, string>>({});
+  // Affected-steps suggestion: ids the user has UN-ticked (default = all ticked).
+  const [uncheckedRerun, setUncheckedRerun] = useState<Set<string>>(new Set());
   const listScrollRef = useRef<HTMLDivElement>(null);
   const skipStepsTabRef = useRef(false);
 
@@ -268,6 +291,53 @@ export function PipelineSidePanel({
       >
         {tab === "steps" && (
           <div className="p-1.5 space-y-0.5">
+            {onRunSelected && affectedStepIds && affectedStepIds.size > 0 && (() => {
+              const affected = [...affectedStepIds];
+              const selected = affected.filter((id) => !uncheckedRerun.has(id));
+              return (
+                <div className="mb-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 space-y-1.5">
+                  <p className="text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                    Suggested re-runs — these may be affected by changes to earlier steps
+                  </p>
+                  <div className="space-y-0.5">
+                    {affected.map((id) => (
+                      <label
+                        key={id}
+                        className="flex items-center gap-1.5 text-[11px] cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-3 w-3 accent-amber-500"
+                          checked={!uncheckedRerun.has(id)}
+                          onChange={(e) =>
+                            setUncheckedRerun((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.delete(id);
+                              else next.add(id);
+                              return next;
+                            })
+                          }
+                        />
+                        {getStepConfig(id).label}
+                      </label>
+                    ))}
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-6 w-full text-[10px] px-2"
+                    disabled={selected.length === 0}
+                    onClick={() => {
+                      onRunSelected(selected);
+                      setUncheckedRerun(new Set());
+                    }}
+                  >
+                    <RotateCcw className="w-3 h-3 mr-1" />
+                    Re-run selected ({selected.length})
+                  </Button>
+                </div>
+              );
+            })()}
             {entries.map((entry, index) => {
               const showHeader =
                 index === 0 || entries[index - 1].sectionTitle !== entry.sectionTitle;
@@ -282,6 +352,33 @@ export function PipelineSidePanel({
                 entry.status !== "stopping" &&
                 entry.status !== "stopped";
               const onCooldown = (stopCooldownUntil[entry.keyStr] ?? 0) > now;
+              // A completed step can be re-run (with or without a refine note).
+              // This gives non-LLM steps a Run button again after completion.
+              const showRerun =
+                !entry.disabled && !locked && entry.status === "completed";
+              // Stale: an upstream data-dependency re-ran after this step completed.
+              const isStale =
+                entry.status === "completed" &&
+                (entry.key.kind === "step"
+                  ? affectedStepIds?.has(entry.key.id)
+                  : entry.key.kind === "lang"
+                    ? affectedStepIds?.has(entry.key.stepId)
+                    : affectedStepIds?.has("generate_question")) === true;
+              // Aggregate passed/total testcases for execution steps (from logs).
+              const rowRun = entryRunState(entry, stepStates);
+              const testStats = rowRun
+                ? aggregateTestStats(
+                    rowRun.logs ?? [],
+                    rowRun.status === "running",
+                    rowRun.exitCode
+                  )
+                : null;
+              const rerun = (note?: string) => {
+                if (entry.key.kind === "sub") onRunSubStep?.(entry.key.id, note);
+                else if (entry.key.kind === "lang")
+                  onRunLangStep?.(entry.key.stepId, entry.key.langId, note);
+                else if (entry.key.kind === "step") onRunStep?.(entry.key.id, note);
+              };
               // Override for locked-but-pending workflow/language steps (e.g. split,
               // execute on previously-generated questions whose upstream state didn't
               // restore as completed). The lock is advisory and the server doesn't
@@ -360,6 +457,28 @@ export function PipelineSidePanel({
                             <Badge variant="outline" className="text-[9px] h-4 px-1">
                               {llmUsageLabel(entry.llmUsage)}
                             </Badge>
+                            {isStale && (
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] h-4 px-1 bg-amber-500/15 text-amber-500 border-amber-500/30"
+                                title="An upstream step re-ran after this — re-run to refresh"
+                              >
+                                stale
+                              </Badge>
+                            )}
+                            {testStats && (
+                              <Badge
+                                variant="outline"
+                                className={cn(
+                                  "text-[9px] h-4 px-1 tabular-nums",
+                                  testStats.passed === testStats.total
+                                    ? "bg-green-500/15 text-green-400 border-green-500/30"
+                                    : "bg-amber-500/15 text-amber-500 border-amber-500/30"
+                                )}
+                              >
+                                {testStats.passed}/{testStats.total} passed
+                              </Badge>
+                            )}
                           </div>
                         </div>
                         <div className="text-right shrink-0">
@@ -516,6 +635,41 @@ export function PipelineSidePanel({
                           ) : null}
                         </>
                       )}
+                      {showRerun && !onCooldown && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 text-[10px] px-2"
+                          title="Run this completed step again"
+                          onClick={() => rerun()}
+                        >
+                          <RotateCcw className="w-3 h-3 mr-1" />
+                          Re-run
+                        </Button>
+                      )}
+                      {isRefinable(entry) && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            "h-6 text-[10px] px-2",
+                            openRefineKeys.includes(entry.keyStr) &&
+                              "bg-primary/10 text-primary"
+                          )}
+                          onClick={() =>
+                            setOpenRefineKeys((prev) =>
+                              prev.includes(entry.keyStr)
+                                ? prev.filter((k) => k !== entry.keyStr)
+                                : [...prev, entry.keyStr]
+                            )
+                          }
+                        >
+                          <Wand2 className="w-3 h-3 mr-1" />
+                          Refine
+                        </Button>
+                      )}
                       <Button
                         type="button"
                         variant="ghost"
@@ -531,6 +685,46 @@ export function PipelineSidePanel({
                         View logs
                       </Button>
                     </div>
+                    {isRefinable(entry) && openRefineKeys.includes(entry.keyStr) && (
+                      <div className="mt-1.5 rounded-md border border-border/60 bg-muted/30 p-2 space-y-1.5">
+                        <p className="text-[10px] text-muted-foreground leading-snug">
+                          Tell the LLM what to change, then re-run this step. Downstream
+                          steps that depend on it will reset so they can re-run too.
+                        </p>
+                        <textarea
+                          value={refineText[entry.keyStr] ?? ""}
+                          onChange={(e) =>
+                            setRefineText((prev) => ({
+                              ...prev,
+                              [entry.keyStr]: e.target.value,
+                            }))
+                          }
+                          rows={3}
+                          maxLength={4000}
+                          placeholder="e.g. Make the story shorter and rename the function to maxProfit"
+                          className="w-full resize-y rounded border border-border bg-background px-2 py-1 text-[11px] leading-snug focus:outline-none focus:ring-1 focus:ring-primary"
+                        />
+                        <div className="flex justify-end">
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-6 text-[10px] px-2"
+                            disabled={!(refineText[entry.keyStr] ?? "").trim()}
+                            onClick={() => {
+                              const note = (refineText[entry.keyStr] ?? "").trim();
+                              if (!note) return;
+                              rerun(note);
+                              setOpenRefineKeys((prev) =>
+                                prev.filter((k) => k !== entry.keyStr)
+                              );
+                            }}
+                          >
+                            <Play className="w-3 h-3 mr-1" />
+                            Re-run with changes
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               );

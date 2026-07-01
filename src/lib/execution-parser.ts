@@ -38,6 +38,23 @@ export interface ExecParseResult {
   runEnded: boolean;
 }
 
+/**
+ * Aggregate passed/total testcases across all languages from an execution
+ * step's logs, for the compact node + side-panel badge. Returns null when the
+ * logs carry no testcase counts (e.g. a non-execution step or a fresh run).
+ */
+export function aggregateTestStats(
+  logs: LogLine[],
+  isRunning: boolean,
+  exitCode: number | null
+): { passed: number; total: number } | null {
+  const r = parseExecutionLogs(logs, { isRunning, exitCode });
+  if (r.langs.length === 0) return null;
+  const passed = r.langs.reduce((s, l) => s + l.passed, 0);
+  const total = r.langs.reduce((s, l) => s + l.total, 0);
+  return total > 0 ? { passed, total } : null;
+}
+
 interface ParseOpts {
   enabledLanguages?: string[];
   isRunning: boolean;

@@ -22,6 +22,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { usePipeline } from "@/lib/pipeline-context";
 import { getStepConfig } from "@/lib/pipeline-config";
+import {
+  formatPipelineCost,
+  formatTokenCount,
+  type RunUsageSummary,
+} from "@/lib/pipeline-usage-match";
 
 interface ProblemEditorialProps {
   problemId: string;
@@ -535,6 +540,13 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
   const [rawText, setRawText] = useState("");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [copied, setCopied] = useState(false);
+  // LLM usage for the editorial: `latest` = the most recent Generate Editorial
+  // run, `total` = every editorial generation summed (so a re-run shows both
+  // this run's cost and the running total).
+  const [editorialUsage, setEditorialUsage] = useState<{
+    latest: RunUsageSummary | null;
+    total: RunUsageSummary | null;
+  }>({ latest: null, total: null });
 
   const generateState = stepStates.get("generate_editorial");
   const executeState = stepStates.get("execute_editorial");
@@ -595,6 +607,31 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
     }
     prevExecStatus.current = status;
   }, [executeState?.status, onStatusChange]);
+
+  const fetchUsage = useCallback(() => {
+    fetch(`/api/pipeline/usage?problemId=${encodeURIComponent(problemId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!data) return;
+        setEditorialUsage({
+          latest: data.usage?.generate_editorial ?? null,
+          total: data.totals?.generate_editorial ?? null,
+        });
+      })
+      .catch(() => {});
+  }, [problemId]);
+
+  // Load usage on mount / problem change, refresh when a generation finishes,
+  // and poll while one is running so the cost ticks in live.
+  useEffect(() => {
+    fetchUsage();
+  }, [fetchUsage, generateState?.status]);
+
+  useEffect(() => {
+    if (!genRunning) return;
+    const t = setInterval(fetchUsage, 5000);
+    return () => clearInterval(t);
+  }, [genRunning, fetchUsage]);
 
   const blocks = useMemo(() => parseEditorial(content), [content]);
 
@@ -852,6 +889,56 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
           )}
         </div>
       </div>
+
+      {/* LLM usage: model, tokens, this-run cost, and running total across re-runs */}
+      {(() => {
+        const latest = editorialUsage.latest;
+        const total = editorialUsage.total;
+        if (!latest && !total) return null;
+        const models = (latest?.models?.length ? latest.models : total?.models) ?? [];
+        const latestTokens = latest ? latest.promptTokens + latest.completionTokens : 0;
+        const runCount = total?.callCount ?? latest?.callCount ?? 0;
+        // Only surface a separate "total" once there's been more than one run
+        // (or the totals genuinely differ from this run's numbers).
+        const showTotal =
+          !!total && (runCount > (latest?.callCount ?? 0) || total.costUsd !== (latest?.costUsd ?? 0));
+        return (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+            {models.length > 0 && (
+              <span>
+                Model:{" "}
+                <span className="font-medium text-foreground">{models.join(", ")}</span>
+              </span>
+            )}
+            {latest && (
+              <span>
+                Tokens:{" "}
+                <span className="font-medium text-foreground tabular-nums">
+                  {formatTokenCount(latestTokens)}
+                </span>{" "}
+                ({formatTokenCount(latest.promptTokens)} in ·{" "}
+                {formatTokenCount(latest.completionTokens)} out)
+              </span>
+            )}
+            {latest && (
+              <span>
+                This run:{" "}
+                <span className="font-medium text-foreground tabular-nums">
+                  {formatPipelineCost(latest.costUsd)}
+                </span>
+              </span>
+            )}
+            {showTotal && total && (
+              <span>
+                Total{runCount > 1 ? ` (${runCount} runs)` : ""}:{" "}
+                <span className="font-medium text-foreground tabular-nums">
+                  {formatPipelineCost(total.costUsd)}
+                </span>
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Body */}
       <div className="rounded-lg border bg-card p-5 sm:p-6">

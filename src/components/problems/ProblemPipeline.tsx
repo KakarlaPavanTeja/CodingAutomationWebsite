@@ -9,7 +9,7 @@ import { getPipelineUiWorkflowSteps } from "@/lib/pipeline-config";
 import { usePipeline } from "@/lib/pipeline-context";
 import type { PipelineStepUsageMap } from "@/lib/pipeline-step-list";
 import type { StepId } from "@/types/pipeline";
-import { ChevronDown, Loader2, PlayCircle, StopCircle } from "lucide-react";
+import { ChevronDown, Loader2, PlayCircle, RotateCcw, StopCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ProblemPipelineProps {
@@ -46,6 +46,9 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
     runAll,
     cancelRunAll,
     isRunAllActive,
+    affectedStepIds,
+    runAffected,
+    runAffectedSelected,
     loadProblemState,
     savePipelineState,
     legacyPipelineNotice,
@@ -201,7 +204,7 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
             </Button>
           </>
         ) : (
-          <div className="flex flex-col items-center gap-1 w-full sm:w-auto">
+          <div className="flex flex-col items-center gap-1 w-full sm:w-auto sm:flex-row">
             <Button
               className="h-9 w-full sm:w-auto sm:min-w-[220px] px-4 text-sm font-medium"
               onClick={runAll}
@@ -210,6 +213,18 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
               <PlayCircle className="w-4 h-4 mr-1.5" />
               Run all steps
             </Button>
+            {affectedStepIds.size > 0 && (
+              <Button
+                variant="outline"
+                className="h-9 w-full sm:w-auto px-4 text-sm font-medium border-amber-500/50 text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
+                onClick={runAffected}
+                disabled={isAnyRunning}
+                title="Re-run only the steps made stale by a more recent upstream change"
+              >
+                <RotateCcw className="w-4 h-4 mr-1.5" />
+                Rerun affected ({affectedStepIds.size})
+              </Button>
+            )}
             {packagingStepsPending && !ownerTitle.trim() && (
               <p className="text-[10px] text-muted-foreground text-center max-w-md">
                 Set a title in Pipeline settings (and Save) to include Package &amp; JSON in run all.
@@ -233,6 +248,8 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
         generateTitleWithAi={generateTitleWithAi}
         legacyNotice={legacyPipelineNotice}
         getSubStatus={getSubStepStatus}
+        affectedStepIds={affectedStepIds}
+        onRunSelected={runAffectedSelected}
         onRunStep={runStep}
         onStopStep={stopStep}
         onRunSubStep={runQuestionSubStep}

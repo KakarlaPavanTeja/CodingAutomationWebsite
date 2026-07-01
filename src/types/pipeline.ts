@@ -125,6 +125,12 @@ export interface RunRequest {
   problemId?: string;
   /** Override log file key (e.g. split_code__cpp) for per-language runs */
   runKey?: string;
+  /**
+   * Free-text instruction from the reviewer to fold into the LLM prompt when
+   * re-running a completed LLM step ("make the story shorter", "rename to X").
+   * Reaches the Python script via the PIPELINE_REFINE_NOTE env var.
+   */
+  refineNote?: string;
 }
 
 export interface OutputFile {

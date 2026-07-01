@@ -148,8 +148,13 @@ def generate_editorial():
             print(f"Loaded brute-force reference solution: {name}")
             break
     if not brute_force_code.strip():
-        print("No brute-force reference solution found "
-              "(editorial will derive the naive approach itself).")
+        print("=" * 72)
+        print("⚠️  No brute-force reference solution found at "
+              f"{os.path.join(full_code_dir, 'BRUTE_FORCE.py')}.")
+        print("   The editorial's naive approach will be model-derived rather than")
+        print("   the validated brute force from the Generate Question step. Run the")
+        print("   'Generate Brute Force' step before the editorial to include it.")
+        print("=" * 72)
 
     print(f"Loaded solution code for: {', '.join(sorted(solutions))}")
     if drivers:

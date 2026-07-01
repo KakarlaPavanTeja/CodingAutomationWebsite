@@ -10,6 +10,7 @@ import { buildPipelineSections, type PipelineWaveItem } from "@/lib/pipeline-wav
 import { durationFromRunState } from "@/lib/pipeline-duration";
 import { isPipelineWaveItemLocked } from "@/lib/pipeline-item-lock";
 import { isQuestionPhaseComplete } from "@/lib/pipeline-question";
+import { aggregateTestStats } from "@/lib/execution-parser";
 import type {
   QuestionSubStepId,
   QuestionType,
@@ -34,11 +35,13 @@ interface PipelineWaveFlowProps {
   generateTitleWithAi: boolean;
   legacyNotice?: string | null;
   getSubStatus: (subStepId: QuestionSubStepId) => StepStatus;
-  onRunStep: (state: StepState) => void;
+  affectedStepIds?: Set<StepId>;
+  onRunSelected?: (ids: StepId[]) => void;
+  onRunStep: (state: StepState, refineNote?: string) => void;
   onStopStep: (stepId: StepId) => void;
-  onRunSubStep: (subStepId: QuestionSubStepId) => void;
+  onRunSubStep: (subStepId: QuestionSubStepId, refineNote?: string) => void;
   onStopSubStep: (subStepId: QuestionSubStepId) => void;
-  onRunLangStep?: (stepId: StepId, langId: string) => void;
+  onRunLangStep?: (stepId: StepId, langId: string, refineNote?: string) => void;
   onStopLangStep?: (stepId: StepId, langId: string) => void;
 }
 
@@ -64,6 +67,8 @@ export function PipelineWaveFlow({
   generateTitleWithAi,
   legacyNotice,
   getSubStatus,
+  affectedStepIds,
+  onRunSelected,
   onRunStep,
   onStopStep,
   onRunSubStep,
@@ -158,6 +163,29 @@ export function PipelineWaveFlow({
     return usage?.costUsd ?? null;
   }
 
+  // Affected = stale because an upstream data-dependency re-ran more recently.
+  function isItemAffected(item: PipelineWaveItem): boolean {
+    if (!affectedStepIds) return false;
+    if (item.kind === "lang" && item.parentStepId) return affectedStepIds.has(item.parentStepId);
+    if (item.kind === "step") return affectedStepIds.has(item.id as StepId);
+    return false;
+  }
+
+  // Aggregate passed/total testcases for execution-step nodes (from their logs).
+  function getTestStats(item: PipelineWaveItem): { passed: number; total: number } | null {
+    if (item.kind === "lang" && item.parentStepId && item.langId) {
+      const run = stepStates.get(item.parentStepId)?.languageSubRuns?.[item.langId];
+      if (!run) return null;
+      return aggregateTestStats(run.logs ?? [], run.status === "running", run.exitCode);
+    }
+    if (item.kind === "step") {
+      const state = stepStates.get(item.id as StepId);
+      if (!state) return null;
+      return aggregateTestStats(state.logs ?? [], state.status === "running", state.exitCode);
+    }
+    return null;
+  }
+
   const gqCtx = useMemo(
     () => ({
       questionType,
@@ -223,6 +251,8 @@ export function PipelineWaveFlow({
           getItemStatus={getItemStatus}
           getDuration={getDuration}
           getCost={getCost}
+          isAffected={isItemAffected}
+          getTestStats={getTestStats}
           isLocked={isItemLocked}
           isSelected={isItemSelected}
           onSelect={handleSelectItem}
@@ -266,11 +296,13 @@ export function PipelineWaveFlow({
             selectedKey={selectedKey}
             onSelectKey={setSelectedKey}
             getSubStatus={getSubStatus}
+            affectedStepIds={affectedStepIds}
+            onRunSelected={onRunSelected}
             onRunSubStep={onRunSubStep}
             onStopSubStep={onStopSubStep}
-            onRunStep={(stepId) => {
+            onRunStep={(stepId, refineNote) => {
               const st = stepStates.get(stepId);
-              if (st) onRunStep(st);
+              if (st) onRunStep(st, refineNote);
             }}
             onStopStep={onStopStep}
             onRunLangStep={onRunLangStep}

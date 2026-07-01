@@ -210,6 +210,8 @@ def main():
     # 3. Prompt + LLM call (with optional one-shot regenerate if copy detected).
     def _generate_once(extra_nudge: str = "") -> str:
         sys_p, usr_p = get_brute_force_prompt(description, optimal_solution)
+        # The reviewer's refine note (PIPELINE_REFINE_NOTE) is injected centrally
+        # in llm_client.call_llm, so it applies to every attempt automatically.
         if extra_nudge:
             usr_p = usr_p + f"\n\n### Regeneration nudge:\n{extra_nudge}\n"
         print("Calling LLM to generate the brute-force oracle solution...")

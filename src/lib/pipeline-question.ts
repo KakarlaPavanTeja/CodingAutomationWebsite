@@ -241,6 +241,41 @@ export function canRunQuestionSubStep(
   return state.subStepRuns?.[prereq]?.status === "completed";
 }
 
+/** True if `ancestor` sits anywhere on `node`'s prerequisite chain. */
+function isPrereqAncestor(
+  ancestor: QuestionSubStepId,
+  node: QuestionSubStepId,
+  questionType: QuestionType
+): boolean {
+  let cur = getQuestionSubStepPrerequisite(node, questionType);
+  while (cur) {
+    if (cur === ancestor) return true;
+    cur = getQuestionSubStepPrerequisite(cur, questionType);
+  }
+  return false;
+}
+
+/**
+ * What becomes STALE when `subStepId` is (re-)run: every sub-step whose
+ * prerequisite chain passes through it, plus the brute-force step when its
+ * prerequisite (naming for function, description otherwise) is affected.
+ * Used to reset downstream work back to pending so it re-locks instead of
+ * showing a "completed" badge against an outdated upstream.
+ */
+export function getQuestionSubStepDependents(
+  subStepId: QuestionSubStepId,
+  questionType: QuestionType
+): { subSteps: QuestionSubStepId[]; bruteForce: boolean } {
+  const all = getQuestionSubStepsForType(questionType);
+  const subSteps = all.filter(
+    (id) => id !== subStepId && isPrereqAncestor(subStepId, id, questionType)
+  );
+  const bfPrereq: QuestionSubStepId = questionType === "function" ? "naming" : "description";
+  const bruteForce =
+    subStepId === bfPrereq || isPrereqAncestor(subStepId, bfPrereq, questionType);
+  return { subSteps, bruteForce };
+}
+
 /** Brute force runs in parallel with translations once naming (function) or description is done. */
 export function canRunBruteForce(state: StepState, questionType: QuestionType): boolean {
   const prereq: QuestionSubStepId = questionType === "function" ? "naming" : "description";

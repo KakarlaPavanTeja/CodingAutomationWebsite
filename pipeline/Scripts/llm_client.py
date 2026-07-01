@@ -504,6 +504,20 @@ def call_llm(
     Returns (content, usage) where usage has:
       prompt_tokens, completion_tokens, total_tokens, cost (USD), model
     """
+    # Central refine-note injection. When a completed LLM step is re-run from the
+    # UI with a change request, the API sets PIPELINE_REFINE_NOTE on the spawned
+    # process; fold it into the user prompt here so EVERY LLM step honors it
+    # without per-script wiring. Empty/unset = normal generation path.
+    refine_note = (os.environ.get("PIPELINE_REFINE_NOTE") or "").strip()
+    if refine_note:
+        user_prompt = (
+            user_prompt
+            + "\n\n# ADDITIONAL INSTRUCTIONS FROM REVIEWER (HIGH PRIORITY)\n"
+            + "Apply the following change requested by the content reviewer. Honor "
+            + "it precisely while keeping all other requirements above intact:\n"
+            + refine_note + "\n"
+        )
+
     model = _resolve_model(purpose)
     timeout_sec = _resolve_read_timeout_sec(purpose)
     effort = (

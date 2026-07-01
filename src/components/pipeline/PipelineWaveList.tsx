@@ -26,6 +26,8 @@ interface PipelineWaveListProps {
   getItemStatus: (item: PipelineWaveItem) => StepStatus;
   getDuration: (item: PipelineWaveItem) => number | null;
   getCost?: (item: PipelineWaveItem) => number | null;
+  isAffected?: (item: PipelineWaveItem) => boolean;
+  getTestStats?: (item: PipelineWaveItem) => { passed: number; total: number } | null;
   isLocked: (item: PipelineWaveItem) => boolean;
   isSelected: (item: PipelineWaveItem) => boolean;
   onSelect: (item: PipelineWaveItem) => void;
@@ -56,6 +58,8 @@ function WaveStepButton({
   status,
   durationSec,
   costUsd,
+  affected,
+  testStats,
   locked,
   selected,
   onSelect,
@@ -65,6 +69,8 @@ function WaveStepButton({
   status: StepStatus;
   durationSec: number | null;
   costUsd: number | null;
+  affected?: boolean;
+  testStats?: { passed: number; total: number } | null;
   locked: boolean;
   selected: boolean;
   onSelect: () => void;
@@ -141,6 +147,27 @@ function WaveStepButton({
           </div>
         </div>
         <span className="text-[10px] text-muted-foreground">{sub}</span>
+        {(testStats || affected) && (
+          <div className="flex flex-wrap items-center gap-1">
+            {testStats && (
+              <span
+                className={cn(
+                  "rounded px-1 py-0.5 text-[9px] font-medium tabular-nums",
+                  testStats.passed === testStats.total
+                    ? "bg-green-500/15 text-green-600 dark:text-green-400"
+                    : "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                )}
+              >
+                {testStats.passed}/{testStats.total} passed
+              </span>
+            )}
+            {affected && (
+              <span className="rounded px-1 py-0.5 text-[9px] font-medium bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                affected · re-run
+              </span>
+            )}
+          </div>
+        )}
       </button>
 
       {canRunAnyway && (
@@ -168,6 +195,8 @@ export function PipelineWaveList({
   getItemStatus,
   getDuration,
   getCost,
+  isAffected,
+  getTestStats,
   isLocked,
   isSelected,
   onSelect,
@@ -251,6 +280,8 @@ export function PipelineWaveList({
                             status={getItemStatus(item)}
                             durationSec={getDuration(item)}
                             costUsd={getCost?.(item) ?? null}
+                            affected={isAffected?.(item) ?? false}
+                            testStats={getTestStats?.(item) ?? null}
                             locked={isLocked(item)}
                             selected={isSelected(item)}
                             onSelect={() => onSelect(item)}
@@ -269,6 +300,8 @@ export function PipelineWaveList({
                         status={getItemStatus(item)}
                         durationSec={getDuration(item)}
                         costUsd={getCost?.(item) ?? null}
+                        affected={isAffected?.(item) ?? false}
+                        testStats={getTestStats?.(item) ?? null}
                         locked={isLocked(item)}
                         selected={isSelected(item)}
                         onSelect={() => onSelect(item)}

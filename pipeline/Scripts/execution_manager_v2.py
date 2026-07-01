@@ -898,7 +898,8 @@ def run_all_tests_nonfunction(base_dir=None, selected_lang=None):
                 test_res["error"] = "Memory limit exceeded"
             elif test_res["status"] == "RUNTIME_ERROR":
                 test_res["error"] = f"Runtime error: {stderr_text[:200]}" if stderr_text else "Runtime error"
-                global_error_occurred = True
+                # A runtime error (or TLE) on one testcase must NOT abort the rest:
+                # record this case's verdict and keep going so every testcase runs.
             else:
                 if actual_output.strip() == expected_output:
                     test_res["passed"] = True
@@ -925,11 +926,9 @@ def run_all_tests_nonfunction(base_dir=None, selected_lang=None):
         emit_language_results("execute_tests", "Reference Solution", 0, lang, language_results)
         _print_language_results_table(lang, language_results)
         print(f"{lang}: passed {passed_count}/{len(language_results)}")
+        # Per-language terminal marker. A compilation error halts only THIS
+        # language (its code can't run at all); other languages still execute.
         _emit_lang_end(lang, len(testcases), len(language_results), passed_count, global_error_occurred)
-        if global_error_occurred:
-            print(f"Halting remaining languages due to error in {lang}.")
-            print(f"[EXEC_EVENT] run_halted after={lang}")
-            break
 
     write_execution_results_file(
         base_dir,
@@ -1145,7 +1144,10 @@ def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
                     f"Stderr:   {stderr_text.strip()}"
                     + (f"\nAPI error: {api_error}" if api_error else "")
                 )
-                if test_res["status"] in {"RUNTIME_ERROR", "COMPILATION_ERROR"}:
+                # Only a compilation error stops this language (the code can't run
+                # at all). A runtime error or TLE on one testcase must NOT abort the
+                # rest — record the verdict and keep executing every testcase.
+                if test_res["status"] == "COMPILATION_ERROR":
                     global_error_occurred = True
                 _print_progress(
                     lang,
@@ -1167,11 +1169,9 @@ def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
         emit_language_results("execute_tests", "Reference Solution", 0, lang, language_results)
         _print_language_results_table(lang, language_results)
         print(f"{lang}: passed {passed_count}/{len(language_results)}")
+        # Per-language terminal marker. A compilation error halts only THIS
+        # language (its code can't run at all); other languages still execute.
         _emit_lang_end(lang, len(testcases), len(language_results), passed_count, global_error_occurred)
-        if global_error_occurred:
-            print(f"Halting remaining languages due to error in {lang}.")
-            print(f"[EXEC_EVENT] run_halted after={lang}")
-            break
 
     write_execution_results_file(
         base_dir,

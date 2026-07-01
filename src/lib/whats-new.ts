@@ -27,6 +27,76 @@ export type WhatsNewFeature = {
 
 export const WHATS_NEW: WhatsNewFeature[] = [
   {
+    id: "refine-rerun-full-verdicts",
+    title: "Refine, Re-run & Full Test Verdicts",
+    date: "2026-07-01",
+    tag: "Pipeline",
+    summary:
+      "Tweak any AI step with a plain-English instruction, re-run only the steps a change actually affects, and see every test case's verdict even when a solution errors or times out.",
+    items: [
+      {
+        title: "Refine & re-run any AI step",
+        summary: "Tell the LLM what to change, then re-run that step with your note folded into the prompt.",
+        details:
+          "Every completed AI step now has a “Refine” button. Type a plain-English instruction — e.g. “make the story " +
+          "shorter” or “rename the function to maxProfit” — and re-run. Your note is added to the prompt as a high-priority " +
+          "reviewer instruction while all the original requirements stay intact. It works on every LLM step because the note " +
+          "is injected centrally, so you don't have to regenerate from scratch to make one small change.",
+      },
+      {
+        title: "Re-run only what's affected",
+        summary: "Changing an earlier step marks the steps that depend on it as “stale”, so you re-run just those.",
+        details:
+          "The pipeline now understands which steps actually consume each other's output (not just the run order). When you " +
+          "re-run an upstream step, every downstream step built from its result is flagged with a “stale / affected” badge, " +
+          "and a “Rerun affected” button appears. It resets and re-runs only those steps — all of them or a subset you tick — " +
+          "in the correct dependency order, instead of re-running the whole pipeline.",
+      },
+      {
+        title: "Every test case runs to a verdict",
+        summary: "A runtime error or time-limit on one case no longer aborts the rest of the run.",
+        details:
+          "Previously, one runtime error could halt the remaining test cases and even the remaining languages. Now each test " +
+          "case gets its own pass/fail verdict and the run keeps going — only a compilation error (where the code can't run at " +
+          "all) stops that single language, and other languages still execute. Editorial execution likewise runs every case " +
+          "instead of stopping after a few time-limit exceeded results, so the reviewer sees the full per-case picture.",
+      },
+      {
+        title: "Per-language pass counts",
+        summary: "Execution results and the pipeline graph show pass counts per language, never summed together.",
+        details:
+          "The Execution Logs tab and the pipeline nodes now show a separate pass count for each language (e.g. “C++ 18/20”, " +
+          "“Python 20/20”) rather than one combined total that hid which language was failing. Execution steps also carry a " +
+          "compact “passed/total” badge in the pipeline graph and side panel, green when everything passes and amber otherwise.",
+      },
+      {
+        title: "Editorial cost, tokens & model",
+        summary: "The Editorial tab now shows the model used, tokens, this run's cost, and a running total across re-runs.",
+        details:
+          "Open the Editorial tab and you'll see a usage strip: which model generated it, the prompt/completion token counts, " +
+          "the cost of the latest generation, and — once you've re-run Generate Editorial — the total cost across every " +
+          "editorial run for that problem. The numbers refresh live while a generation is running.",
+      },
+      {
+        title: "Accurate problem status",
+        summary: "A finished pipeline now reliably shows “Completed” instead of dropping back to “Draft”.",
+        details:
+          "Problem status is now anchored to the packaging step: once Prepare Platform JSON succeeds, the problem stays " +
+          "“Completed” even though informational steps like Execute Editorial run afterward. Re-running a content step (e.g. " +
+          "the question or test cases) still moves it back to “Draft”, and a step that is still running shows “Processing”, so " +
+          "the badge always matches reality.",
+      },
+      {
+        title: "Brute-force warning in Editorial",
+        summary: "Editorial now clearly warns when it runs without a validated brute-force solution.",
+        details:
+          "If you generate the editorial before running Generate Brute Force, the logs now show a prominent warning that the " +
+          "naive approach will be model-derived rather than the validated brute force from the Generate Question step, with a " +
+          "reminder to run Generate Brute Force first for the strongest result.",
+      },
+    ],
+  },
+  {
     id: "buggy-optimal-detection",
     title: "Buggy Solution Detection",
     date: "2026-06-24",

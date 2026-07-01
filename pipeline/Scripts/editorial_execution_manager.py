@@ -55,10 +55,11 @@ _FENCE_LANG = {
     "node": "Node.js",
 }
 
-# Stop running a (approach, language) after this many consecutive TLEs — naive
-# approaches are expected to time out and running every testcase at the time
-# limit would otherwise risk the overall pipeline timeout. Informational only.
-_TLE_STOP_LIMIT = int(os.environ.get("EDITORIAL_EXEC_TLE_LIMIT", "3") or "3")
+# Optionally stop a (approach, language) after this many CONSECUTIVE TLEs.
+# Default 0 = disabled: every testcase is executed and gets its own verdict even
+# when a naive approach times out (the reviewer wants the full per-case picture).
+# Set EDITORIAL_EXEC_TLE_LIMIT=<n> to re-enable the early-stop optimization.
+_TLE_STOP_LIMIT = int(os.environ.get("EDITORIAL_EXEC_TLE_LIMIT", "0") or "0")
 
 _MULTILANG_RE = re.compile(
     r"<MultiLanguageCodeBlock>(.*?)</MultiLanguageCodeBlock>", re.DOTALL

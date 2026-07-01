@@ -3,7 +3,12 @@ import { desc, eq } from "drizzle-orm";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { db } from "@/lib/db";
 import { llmUsage, pipelineRuns } from "@/lib/db/schema";
-import { aggregateUsageRows, usageRowMatchesRunStep } from "@/lib/pipeline-usage-match";
+import {
+  aggregateUsageRows,
+  normalizeUsageStepId,
+  usageRowMatchesRunStep,
+} from "@/lib/pipeline-usage-match";
+import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
 import { assertSafeProblemId } from "@/lib/storage-path";
 
 export const dynamic = "force-dynamic";
@@ -62,8 +67,27 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // All-time totals per parent step (every run summed, not just the latest).
+  // Used to show "total cost" alongside the latest run's cost after a re-run —
+  // e.g. re-running Generate Editorial shows this run's cost and the running
+  // total across every editorial generation for the problem.
+  const totalsByStep = new Map<string, typeof usageRows>();
+  for (const row of usageRows) {
+    const parent = parsePipelineRunStepKey(
+      normalizeUsageStepId(row.stepId ?? "")
+    ).parentStepId;
+    if (!parent) continue;
+    const bucket = totalsByStep.get(parent);
+    if (bucket) bucket.push(row);
+    else totalsByStep.set(parent, [row]);
+  }
+  const totals: Record<string, StepLlmUsageSummary> = {};
+  for (const [stepId, rows] of totalsByStep) {
+    totals[stepId] = aggregateUsageRows(rows);
+  }
+
   return NextResponse.json(
-    { usage },
+    { usage, totals },
     { headers: { "Cache-Control": "no-store, max-age=0, must-revalidate" } }
   );
 }

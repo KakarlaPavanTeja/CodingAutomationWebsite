@@ -375,30 +375,40 @@ function LanguageBlock({
 }
 
 function SolutionSection({ group }: { group: SolutionGroup }) {
-  const totalPassed = group.langs.reduce((s, l) => s + l.passed, 0);
-  const total = group.langs.reduce((s, l) => s + l.total, 0);
-  const allPassed = total > 0 && totalPassed === total;
-  const [collapsed, setCollapsed] = useState(false);
+  // Collapsed by default so the tab opens as a compact overview.
+  const [collapsed, setCollapsed] = useState(true);
 
   return (
     <div className="space-y-2">
       <button
         type="button"
         onClick={() => setCollapsed((v) => !v)}
-        className="flex w-full items-center gap-2 text-left"
+        className="flex w-full flex-wrap items-center gap-2 text-left"
       >
-        <ChevronRight className={cn("h-4 w-4 transition-transform", !collapsed && "rotate-90")} />
+        <ChevronRight className={cn("h-4 w-4 shrink-0 transition-transform", !collapsed && "rotate-90")} />
         <span className="text-sm font-semibold">{group.sol}</span>
-        <span
-          className={cn(
-            "rounded-full px-2 py-0.5 text-[11px] font-medium",
-            allPassed
-              ? "bg-green-500/10 text-green-700 dark:text-green-400"
-              : "bg-amber-500/10 text-amber-700 dark:text-amber-400",
-          )}
-        >
-          {totalPassed}/{total} testcases passed
-        </span>
+        {/* Per-language pass counts — never summed across languages. */}
+        {group.langs.map((l) => {
+          const langPassed = l.total > 0 && l.passed === l.total;
+          return (
+            <span
+              key={l.lang}
+              className={cn(
+                "rounded-full px-2 py-0.5 text-[11px] font-medium",
+                langPassed
+                  ? "bg-green-500/10 text-green-700 dark:text-green-400"
+                  : "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+              )}
+            >
+              {l.lang} {l.passed}/{l.total}
+            </span>
+          );
+        })}
+        {group.langs.length === 0 && (
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+            no results
+          </span>
+        )}
       </button>
       {!collapsed && (
         <div className="grid gap-2 pl-6 md:grid-cols-2">

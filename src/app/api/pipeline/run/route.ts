@@ -98,7 +98,7 @@ function pipelineSpawnEnv(overrides: Record<string, string>): NodeJS.ProcessEnv 
 
 export async function POST(request: NextRequest) {
   const body: RunRequest = await request.json();
-  const { stepId, mode, subSteps, languages, testcaseCount, problemId, runKey } = body;
+  const { stepId, mode, subSteps, languages, testcaseCount, problemId, runKey, refineNote } = body;
 
   // Validate problemId shape before any DB work.
   let safeProblemId: string;
@@ -150,6 +150,14 @@ export async function POST(request: NextRequest) {
     (typeof runKey !== "string" || !/^[a-z0-9_]{1,64}$/.test(runKey))
   ) {
     return NextResponse.json({ error: "Invalid runKey" }, { status: 400 });
+  }
+  // Reviewer refinement note — optional free text folded into the LLM prompt.
+  // Passed via env (not argv), so only length is constrained here.
+  if (
+    refineNote !== undefined &&
+    (typeof refineNote !== "string" || refineNote.length > 4000)
+  ) {
+    return NextResponse.json({ error: "Invalid refineNote" }, { status: 400 });
   }
 
   // Auth + ownership/admin gate.
@@ -341,6 +349,9 @@ export async function POST(request: NextRequest) {
       // non-function execution without re-deriving it from disk state.
       PIPELINE_QUESTION_TYPE: storedQuestionType || "",
       PIPELINE_ENABLED_LANGS: (languages ?? []).join(","),
+      // Reviewer's refinement instruction for a re-run of a completed LLM step.
+      // Empty string means "no extra instructions" (the normal generation path).
+      PIPELINE_REFINE_NOTE: (refineNote ?? "").slice(0, 4000),
       // Base URL the Python pipeline uses to POST cost/usage back to this same
       // app (`/api/internal/llm-usage`). It MUST resolve to THIS environment's
       // own running instance — in the deployment to the deployment, in dev to

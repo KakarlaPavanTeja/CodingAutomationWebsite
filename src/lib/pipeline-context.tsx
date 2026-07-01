@@ -1,8 +1,9 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, ReactNode } from "react";
 import { getWorkflowSteps, getPipelineUiWorkflowSteps, getAllTrackedStepIds, getStepConfig, LANGUAGES } from "@/lib/pipeline-config";
 import { isStepReadyForRunAll, getIncompletePrerequisites } from "@/lib/pipeline-prerequisites";
+import { computeAffectedSteps } from "@/lib/pipeline-dependents";
 import { isQuestionPhaseComplete } from "@/lib/pipeline-question";
 import type {
   QuestionType,
@@ -23,6 +24,7 @@ import {
   getQuestionSubStepWaves,
   canRunQuestionSubStep,
   canRunBruteForce,
+  getQuestionSubStepDependents,
   subStepLogKey,
   normalizeEnabledQuestionSubSteps,
   deriveEnabledQuestionSubSteps,
@@ -119,9 +121,9 @@ interface PipelineContextType {
   setDefaultTagNames: (tags: string) => void;
   saveOwnerTitle: () => Promise<void>;
   updateStepState: (stepId: StepId, partial: Partial<StepState>) => void;
-  runStep: (state: StepState) => void;
-  runLanguageSubStep: (stepId: StepId, langId: string) => Promise<void>;
-  runQuestionSubStep: (subStepId: QuestionSubStepId) => Promise<void>;
+  runStep: (state: StepState, refineNote?: string) => void;
+  runLanguageSubStep: (stepId: StepId, langId: string, refineNote?: string) => Promise<void>;
+  runQuestionSubStep: (subStepId: QuestionSubStepId, refineNote?: string) => Promise<void>;
   stopStep: (stepId: StepId) => Promise<void>;
   stopLanguageSubStep: (stepId: StepId, langId: string) => Promise<void>;
   stopQuestionSubStep: (subStepId: QuestionSubStepId) => Promise<void>;
@@ -129,6 +131,12 @@ interface PipelineContextType {
   runAll: () => void;
   cancelRunAll: () => void;
   isRunAllActive: boolean;
+  /** Completed steps made stale by a more-recent re-run of an upstream dep. */
+  affectedStepIds: Set<StepId>;
+  /** Reset and re-run only the stale (affected) downstream steps, in order. */
+  runAffected: () => void;
+  /** Re-run a user-selected subset of the affected steps. */
+  runAffectedSelected: (ids: StepId[]) => void;
   setCurrentProblemId: (id: string | null) => void;
   loadProblemState: (problemId: string) => Promise<void>;
   savePipelineState: () => void;
@@ -1119,10 +1127,44 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const runQuestionSubStep = useCallback(
-    async (subStepId: QuestionSubStepId) => {
+    async (subStepId: QuestionSubStepId, refineNote?: string) => {
       const ctx = gqContext();
       const state = stepStatesRef.current.get("generate_question");
       if (!state || !canRunQuestionSubStep(subStepId, state, questionType, ctx)) return;
+
+      // Re-running an upstream LLM sub-step invalidates everything downstream of
+      // it (the function signature / description it was built from is changing).
+      // Reset terminal dependents back to pending so they re-lock instead of
+      // showing a stale "completed" against an outdated upstream (stale + re-gate).
+      const TERMINAL: StepStatus[] = ["completed", "failed", "stopped"];
+      const { subSteps: dependents, bruteForce } = getQuestionSubStepDependents(
+        subStepId,
+        questionType
+      );
+      for (const dep of dependents) {
+        const depRun = stepStatesRef.current.get("generate_question")?.subStepRuns?.[dep];
+        if (depRun && TERMINAL.includes(depRun.status)) {
+          patchGqSubStepRun(dep, {
+            status: "pending",
+            exitCode: null,
+            startTime: null,
+            endTime: null,
+            logs: [],
+          });
+        }
+      }
+      if (bruteForce) {
+        const bf = stepStatesRef.current.get("generate_brute_force");
+        if (bf && TERMINAL.includes(bf.status)) {
+          updateStepState("generate_brute_force", {
+            status: "pending",
+            exitCode: null,
+            startTime: null,
+            endTime: null,
+            logs: [],
+          });
+        }
+      }
 
       if (subStepId === "titles" && !shouldRunTitlesLlm(ctx)) {
         patchGqSubStepRun("titles", {
@@ -1151,6 +1193,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         subSteps: [subStepId],
         languages: globalLanguages,
         problemId: currentProblemId || undefined,
+        refineNote: refineNote?.trim() || undefined,
       };
 
       try {
@@ -1180,6 +1223,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       currentProblemId,
       questionType,
       patchGqSubStepRun,
+      updateStepState,
       savePipelineState,
       startPolling,
       gqContext,
@@ -1240,7 +1284,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   );
 
   const runLanguageSubStep = useCallback(
-    async (stepId: StepId, langId: string): Promise<void> => {
+    async (stepId: StepId, langId: string, refineNote?: string): Promise<void> => {
       const state = stepStatesRef.current.get(stepId);
       if (!state) return;
 
@@ -1264,6 +1308,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         testcaseCount: globalTestcaseCount,
         problemId: currentProblemIdRef.current || undefined,
         runKey,
+        refineNote: refineNote?.trim() || undefined,
       };
 
       try {
@@ -1334,7 +1379,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   );
 
   const runStep = useCallback(
-    async (state: StepState) => {
+    async (state: StepState, refineNote?: string) => {
       if (launchingStepsRef.current.has(state.id)) return;
       const live = stepStatesRef.current.get(state.id);
       if (live?.status === "running") return;
@@ -1398,6 +1443,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         languages,
         testcaseCount: globalTestcaseCount,
         problemId: currentProblemId || undefined,
+        refineNote: refineNote?.trim() || undefined,
       };
 
       try {
@@ -1669,6 +1715,76 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     setRunAllQueue([]);
   }, []);
 
+  // Steps that are stale because an upstream data-dependency re-ran after them.
+  const affectedStepIds = useMemo(
+    () => computeAffectedSteps(stepStates, getAllTrackedStepIds(questionType, mode)),
+    [stepStates, questionType, mode]
+  );
+
+  // Reset the given steps to pending and queue them so the run-all driver
+  // re-runs them in dependency order (a dependent waits for its re-running
+  // prerequisite instead of consuming the prerequisite's old output).
+  const rerunStepSet = useCallback(
+    (ids: Set<StepId>) => {
+      if (ids.size === 0) return;
+      for (const id of ids) {
+        const cur = stepStatesRef.current.get(id);
+        if (!cur) continue;
+        const reset: Partial<StepState> = {
+          status: "pending",
+          exitCode: null,
+          startTime: null,
+          endTime: null,
+          logs: [],
+        };
+        if (cur.languageSubRuns && Object.keys(cur.languageSubRuns).length > 0) {
+          const languageSubRuns: Record<string, SubStepRunState> = {};
+          for (const [lang, run] of Object.entries(cur.languageSubRuns)) {
+            languageSubRuns[lang] = {
+              ...run,
+              status: "pending",
+              exitCode: null,
+              startTime: null,
+              endTime: null,
+              logs: [],
+            };
+          }
+          reset.languageSubRuns = languageSubRuns;
+        }
+        updateStepState(id, reset);
+      }
+      savePipelineState();
+
+      if (ids.has("generate_brute_force")) {
+        const bf = stepStatesRef.current.get("generate_brute_force");
+        if (bf) runStepRef.current({ ...bf, status: "pending" });
+      }
+      const order = getPipelineUiWorkflowSteps(questionType, mode);
+      const queue = order.filter(
+        (id) => ids.has(id) && !(requiresOwnerTitle(id) && !ownerTitle.trim())
+      );
+      if (queue.length) setRunAllQueue(queue);
+    },
+    [questionType, mode, ownerTitle, updateStepState, savePipelineState]
+  );
+
+  // Re-run ALL affected (stale) steps.
+  const runAffected = useCallback(() => {
+    const tracked = getAllTrackedStepIds(questionType, mode);
+    rerunStepSet(computeAffectedSteps(stepStatesRef.current, tracked));
+  }, [questionType, mode, rerunStepSet]);
+
+  // Re-run a user-selected subset (only those that are genuinely affected).
+  const runAffectedSelected = useCallback(
+    (ids: StepId[]) => {
+      const tracked = getAllTrackedStepIds(questionType, mode);
+      const affected = computeAffectedSteps(stepStatesRef.current, tracked);
+      rerunStepSet(new Set(ids.filter((id) => affected.has(id))));
+    },
+    [questionType, mode, rerunStepSet]
+  );
+
+
   // Auto-run driver: scan the whole queue and launch every step whose
   // prerequisite has completed and that isn't already running. Steps still
   // waiting on a prerequisite that is running, queued ahead, or being retried
@@ -1777,6 +1893,9 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         runAll,
         cancelRunAll,
         isRunAllActive,
+        affectedStepIds,
+        runAffected,
+        runAffectedSelected,
         setCurrentProblemId,
         loadProblemState,
         savePipelineState,
