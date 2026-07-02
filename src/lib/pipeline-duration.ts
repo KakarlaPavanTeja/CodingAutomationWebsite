@@ -88,6 +88,7 @@ export function mergeRunProgress(
   }
   if (merged.status === "running") {
     merged.endTime = null;
+    merged.exitCode = null;
   }
   return merged;
 }

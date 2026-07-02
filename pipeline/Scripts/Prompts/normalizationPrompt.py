@@ -1,3 +1,6 @@
+from Prompts.dataTypePrompt import get_data_type_selection_rules
+
+
 def get_normalization_prompt(code, language, description_signature=None, desc_response=None, question_type="standard"):
     """
     Prompt to normalize user code to follow strict coding standards
@@ -128,6 +131,8 @@ The problem description REQUIRES these specific names:
 {signature_rules}
 {desc_rules}
 {data_structure_rules}
+
+{get_data_type_selection_rules()}
 
 **CRITICAL CONSTRAINTS:**
 - **DO NOT change the algorithm or logic** - preserve it exactly

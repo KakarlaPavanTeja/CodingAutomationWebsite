@@ -38,14 +38,17 @@ def run_one(code: str, inp: str, timeout_sec: int) -> tuple[str, str]:
         with redirect_stdout(out_buf), redirect_stderr(err_buf):
             exec(compile(code, "<solution>", "exec"), {"__name__": "__main__"})
         signal.alarm(0)
-        err = err_buf.getvalue()
-        out = out_buf.getvalue()
-        if err.strip() and not out.strip():
-            return err, "error"
-        return out, "ok"
+        return out_buf.getvalue(), "ok"
     except InputTimeout:
         signal.alarm(0)
         return "", "timeout"
+    except SystemExit as exc:
+        signal.alarm(0)
+        out = out_buf.getvalue()
+        code = exc.code
+        if code is None or code == 0:
+            return out, "ok"
+        return (out or err_buf.getvalue()), "error"
     except Exception:
         signal.alarm(0)
         return (out_buf.getvalue() or err_buf.getvalue()), "error"

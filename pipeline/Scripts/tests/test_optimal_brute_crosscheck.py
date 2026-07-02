@@ -229,5 +229,26 @@ class OptimalExampleFailuresTests(unittest.TestCase):
         self.assertEqual(bs.optimal_example_failures(TWOSUM_OPTIMAL, TWOSUM_DESC), [])
 
 
+    def test_sys_exit_after_print_passes_examples(self):
+        code = "import sys\nprint(6)\nsys.exit(0)\n"
+        self.assertEqual(bs.optimal_example_failures(code, SUM_DESC), [])
+
+    def test_batch_runner_sys_exit_does_not_fake_error(self):
+        code = "import sys\nprint(6)\nsys.exit(0)\n"
+        batch = bs.run_solutions_batch(code, ["1 2 3\n"])
+        self.assertEqual(batch, [("6\n", "ok")])
+
+    def test_stale_brute_only_marker_detected(self):
+        payload = {
+            "status": "mismatch",
+            "reason": "reference solution disagrees with the brute-force oracle",
+            "mismatches": [{"input": "1\n", "optimal": "0", "brute": "6"}],
+        }
+        self.assertTrue(bs.is_stale_brute_only_crosscheck_marker(payload))
+        payload["mismatches"][0]["optimal"] = "<error>"
+        self.assertFalse(bs.is_stale_brute_only_crosscheck_marker(payload))
+
+
+
 if __name__ == "__main__":
     unittest.main()

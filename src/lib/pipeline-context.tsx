@@ -42,9 +42,11 @@ import {
 import { mergeRunProgress, mergeSubStepCompletion, isActiveStatus } from "@/lib/pipeline-duration";
 import {
   reconcileLegacyGenerateQuestion,
+  reconcileLegacyWorkflowSteps,
   downstreamHasProgress,
 } from "@/lib/pipeline-legacy";
 import { parsePipelineLogContent } from "@/lib/pipeline-log-parse";
+import { effectiveStepStatus, isRunStillInFlight, isSoftOrphanExitCode } from "@/lib/pipeline-orphan";
 import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
 
 function requiresOwnerTitle(stepId: StepId): boolean {
@@ -93,12 +95,26 @@ function titleSkipPatch(id: StepId, now: number): Partial<StepState> {
  * state stops updating (e.g. the problem was switched mid-run) — P1-H9.
  */
 const STATUS_SETTLE_MAX_MS = 50 * 60 * 1000; // just past the 45-min pipeline timeout
-function awaitStatusSettled(getStatus: () => StepStatus | undefined): Promise<void> {
+function awaitStatusSettled(
+  getStatus: () => StepStatus | undefined,
+  getExitCode?: () => number | null | undefined
+): Promise<void> {
   return new Promise<void>((resolve) => {
     const start = Date.now();
     const check = setInterval(() => {
       const st = getStatus();
-      if ((st && st !== "running") || Date.now() - start > STATUS_SETTLE_MAX_MS) {
+      const exitCode = getExitCode?.();
+      if (Date.now() - start > STATUS_SETTLE_MAX_MS) {
+        clearInterval(check);
+        resolve();
+        return;
+      }
+      // A soft orphan (exit -2) is a suspected-dead PID, not a real failure —
+      // keep waiting for the live process to finish and self-correct.
+      if (st === "failed" && isSoftOrphanExitCode(exitCode)) {
+        return;
+      }
+      if (st && st !== "running" && st !== "stopping") {
         clearInterval(check);
         resolve();
       }
@@ -615,7 +631,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
                 ? (config.languageSubRuns as StepState["languageSubRuns"]) ||
                   createEmptyLanguageSubRuns(getLangsForStep(id, langs))
                 : undefined,
-            status: status.status || "pending",
+            status: effectiveStepStatus((status.status as StepStatus) || "pending", status.exitCode ?? null),
             exitCode: status.exitCode ?? null,
             startTime: status.startTime ?? null,
             endTime: status.endTime ?? null,
@@ -682,6 +698,23 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           }
         } catch {
           // Non-fatal — UI still works without output-based reconcile
+        }
+
+        // Legacy problems: steps inserted mid-pipeline (e.g. wrong solutions,
+        // benchmark) have no saved status and block packaging on load.
+        const workflowReconcile = reconcileLegacyWorkflowSteps(
+          getWorkflowSteps(qt, m),
+          savedStatuses,
+          map
+        );
+        if (workflowReconcile.filled.length > 0) {
+          setLegacyPipelineNotice((prev) =>
+            prev && workflowReconcile.message
+              ? `${prev} ${workflowReconcile.message}`
+              : workflowReconcile.message
+          );
+          stepStatesRef.current = map;
+          savePipelineState();
         }
 
         setStepStates(map);
@@ -781,7 +814,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       // Superseded by a newer load — don't register pollers for this problem.
       if (loadGenerationRef.current !== generation) return;
       const runningRuns = (runsData.runs || []).filter(
-        (r: { status: string }) => r.status === "running"
+        (r: { status: string; exit_code?: number | null }) =>
+          isRunStillInFlight(r.status, r.exit_code)
       ) as Array<{ id: string; step_id: string }>;
       for (const r of runningRuns) {
         const parsed = parsePipelineRunStepKey(r.step_id);
@@ -958,7 +992,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           // spurious "Failed" with a half-parsed testcase count. A genuinely
           // dead run escalates to a hard orphan (exit_code -1) past the runtime
           // ceiling, which is terminal and stops polling below.
-          if (run.status === "failed" && run.exit_code === -2) {
+          if (isSoftOrphanExitCode(run.exit_code)) {
             run.status = "running";
           }
 
@@ -1015,7 +1049,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
                     startTime: current.startTime,
                     endTime: current.endTime,
                   },
-                  { status: "running", startedAtIso: run.started_at }
+                  { status: "running", exitCode: null, startedAtIso: run.started_at }
                 );
                 next.set(stepId, { ...current, ...synced });
                 stepStatesRef.current = next;
@@ -1067,7 +1101,10 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
             }
           }
 
-          if (run.status === "completed" || run.status === "failed") {
+          if (
+            (run.status === "completed" || run.status === "failed") &&
+            !isSoftOrphanExitCode(run.exit_code)
+          ) {
             const endTime = run.finished_at ? new Date(run.finished_at).getTime() : Date.now();
             if (subStepId) {
               setStepStates((prev) => {
@@ -1265,7 +1302,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           patchGqSubStepRun(subStepId, { activeRunId: data.runId });
           startPolling(data.runId, "generate_question", subStepId);
           await awaitStatusSettled(
-            () => stepStatesRef.current.get("generate_question")?.subStepRuns?.[subStepId]?.status
+            () => stepStatesRef.current.get("generate_question")?.subStepRuns?.[subStepId]?.status,
+            () => stepStatesRef.current.get("generate_question")?.subStepRuns?.[subStepId]?.exitCode
           );
         }
       } catch (err) {
@@ -1380,7 +1418,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           patchLanguageSubRun(stepId, langId, { activeRunId: data.runId });
           startPolling(data.runId, stepId, undefined, langId);
           await awaitStatusSettled(
-            () => stepStatesRef.current.get(stepId)?.languageSubRuns?.[langId]?.status
+            () => stepStatesRef.current.get(stepId)?.languageSubRuns?.[langId]?.status,
+            () => stepStatesRef.current.get(stepId)?.languageSubRuns?.[langId]?.exitCode
           );
         }
       } catch (err) {
@@ -1518,7 +1557,10 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           runningStepsRef.current.set(state.id, data.runId);
           updateStepState(state.id, { activeRunId: data.runId });
           startPolling(data.runId, state.id);
-          await awaitStatusSettled(() => stepStatesRef.current.get(state.id)?.status);
+          await awaitStatusSettled(
+            () => stepStatesRef.current.get(state.id)?.status,
+            () => stepStatesRef.current.get(state.id)?.exitCode
+          );
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to start step";

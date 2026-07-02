@@ -1,3 +1,6 @@
+from Prompts.dataTypePrompt import get_data_type_selection_rules
+
+
 def get_conversion_prompt(target_language, source_code, question_type, description_signature=None, desc_response=None):
     """
     Constructs the system prompt to convert Source Code to Target Language.
@@ -155,6 +158,9 @@ The problem description REQUIRES these specific names:
 4.  {desc_rules}
 
 {data_structure_rules}
+
+5.  **Data Types**:
+{get_data_type_selection_rules()}
 
 6.  **No Comments**:
     - **CRITICAL**: Do NOT include comments explaining the logic in the translated code.

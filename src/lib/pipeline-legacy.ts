@@ -1,9 +1,14 @@
+import { getStepConfig } from "@/lib/pipeline-config";
 import type { QuestionSubStepId, QuestionType, StepId, StepState, StepStatus, SubStepRunState } from "@/types/pipeline";
 import {
   createEmptySubStepRun,
   getQuestionSubStepsForType,
   recomputeGenerateQuestionStatus,
 } from "@/lib/pipeline-question";
+
+type SavedStatusEntry = { status?: string; exitCode?: number | null; startTime?: number | null; endTime?: number | null };
+type SavedStatuses = Record<string, SavedStatusEntry | undefined>;
+
 
 /** Output artifacts that indicate a sub-step completed (paths relative to outputs/). */
 const SUB_STEP_OUTPUT_MARKERS: Record<QuestionSubStepId, string[]> = {
@@ -177,4 +182,62 @@ export function downstreamHasProgress(
     const s = stepStates.get(id)?.status;
     return s === "completed" || s === "failed" || s === "running";
   });
+}
+
+export interface LegacyWorkflowReconcileResult {
+  filled: StepId[];
+  message: string | null;
+}
+
+/**
+ * Backfill workflow steps that were added after a problem already progressed.
+ * If a step has no saved status but a later workflow step is completed, mark it
+ * completed — downstream progress implies prerequisites were met on the old graph.
+ */
+export function reconcileLegacyWorkflowSteps(
+  workflowSteps: StepId[],
+  savedStatuses: SavedStatuses,
+  stepStates: Map<StepId, StepState>
+): LegacyWorkflowReconcileResult {
+  const isAbsent = (id: StepId) => !(id in savedStatuses);
+  const isCompleted = (id: StepId) => stepStates.get(id)?.status === "completed";
+  const filled: StepId[] = [];
+
+  for (let i = 0; i < workflowSteps.length; i++) {
+    const step = workflowSteps[i];
+    if (step === "generate_question") continue;
+    if (getStepConfig(step).nonBlocking) continue;
+    if (!isAbsent(step)) continue;
+
+    const laterCompleted = workflowSteps.slice(i + 1).some(isCompleted);
+    if (!laterCompleted) continue;
+
+    const prev = stepStates.get(step);
+    if (!prev) continue;
+    stepStates.set(step, {
+      ...prev,
+      status: "completed",
+      exitCode: 0,
+      startTime: null,
+      endTime: null,
+    });
+    filled.push(step);
+  }
+
+  if (filled.length === 0) {
+    return { filled, message: null };
+  }
+
+  const labels = filled.map((id) => getStepConfig(id).label);
+  const labelText =
+    labels.length === 1
+      ? `"${labels[0]}"`
+      : labels.length === 2
+        ? `"${labels[0]}" and "${labels[1]}"`
+        : `${labels.slice(0, -1).map((l) => `"${l}"`).join(", ")}, and "${labels[labels.length - 1]}"`;
+
+  return {
+    filled,
+    message: `This problem was processed before ${labelText} existed in the pipeline. Those steps were marked complete because later work already finished.`,
+  };
 }

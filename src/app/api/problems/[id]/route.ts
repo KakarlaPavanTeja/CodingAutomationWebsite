@@ -30,6 +30,20 @@ async function readOptimalWarning(problemId: string): Promise<OptimalWarning | n
       mismatches?: { input?: string; optimal?: string; brute?: string }[];
     };
     if (parsed?.status !== "mismatch") return null;
+
+    // Ignore stale markers from the old brute-only crosscheck (pre Jul 2026 fix).
+    const reason = typeof parsed.reason === "string" ? parsed.reason : "";
+    const mismatches = Array.isArray(parsed.mismatches) ? parsed.mismatches : [];
+    const hasRuntimeFailure = mismatches.some((m) =>
+      String(m?.optimal ?? "").startsWith("<")
+    );
+    if (
+      (reason.includes("brute-force oracle") || reason.includes("brute force oracle")) &&
+      !hasRuntimeFailure
+    ) {
+      return null;
+    }
+
     return {
       reason:
         typeof parsed.reason === "string" && parsed.reason

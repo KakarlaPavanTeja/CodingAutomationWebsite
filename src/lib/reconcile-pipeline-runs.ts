@@ -4,6 +4,9 @@ import { pipelineLogs, pipelineRuns, problems } from "@/lib/db/schema";
 import { getProcessPidAsync } from "@/lib/process-registry";
 import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
 import type { StepId } from "@/types/pipeline";
+import { ORPHAN_EXIT_CODE } from "@/lib/pipeline-orphan";
+
+export { ORPHAN_EXIT_CODE };
 
 // Steps whose (re-)run genuinely changes the PACKAGED content — re-running any of
 // these AFTER a successful prepare_platform_json means the problem is no longer a
@@ -29,12 +32,6 @@ const CONTENT_RERUN_STEPS = new Set<StepId>([
   "generate_enrichment",
   "package_platform",
 ]);
-
-// Exit-code sentinel for a *soft* orphan: a still-running run the reconciler only
-// suspects is dead (its pid looked gone). Distinct from -1 (user stop / hard
-// timeout) so the run close handler may overwrite it with the real exit code if
-// the process was in fact alive and finishes cleanly.
-export const ORPHAN_EXIT_CODE = -2;
 
 const STALE_ORPHAN_MS = 5 * 60 * 1000;
 const EMPTY_LOG_ORPHAN_MS = 3 * 60 * 1000;
@@ -106,7 +103,7 @@ export async function recomputeProblemStatus(problemId: string): Promise<void> {
     const startMs = (r: { startedAt: Date | null }) => r.startedAt?.getTime() ?? 0;
 
     let next: "processing" | "completed" | "failed" | "draft";
-    if (rows.some((r) => r.status === "running")) {
+    if (rows.some((r) => r.status === "running" || (r.status === "failed" && r.exitCode === ORPHAN_EXIT_CODE))) {
       next = "processing";
     } else {
       // Completion is anchored to prepare_platform_json — the terminal packaging
@@ -171,6 +168,24 @@ function parseExitFromLog(content: string): number | null {
   return parseInt(matches[matches.length - 1][1], 10);
 }
 
+/** True when log output shows the step is still making progress (e.g. LLM heartbeats). */
+function logShowsRecentActivity(content: string, maxAgeMs = 90_000): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+
+  const isoMatches = [...trimmed.matchAll(/\[(\d{4}-\d{2}-\d{2}T[^\]]+)\]/g)];
+  if (isoMatches.length > 0) {
+    const lastTs = new Date(isoMatches[isoMatches.length - 1][1]).getTime();
+    if (!Number.isNaN(lastTs) && Date.now() - lastTs < maxAgeMs) {
+      return true;
+    }
+  }
+
+  // Fallback: streaming heartbeats without a parseable timestamp still mean the
+  // Python process is alive and talking to the LLM.
+  return /\[LLM\] streaming heartbeat elapsed=/.test(trimmed.slice(-4000));
+}
+
 /** Close pipeline_runs left as `running` after crashes, early API errors, or dead PIDs. */
 export async function reconcileStalePipelineRuns(problemId: string): Promise<number> {
   // Throttle: skip if we reconciled this problem very recently (P1-M3).
@@ -220,6 +235,24 @@ export async function reconcileStalePipelineRuns(problemId: string): Promise<num
     const content = logRows[0]?.content ?? "";
     const exitFromLog = parseExitFromLog(content);
 
+    // Logs still updating (heartbeats, fresh timestamps) → process is alive even
+    // when the PID registry lost track. Undo a mistaken soft-orphan mark.
+    if (logShowsRecentActivity(content)) {
+      if (run.status === "failed" && run.exitCode === ORPHAN_EXIT_CODE) {
+        await db
+          .update(pipelineRuns)
+          .set({
+            status: "running",
+            exitCode: null,
+            finishedAt: null,
+            pid: pid ?? run.pid,
+          })
+          .where(eq(pipelineRuns.id, run.id));
+        fixed++;
+      }
+      continue;
+    }
+
     if (exitFromLog !== null) {
       await db
         .update(pipelineRuns)
@@ -241,7 +274,11 @@ export async function reconcileStalePipelineRuns(problemId: string): Promise<num
     const overMaxRuntime = age >= MAX_RUNNING_MS;
     const isOrphan = overMaxRuntime || !pid || !isProcessAlive(pid);
 
-    if (isOrphan && (overMaxRuntime || age > STALE_ORPHAN_MS || (!content.trim() && age > EMPTY_LOG_ORPHAN_MS))) {
+    if (
+      isOrphan &&
+      !logShowsRecentActivity(content) &&
+      (overMaxRuntime || age > STALE_ORPHAN_MS || (!content.trim() && age > EMPTY_LOG_ORPHAN_MS))
+    ) {
       // Sentinel choice matters. A user stop writes exitCode -1, and the run
       // close handler treats a prior -1 as "was stopped" and keeps the run
       // failed even when the process ends cleanly. If we also wrote -1 here, a

@@ -8,6 +8,7 @@ import { PipelineSplitLayout } from "./PipelineSplitLayout";
 import { stepKeyStr, lookupStepUsage, usageKeyForPipelineItem, type PipelineStepKey, type PipelineStepUsageMap } from "@/lib/pipeline-step-list";
 import { buildPipelineSections, type PipelineWaveItem } from "@/lib/pipeline-waves";
 import { durationFromRunState } from "@/lib/pipeline-duration";
+import { effectiveStepStatus } from "@/lib/pipeline-orphan";
 import { isPipelineWaveItemLocked } from "@/lib/pipeline-item-lock";
 import { isQuestionPhaseComplete } from "@/lib/pipeline-question";
 import { aggregateTestStats } from "@/lib/execution-parser";
@@ -130,9 +131,11 @@ export function PipelineWaveFlow({
   function getItemStatus(item: PipelineWaveItem): StepStatus {
     if (item.kind === "sub") return getSubStatus(item.id as QuestionSubStepId);
     if (item.kind === "lang" && item.parentStepId && item.langId) {
-      return stepStates.get(item.parentStepId)?.languageSubRuns?.[item.langId]?.status ?? "pending";
+      const run = stepStates.get(item.parentStepId)?.languageSubRuns?.[item.langId];
+      return effectiveStepStatus(run?.status ?? "pending", run?.exitCode ?? null);
     }
-    return stepStates.get(item.id as StepId)?.status ?? "pending";
+    const state = stepStates.get(item.id as StepId);
+    return effectiveStepStatus(state?.status ?? "pending", state?.exitCode ?? null);
   }
 
   function getDuration(item: PipelineWaveItem): number | null {

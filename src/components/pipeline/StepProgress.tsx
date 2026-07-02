@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
+import { isSoftOrphanExitCode } from "@/lib/pipeline-orphan";
 import type { LogLine, StepId } from "@/types/pipeline";
 import { parseExecutionLogs, type LangExecState } from "@/lib/execution-parser";
 
@@ -323,7 +324,7 @@ export function StepProgress({ stepId, logs, isRunning, exitCode, enabledLanguag
 
   // If failed with exit code and no items show it, mark last running as failed
   const displayItems = useMemo(() => {
-    if (exitCode !== null && exitCode !== 0) {
+    if (exitCode !== null && exitCode !== 0 && !isSoftOrphanExitCode(exitCode)) {
       return items.map((item) =>
         item.status === "running" ? { ...item, status: "failed" as const } : item
       );

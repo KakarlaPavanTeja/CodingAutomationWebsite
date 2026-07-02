@@ -1,3 +1,6 @@
+from Prompts.dataTypePrompt import get_data_type_selection_rules
+
+
 def get_splitting_prompt(language, code, desc_response=None, question_type="standard"):
     """
     Returns the system and user prompt for splitting solution code.
@@ -193,7 +196,7 @@ class Node {
     if language == "Node.js":
         instantiation_rules = "**CRITICAL - STATIC METHOD REQUIREMENT:**\n- You MUST use `static` methods for the core logic functions inside the `Solution` class.\n- You MUST NOT instantiate the class in the Driver code. Call the method directly on the class.\n  - Node.js: `const result = Solution.FUNCTION_NAME();`\n"
     else:
-        instantiation_rules = "**CRITICAL - INSTANTIATION REQUIREMENT:**\n- Do NOT use `static` methods for the core logic functions inside the `Solution`/`solution` class. You MUST always instantiate the class in the Driver code to call the method.\n  - Java: `Solution sol = new Solution(); long result = sol.functionName();`\n  - C++: `solution sol; auto result = sol.functionName();`\n  - Python: `sol = solution(); result = sol.functionName()`\n"
+        instantiation_rules = "**CRITICAL - INSTANTIATION REQUIREMENT:**\n- Do NOT use `static` methods for the core logic functions inside the `Solution`/`solution` class. You MUST always instantiate the class in the Driver code to call the method.\n  - Java: `Solution sol = new Solution(); int[] result = sol.functionName();` (use the constraint-appropriate type, not `long` by default)\n  - C++: `solution sol; auto result = sol.functionName();`\n  - Python: `sol = solution(); result = sol.functionName()`\n"
 
     system_prompt = f"""
 (Role): You are an Expert Backend Engineer specializing in building coding interview platforms.
@@ -222,6 +225,12 @@ Do NOT return markdown. Return ONLY the JSON string.
 PROBLEM DESCRIPTION:
 {desc_response if desc_response else "N/A - Follow source code logic."}
 {node_injection_rules}
+
+{get_data_type_selection_rules()}
+
+**CRITICAL - SIGNATURE CONSISTENCY:**
+- `RETURN_TYPE`, parameter types, and driver/debugger input containers in Default Code, Solution Code, Driver Code, and Debugger Code MUST all use the same width chosen from the rules above.
+- Do NOT widen types in C++ Default Code while the source solution uses `int` in Java, or vice versa.
 
 (Specific Templates per Language):
 

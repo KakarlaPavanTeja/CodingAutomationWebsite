@@ -4,9 +4,10 @@
  * DB (pipeline_runs.pid column) is the durable fallback that survives restarts.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { pipelineRuns } from "@/lib/db/schema";
+import { ORPHAN_EXIT_CODE } from "@/lib/pipeline-orphan";
 
 const runningProcesses = new Map<string, number>();
 
@@ -34,7 +35,12 @@ export async function getProcessPidAsync(runId: string): Promise<number | undefi
     const rows = await db
       .select({ pid: pipelineRuns.pid })
       .from(pipelineRuns)
-      .where(and(eq(pipelineRuns.id, runId), eq(pipelineRuns.status, "running")))
+      .where(
+        and(
+          eq(pipelineRuns.id, runId),
+          or(eq(pipelineRuns.status, "running"), and(eq(pipelineRuns.status, "failed"), eq(pipelineRuns.exitCode, ORPHAN_EXIT_CODE)))
+        )
+      )
       .limit(1);
     return rows[0]?.pid ?? undefined;
   } catch {

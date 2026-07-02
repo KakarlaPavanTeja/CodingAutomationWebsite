@@ -35,6 +35,7 @@ const SUB_STEP_LABELS: Record<QuestionSubStepId, string> = {
 };
 
 import { parsePipelineLogContent } from "@/lib/pipeline-log-parse";
+import { effectiveStepStatus } from "@/lib/pipeline-orphan";
 
 function pickBestLogs(live: LogLine[], disk: LogLine[]): LogLine[] {
   if (live.length === 0) return disk;
@@ -57,10 +58,11 @@ export function StepDetailPanel({
 }: StepDetailPanelProps) {
   const config = getStepConfig(stepState.id);
   const subRun = subStepId ? stepState.subStepRuns?.[subStepId] : undefined;
-  const isRunning = subRun ? subRun.status === "running" : stepState.status === "running";
   const stateLogs = subRun?.logs ?? stepState.logs;
   const exitCode = subRun?.exitCode ?? stepState.exitCode;
-  const status = subRun?.status ?? stepState.status;
+  const rawStatus = subRun?.status ?? stepState.status;
+  const status = effectiveStepStatus(rawStatus, exitCode);
+  const isRunning = status === "running" || status === "stopping";
   const progressStepId = subStepId ? subStepLogKey(subStepId) : stepState.id;
 
   const [tab, setTab] = useState<DetailTab>("progress");

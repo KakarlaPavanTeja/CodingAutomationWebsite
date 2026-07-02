@@ -494,7 +494,7 @@ export default function ProblemDetailPage() {
                       <tr className="border-b bg-muted/50">
                         <th className="text-left px-2 py-1 font-medium">Input</th>
                         <th className="text-left px-2 py-1 font-medium">Optimal</th>
-                        <th className="text-left px-2 py-1 font-medium">Brute</th>
+                        <th className="text-left px-2 py-1 font-medium">Expected</th>
                       </tr>
                     </thead>
                     <tbody>

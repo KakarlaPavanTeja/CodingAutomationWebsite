@@ -211,14 +211,18 @@ def run_solutions_batch(
             )
         except subprocess.TimeoutExpired:
             return [("", "timeout") for _ in inputs]
-        if proc.returncode != 0:
+        stdout = (proc.stdout or "").strip()
+        if proc.returncode != 0 or not stdout:
             return [run_solution(code_str, inp, timeout) for inp in inputs]
-        rows = json.loads(proc.stdout or "[]")
+        try:
+            rows = json.loads(stdout)
+        except json.JSONDecodeError:
+            return [run_solution(code_str, inp, timeout) for inp in inputs]
+        if not isinstance(rows, list) or len(rows) < len(inputs):
+            return [run_solution(code_str, inp, timeout) for inp in inputs]
         out: list[tuple[str, str]] = []
         for row in rows:
             out.append((row.get("out", ""), row.get("status", "error")))
-        while len(out) < len(inputs):
-            out.append(("", "error"))
         return out[: len(inputs)]
     finally:
         try:
@@ -1241,15 +1245,25 @@ def optimal_example_failures(
     pairs = extract_example_io(description)
     if not pairs:
         return []
-    inputs = [p[0] for p in pairs]
-    results = run_solutions_batch(optimal_code, inputs, timeout)
     fails: list[dict] = []
-    for (inp, expected), (got, status) in zip(pairs, results):
+    for inp, expected in pairs:
+        got, status = run_solution(optimal_code, inp, timeout)
         if status != "ok":
             fails.append({"input": inp, "expected": normalize(expected), "got": f"<{status}>"})
         elif normalize(got) != normalize(expected):
             fails.append({"input": inp, "expected": normalize(expected), "got": normalize(got)[:120]})
     return fails
+
+
+def is_stale_brute_only_crosscheck_marker(payload: dict) -> bool:
+    """Pre-ground-truth crosscheck wrote mismatch for optimal/brute disagreement only."""
+    if payload.get("status") != "mismatch":
+        return False
+    reason = str(payload.get("reason") or "")
+    if "brute-force oracle" not in reason and "brute force oracle" not in reason:
+        return False
+    mismatches = payload.get("mismatches") or []
+    return not any(str(m.get("optimal", "")).startswith("<") for m in mismatches)
 
 
 def structured_random_inputs(examples: list[str], count: int = 100, seed: int = 7) -> list[str]:
