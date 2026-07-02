@@ -48,13 +48,19 @@ import {
 import { parsePipelineLogContent } from "@/lib/pipeline-log-parse";
 import { effectiveStepStatus, isRunStillInFlight, isSoftOrphanExitCode } from "@/lib/pipeline-orphan";
 import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
+import {
+  getTitlesSubStepStatus,
+  hasTitleForPackaging,
+  packagingTitleResolvable,
+  parseGeneratedTitleFirstLine,
+} from "@/lib/pipeline-title";
 
 function requiresOwnerTitle(stepId: StepId): boolean {
   return stepId === "package_platform" || stepId === "prepare_platform_json";
 }
 
 const TITLE_REQUIRED_MSG =
-  'This step needs a problem title. Open "Pipeline settings", fill in "Title (short text)", click Save, then re-run.';
+  'This step needs a problem title. Enter one in "Pipeline settings" and Save, or enable "Generate title with AI" and complete the Titles step, then re-run.';
 const TITLE_PREREQ_MSG =
   'Skipped: depends on "Package for Platform", which was skipped because no problem title is set.';
 
@@ -270,8 +276,13 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   );
   const [globalTestcaseCount, setGlobalTestcaseCount] = useState(0);
   const [ownerTitle, setOwnerTitleRaw] = useState("");
+  const ownerTitleRef = useRef("");
   const [generateTitleWithAi, setGenerateTitleWithAiRaw] = useState(false);
   const [defaultTagNames, setDefaultTagNamesRaw] = useState("");
+  useEffect(() => {
+    ownerTitleRef.current = ownerTitle;
+  }, [ownerTitle]);
+
   const ownerDifficultyRef = useRef("");
   // Reactive mirror of ownerDifficultyRef so the wave-graph gate can apply the
   // difficulty-skip rule (P1-H5). The ref stays for synchronous reads.
@@ -457,7 +468,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       }
 
       stepConfigs[GLOBAL_CONFIG_KEY] = {
-        ownerTitle,
+        ownerTitle: ownerTitleRef.current,
         generateTitleWithAi,
         defaultTagNames,
       };
@@ -509,6 +520,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   }, [ownerTitle, questionType, mode, updateStepState, savePipelineState]);
 
   const setOwnerTitle = useCallback((title: string) => {
+    ownerTitleRef.current = title;
     setOwnerTitleRaw(title);
   }, []);
 
@@ -587,6 +599,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         setGlobalTestcaseCount(state.testcase_count ?? 0);
 
         const savedGlobal = (state.step_configs?.[GLOBAL_CONFIG_KEY] ?? {}) as Partial<GlobalPipelineConfig>;
+        ownerTitleRef.current = savedGlobal.ownerTitle ?? "";
         setOwnerTitleRaw(savedGlobal.ownerTitle ?? "");
         setGenerateTitleWithAiRaw(savedGlobal.generateTitleWithAi ?? false);
         setDefaultTagNamesRaw(savedGlobal.defaultTagNames ?? "");
@@ -654,11 +667,10 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
             );
             if (titleRes.ok) {
               const data = await titleRes.json();
-              const firstLine =
-                data?.content?.split("\n").find((l: string) => l.trim())?.trim() ?? "";
-              if (firstLine) {
-                const cleaned = firstLine.replace(/^-\s*/, "").split("-")[0].trim();
-                if (cleaned) setOwnerTitleRaw(cleaned);
+              const cleaned = parseGeneratedTitleFirstLine(data?.content ?? "");
+              if (cleaned) {
+                ownerTitleRef.current = cleaned;
+                setOwnerTitleRaw(cleaned);
               }
             }
           } catch {
@@ -1136,11 +1148,11 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
                   .then((r) => (r.ok ? r.json() : null))
                   .then((data) => {
                     if (data?.content) {
-                      const firstLine =
-                        data.content.split("\n").find((l: string) => l.trim())?.trim() ?? "";
-                      if (firstLine) {
-                        const cleaned = firstLine.replace(/^-\s*/, "").split("-")[0].trim();
+                      const cleaned = parseGeneratedTitleFirstLine(data.content);
+                      if (cleaned) {
+                        ownerTitleRef.current = cleaned;
                         setOwnerTitleRaw(cleaned);
+                        savePipelineState();
                       }
                     }
                   })
@@ -1495,16 +1507,27 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      if (requiresOwnerTitle(state.id) && !ownerTitle.trim()) {
-        const now = Date.now();
-        updateStepState(state.id, {
-          status: "failed",
-          exitCode: 1,
-          endTime: now,
-          logs: [{ stream: "stderr", line: TITLE_REQUIRED_MSG, ts: now }],
-        });
-        savePipelineState();
-        return;
+      if (requiresOwnerTitle(state.id)) {
+        const titlesSubStepStatus = getTitlesSubStepStatus(
+          stepStatesRef.current.get("generate_question")?.subStepRuns
+        );
+        if (
+          !hasTitleForPackaging({
+            ownerTitle: ownerTitleRef.current,
+            generateTitleWithAi,
+            titlesSubStepStatus,
+          })
+        ) {
+          const now = Date.now();
+          updateStepState(state.id, {
+            status: "failed",
+            exitCode: 1,
+            endTime: now,
+            logs: [{ stream: "stderr", line: TITLE_REQUIRED_MSG, ts: now }],
+          });
+          savePipelineState();
+          return;
+        }
       }
 
       if (PARALLEL_LANG_STEPS.includes(state.id)) {
@@ -1587,7 +1610,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       stopPolling,
       runGenerateQuestionOrchestrator,
       runParallelLanguageStep,
-      ownerTitle,
+      generateTitleWithAi,
     ]
   );
 
@@ -1814,7 +1837,16 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     // dependents are marked "skipped" (visible in the UI, reason in the log)
     // instead of silently dropped — dropping only the packaging steps used to
     // leave the dependents queued forever behind a prerequisite that never ran.
-    const gated = ownerTitle.trim() ? new Set<StepId>() : titleGatedSteps(incomplete);
+    const titlesSubStepStatus = getTitlesSubStepStatus(
+      stepStates.get("generate_question")?.subStepRuns
+    );
+    const titleResolvable = packagingTitleResolvable({
+      ownerTitle,
+      generateTitleWithAi,
+      titlesSubStepStatus,
+      generateQuestionStillQueued: incomplete.includes("generate_question"),
+    });
+    const gated = titleResolvable ? new Set<StepId>() : titleGatedSteps(incomplete);
     if (gated.size > 0) {
       const now = Date.now();
       for (const id of gated) updateStepState(id, titleSkipPatch(id, now));
@@ -1823,7 +1855,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     const remaining = incomplete.filter((id) => !gated.has(id));
     if (remaining.length === 0) return;
     setRunAllQueue(remaining);
-  }, [questionType, mode, stepStates, ownerTitle, updateStepState, savePipelineState]);
+  }, [questionType, mode, stepStates, ownerTitle, generateTitleWithAi, updateStepState, savePipelineState]);
 
   const cancelRunAll = useCallback(() => {
     setRunAllQueue([]);
@@ -1845,7 +1877,18 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       // Title-gated steps can't re-run without a title: mark them visibly
       // skipped (reason in the log) instead of resetting them to pending and
       // silently leaving them out of the queue.
-      const gated = ownerTitle.trim()
+      const titlesSubStepStatus = getTitlesSubStepStatus(
+        stepStatesRef.current.get("generate_question")?.subStepRuns
+      );
+      const titleResolvable = packagingTitleResolvable({
+        ownerTitle,
+        generateTitleWithAi,
+        titlesSubStepStatus,
+        generateQuestionStillQueued:
+          ids.has("generate_question") &&
+          stepStatesRef.current.get("generate_question")?.status !== "completed",
+      });
+      const gated = titleResolvable
         ? new Set<StepId>()
         : titleGatedSteps(order.filter((id) => ids.has(id)));
       for (const id of ids) {

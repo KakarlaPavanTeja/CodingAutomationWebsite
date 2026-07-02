@@ -16,7 +16,9 @@ import {
   cleanupTempDir,
   startPeriodicSync,
   mirrorInputsFromDir,
+  readStorageFile,
 } from "@/lib/storage-sync";
+import { parseGeneratedTitleFirstLine } from "@/lib/pipeline-title";
 import { registerProcess, unregisterProcess } from "@/lib/process-registry";
 import { pipelineRunLogKey } from "@/lib/pipeline-run-label";
 import { recomputeProblemStatus } from "@/lib/reconcile-pipeline-runs";
@@ -64,6 +66,19 @@ async function markRunTerminal(
  *
  * An explicit INTERNAL_API_URL always wins for manual overrides.
  */
+async function resolveOwnerTitleForPipeline(
+  problemId: string,
+  ownerTitleFromConfig: string
+): Promise<string> {
+  if (ownerTitleFromConfig) return ownerTitleFromConfig;
+  try {
+    const content = await readStorageFile(problemId, "Outputs/generated_titles.txt", "outputs");
+    return parseGeneratedTitleFirstLine(content);
+  } catch {
+    return "";
+  }
+}
+
 function resolveInternalApiUrl(): string {
   const explicit = process.env.INTERNAL_API_URL || process.env.NEXTAUTH_URL;
   if (explicit) return explicit;
@@ -196,7 +211,8 @@ export async function POST(request: NextRequest) {
   const globalCfg = (stateRows[0]?.stepConfigs as Record<string, unknown> | undefined)?.[
     "__global__"
   ] as { ownerTitle?: string; defaultTagNames?: string; generateTitleWithAi?: boolean } | undefined;
-  const ownerTitle = globalCfg?.ownerTitle?.trim() ?? "";
+  const ownerTitleFromConfig = globalCfg?.ownerTitle?.trim() ?? "";
+  const ownerTitle = await resolveOwnerTitleForPipeline(safeProblemId, ownerTitleFromConfig);
   const defaultTagNames = globalCfg?.defaultTagNames?.trim() ?? "";
 
   // Reject a step that isn't tracked for this problem (workflow + GQ-embedded e.g. brute force).

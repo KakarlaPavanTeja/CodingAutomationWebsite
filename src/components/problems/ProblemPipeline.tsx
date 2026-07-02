@@ -7,6 +7,7 @@ import { GlobalConfig } from "@/components/pipeline/GlobalConfig";
 import { PipelineWaveFlow } from "@/components/pipeline/PipelineWaveFlow";
 import { getPipelineUiWorkflowSteps } from "@/lib/pipeline-config";
 import { usePipeline } from "@/lib/pipeline-context";
+import { getTitlesSubStepStatus, hasTitleForPackaging } from "@/lib/pipeline-title";
 import type { PipelineStepUsageMap } from "@/lib/pipeline-step-list";
 import type { StepId } from "@/types/pipeline";
 import { AlertTriangle, ChevronDown, Loader2, PlayCircle, RotateCcw, StopCircle } from "lucide-react";
@@ -115,7 +116,12 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
 
   const gqEnabledSubSteps = stepStates.get("generate_question")?.enabledSubSteps ?? [];
 
-  const titleMissing = packagingStepsPending && !ownerTitle.trim();
+  const titlesSubStepStatus = getTitlesSubStepStatus(
+    stepStates.get("generate_question")?.subStepRuns
+  );
+  const titleMissing =
+    packagingStepsPending &&
+    !hasTitleForPackaging({ ownerTitle, generateTitleWithAi, titlesSubStepStatus });
   const configOpen = configToggle ?? (!stateLoading && titleMissing);
 
   if (stateLoading) {
