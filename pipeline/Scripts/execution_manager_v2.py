@@ -4,6 +4,7 @@ import base64
 import mimetypes
 import re
 import sys
+import threading
 import uuid
 from datetime import datetime, timezone
 
@@ -102,6 +103,14 @@ NONFUNCTION_LANG_CONFIG = {
 _S3_CLIENT = None
 _UPLOAD_CONFIG_WARNING_PRINTED = False
 
+# Editorial execution runs (approach, language) pairs concurrently; these locks
+# keep the shared bits safe: sentinel log lines must stay whole (one line per
+# record) and S3 blob files are named per-testcase, so two threads uploading the
+# same testcase input must not interleave writes to the same local file.
+_EMIT_LOCK = threading.Lock()
+_S3_LOCK = threading.Lock()      # guards lazy boto3 client creation
+_BLOB_LOCK = threading.Lock()    # guards write+upload of shared local blob files
+
 
 def _short_path(path, base_dir):
     if not path or not base_dir:
@@ -127,20 +136,21 @@ def _s3_virtual_hosted_public_url(key: str) -> str:
 
 def _get_s3_client():
     global _S3_CLIENT
-    if _S3_CLIENT is not None:
-        return _S3_CLIENT
-    try:
-        import importlib
+    with _S3_LOCK:
+        if _S3_CLIENT is not None:
+            return _S3_CLIENT
+        try:
+            import importlib
 
-        boto3 = importlib.import_module("boto3")
-    except ImportError as e:
-        raise RuntimeError("boto3 is not installed. Run: pip install boto3") from e
-    if AWS_PROFILE:
-        session = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
-    else:
-        session = boto3.Session(region_name=AWS_REGION)
-    _S3_CLIENT = session.client("s3")
-    return _S3_CLIENT
+            boto3 = importlib.import_module("boto3")
+        except ImportError as e:
+            raise RuntimeError("boto3 is not installed. Run: pip install boto3") from e
+        if AWS_PROFILE:
+            session = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
+        else:
+            session = boto3.Session(region_name=AWS_REGION)
+        _S3_CLIENT = session.client("s3")
+        return _S3_CLIENT
 
 
 def _upload_blob_to_s3(local_path, object_name):
@@ -163,10 +173,14 @@ def _write_blob_and_get_s3_url(base_dir, question_id, question_name, order, io_k
     blobs_dir = os.path.join(base_dir, "Outputs", "s3_blobs")
     os.makedirs(blobs_dir, exist_ok=True)
     local_path = os.path.join(blobs_dir, filename)
-    with open(local_path, "w", encoding="utf-8") as f:
-        f.write(contents or "")
+    # Parallel (approach, language) runs hit the same testcase concurrently and
+    # would write + upload the same local file; serialize so no thread uploads a
+    # half-written blob.
+    with _BLOB_LOCK:
+        with open(local_path, "w", encoding="utf-8") as f:
+            f.write(contents or "")
 
-    uploaded, info = _upload_blob_to_s3(local_path, filename)
+        uploaded, info = _upload_blob_to_s3(local_path, filename)
     if uploaded:
         return info, local_path, True
     print(f"  S3 upload error for {filename}: {info}", flush=True)
@@ -368,8 +382,12 @@ _RESULTS_FILENAME = {
 }
 
 
-def _result_record(step, solution_label, solution_index, lang, test_res):
-    """Normalize an internal test_res dict into the compact emitted schema."""
+def _result_record(step, solution_label, solution_index, lang, test_res, total=None):
+    """Normalize an internal test_res dict into the compact emitted schema.
+
+    `total` is the FULL testcase count for the run (not just executed cases) so
+    the UI can show a stable denominator even while results stream in or when a
+    language halts early (compilation error / TLE stop)."""
     status = test_res.get("status")
     if not status:
         status = "CORRECT" if test_res.get("passed") else "ERROR"
@@ -386,34 +404,42 @@ def _result_record(step, solution_label, solution_index, lang, test_res):
         "mem": test_res.get("memory_mb"),
         "detail": test_res.get("error") or "",
     }
+    if total is not None:
+        rec["tt"] = total
     rec.update(_io_fields(test_res))
     return rec
 
 
-def emit_tc_result(step, solution_label, solution_index, lang, test_res):
-    """Print one sentinel line for a single testcase result. Never raises."""
+def emit_tc_result(step, solution_label, solution_index, lang, test_res, total=None):
+    """Print one sentinel line for a single testcase result. Never raises.
+
+    Locked so concurrent (approach, language) threads can't interleave halves of
+    two sentinel lines (the frontend parses these line-by-line)."""
     try:
-        rec = _result_record(step, solution_label, solution_index, lang, test_res)
-        print(
-            f"{TC_RESULT_SENTINEL} {json.dumps(rec, ensure_ascii=False, default=str)}",
-            flush=True,
-        )
+        rec = _result_record(step, solution_label, solution_index, lang, test_res, total=total)
+        with _EMIT_LOCK:
+            print(
+                f"{TC_RESULT_SENTINEL} {json.dumps(rec, ensure_ascii=False, default=str)}",
+                flush=True,
+            )
     except Exception:
         pass
 
 
-def emit_language_results(step, solution_label, solution_index, lang, language_results):
+def emit_language_results(step, solution_label, solution_index, lang, language_results, total=None):
     """Emit one sentinel line per testcase for a completed (solution, language)."""
     for test_res in language_results or []:
-        emit_tc_result(step, solution_label, solution_index, lang, test_res)
+        emit_tc_result(step, solution_label, solution_index, lang, test_res, total=total)
 
 
-def write_execution_results_file(base_dir, step, question_id, solutions):
+def write_execution_results_file(base_dir, step, question_id, solutions, total_testcases=None):
     """
     Persist a structured results file in Outputs/.
 
     `solutions` is a list of dicts: {"label": str, "index": int,
-    "results": {lang: [test_res, ...]}}. Best-effort — never raises.
+    "results": {lang: [test_res, ...]}}. `total_testcases` is the full suite
+    size (may exceed executed count when a language halted early).
+    Best-effort — never raises.
     """
     try:
         out = {
@@ -422,6 +448,8 @@ def write_execution_results_file(base_dir, step, question_id, solutions):
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "solutions": [],
         }
+        if total_testcases is not None:
+            out["totalTestcases"] = total_testcases
         for sol in solutions:
             langs_out = []
             for lang, tests in (sol.get("results") or {}).items():
@@ -430,6 +458,7 @@ def write_execution_results_file(base_dir, step, question_id, solutions):
                 langs_out.append({
                     "language": lang,
                     "total": len(tests),
+                    "expected_total": total_testcases if total_testcases is not None else len(tests),
                     "passed": passed,
                     "failed": len(tests) - passed,
                     "testcases": [
@@ -923,7 +952,7 @@ def run_all_tests_nonfunction(base_dir=None, selected_lang=None):
                 break
 
         all_results[lang] = language_results
-        emit_language_results("execute_tests", "Reference Solution", 0, lang, language_results)
+        emit_language_results("execute_tests", "Reference Solution", 0, lang, language_results, total=len(testcases))
         _print_language_results_table(lang, language_results)
         print(f"{lang}: passed {passed_count}/{len(language_results)}")
         # Per-language terminal marker. A compilation error halts only THIS
@@ -935,6 +964,7 @@ def run_all_tests_nonfunction(base_dir=None, selected_lang=None):
         "execute_tests",
         question_id,
         [{"label": "Reference Solution", "index": 0, "results": all_results}],
+        total_testcases=len(testcases),
     )
 
     all_passed = bool(all_results) and all(
@@ -1166,7 +1196,7 @@ def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
                 break
 
         all_results[lang] = language_results
-        emit_language_results("execute_tests", "Reference Solution", 0, lang, language_results)
+        emit_language_results("execute_tests", "Reference Solution", 0, lang, language_results, total=len(testcases))
         _print_language_results_table(lang, language_results)
         print(f"{lang}: passed {passed_count}/{len(language_results)}")
         # Per-language terminal marker. A compilation error halts only THIS
@@ -1178,6 +1208,7 @@ def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
         "execute_tests",
         question_id,
         [{"label": "Reference Solution", "index": 0, "results": all_results}],
+        total_testcases=len(testcases),
     )
 
     all_passed = bool(all_results) and all(

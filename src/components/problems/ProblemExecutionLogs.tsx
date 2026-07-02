@@ -36,6 +36,8 @@ type TcRecord = {
   time: number | null;
   mem: number | null;
   detail: string;
+  /** Full testcase count for the run — the stable badge denominator. */
+  tt?: number | null;
   input?: string;
   expected?: string;
   got?: string;
@@ -82,11 +84,13 @@ type PersistedTc = {
 
 type PersistedResults = {
   step?: string;
+  totalTestcases?: number;
   solutions?: {
     label?: string;
     index?: number;
     languages?: {
       language?: string;
+      expected_total?: number;
       testcases?: PersistedTc[];
     }[];
   }[];
@@ -99,6 +103,7 @@ function normalizePersisted(data: PersistedResults, step: StepKey): TcRecord[] {
     const solLabel = sol.label || "";
     for (const lang of sol.languages || []) {
       const langName = lang.language || "";
+      const expectedTotal = lang.expected_total ?? data.totalTestcases ?? null;
       for (const t of lang.testcases || []) {
         out.push({
           step,
@@ -112,6 +117,7 @@ function normalizePersisted(data: PersistedResults, step: StepKey): TcRecord[] {
           time: t.time ?? null,
           mem: t.memory ?? null,
           detail: t.detail || "",
+          tt: expectedTotal,
           input: t.input,
           expected: t.expected,
           got: t.got,
@@ -201,11 +207,15 @@ function groupByStep(records: TcRecord[], step: StepKey): SolutionGroup[] {
       .sort((a, b) => langSort(a[0], b[0]))
       .map(([lang, recs]) => {
         const sorted = [...recs].sort((a, b) => tcKey(a) - tcKey(b));
+        // Denominator = full suite size emitted with the results (`tt`), so the
+        // badge stays fixed while results stream in or when a language halts
+        // early. Falls back to the executed count for old runs without `tt`.
+        const declaredTotal = Math.max(0, ...sorted.map((r) => r.tt ?? 0));
         return {
           lang,
           records: sorted,
           passed: sorted.filter((r) => r.passed).length,
-          total: sorted.length,
+          total: Math.max(declaredTotal, sorted.length),
         };
       });
     groups.push({ si, sol: entry.sol, langs });

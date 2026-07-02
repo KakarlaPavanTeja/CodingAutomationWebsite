@@ -19,6 +19,7 @@ Reuses helpers from execution_manager_v2 (same Scripts directory).
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from project_env import load_execution_manager_env
 
@@ -60,6 +61,11 @@ _FENCE_LANG = {
 # when a naive approach times out (the reviewer wants the full per-case picture).
 # Set EDITORIAL_EXEC_TLE_LIMIT=<n> to re-enable the early-stop optimization.
 _TLE_STOP_LIMIT = int(os.environ.get("EDITORIAL_EXEC_TLE_LIMIT", "0") or "0")
+
+# Every (approach, language) pair runs concurrently — one worker per pair, up to
+# this cap (the remote compiler API is the bottleneck; testcases within a pair
+# stay sequential so compilation-error/TLE early-stops keep working).
+_MAX_PARALLEL = int(os.environ.get("EDITORIAL_EXEC_PARALLELISM", "8") or "8")
 
 _MULTILANG_RE = re.compile(
     r"<MultiLanguageCodeBlock>(.*?)</MultiLanguageCodeBlock>", re.DOTALL
@@ -256,13 +262,15 @@ def _interpret(result, expected_output):
 def _run_one(base_dir, mode, lang, config, prepared_code, driver, node_h,
              testcases, question_id, question_name, approach):
     """Run all testcases for a single (approach, language). Returns a list of
-    test_res dicts; emits a sentinel line per testcase. Never raises."""
+    test_res dicts; emits a sentinel line per testcase. Never raises.
+    Runs on a worker thread — must not touch shared mutable state."""
     label = approach["label"]
     index = approach["index"]
+    total = len(testcases)
     language_results = []
     consecutive_tle = 0
 
-    print(f"\n  [{label}] {lang}: running {len(testcases)} testcase(s)", flush=True)
+    print(f"\n  [{label}] {lang}: running {total} testcase(s)", flush=True)
 
     for i, tc in enumerate(testcases):
         order = tc.get("order", i + 1)
@@ -294,25 +302,25 @@ def _run_one(base_dir, mode, lang, config, prepared_code, driver, node_h,
         test_res.setdefault("expected", expected_output)
         test_res.setdefault("input_s3_used", bool(result.get("_input_s3_used")) if result else False)
         language_results.append(test_res)
-        emit_tc_result(STEP, label, index, lang, test_res)
+        emit_tc_result(STEP, label, index, lang, test_res, total=total)
 
         status = test_res.get("status")
         # Compilation errors recur for every testcase — record once and stop.
         if status == "COMPILATION_ERROR":
-            print(f"    compilation error — skipping remaining testcases for {lang}", flush=True)
+            print(f"    [{label}] compilation error — skipping remaining testcases for {lang}", flush=True)
             break
 
         if status == "TIME_LIMIT_EXCEEDED":
             consecutive_tle += 1
             if _TLE_STOP_LIMIT > 0 and consecutive_tle >= _TLE_STOP_LIMIT:
-                print(f"    {consecutive_tle} consecutive TLEs — stopping {lang} early "
+                print(f"    [{label}] {consecutive_tle} consecutive TLEs — stopping {lang} early "
                       f"(naive approach, informational)", flush=True)
                 break
         else:
             consecutive_tle = 0
 
     passed = sum(1 for t in language_results if t.get("passed"))
-    print(f"    {lang}: passed {passed}/{len(language_results)}", flush=True)
+    print(f"    [{label}] {lang}: passed {passed}/{total}", flush=True)
     return language_results
 
 
@@ -421,12 +429,11 @@ def run():
                 except Exception:
                     drivers[lang] = None
 
-    solutions_out = []
+    # Build one job per (approach, language) pair; ALL pairs run in parallel —
+    # every language of every approach — capped at EDITORIAL_EXEC_PARALLELISM
+    # workers. Testcases within a pair stay sequential (early-stop logic).
+    jobs = []
     for approach in approaches:
-        print(f"\n{'-' * 80}")
-        print(f"APPROACH {approach['index'] + 1}: {approach['label']}")
-        print(f"{'-' * 80}")
-        results_by_lang = {}
         for lang in target_languages:
             code = approach["code"].get(lang)
             if not code:
@@ -446,22 +453,44 @@ def run():
                 node_h = None
                 prepared = _uncomment_main(lang, code)
 
-            try:
-                language_results = _run_one(
-                    base_dir, mode, lang, config, prepared, driver, node_h,
-                    testcases, question_id, question_name, approach,
-                )
-                results_by_lang[lang] = language_results
-            except Exception as exc:
-                print(f"  [{approach['label']}] {lang}: unexpected error: {exc}", flush=True)
+            jobs.append((approach, lang, config, prepared, driver, node_h))
 
+    results_by_key = {}
+    if jobs:
+        workers = max(1, min(_MAX_PARALLEL, len(jobs)))
+        print(f"\nRunning {len(jobs)} (approach, language) pair(s) in parallel "
+              f"({workers} worker(s))...", flush=True)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(
+                    _run_one, base_dir, mode, lang, config, prepared, driver,
+                    node_h, testcases, question_id, question_name, approach,
+                ): (approach["index"], lang)
+                for approach, lang, config, prepared, driver, node_h in jobs
+            }
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    results_by_key[key] = future.result()
+                except Exception as exc:
+                    print(f"  [approach {key[0] + 1}] {key[1]}: unexpected error: {exc}", flush=True)
+
+    solutions_out = []
+    for approach in approaches:
+        results_by_lang = {}
+        for lang in target_languages:
+            language_results = results_by_key.get((approach["index"], lang))
+            if language_results is not None:
+                results_by_lang[lang] = language_results
         solutions_out.append({
             "label": approach["label"],
             "index": approach["index"],
             "results": results_by_lang,
         })
 
-    write_execution_results_file(base_dir, STEP, question_id, solutions_out)
+    write_execution_results_file(
+        base_dir, STEP, question_id, solutions_out, total_testcases=len(testcases)
+    )
 
     print(f"\n{'=' * 80}")
     print("EDITORIAL EXECUTION SUMMARY")
@@ -469,7 +498,8 @@ def run():
     for sol in solutions_out:
         for lang, tests in (sol["results"] or {}).items():
             passed = sum(1 for t in tests if t.get("passed"))
-            print(f"  {sol['label']} | {lang}: {passed}/{len(tests)} passed")
+            print(f"  {sol['label']} | {lang}: {passed}/{len(testcases)} passed "
+                  f"({len(tests)} executed)")
     print("Done (informational step — pipeline not affected).")
 
 
