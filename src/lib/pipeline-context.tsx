@@ -51,6 +51,42 @@ function requiresOwnerTitle(stepId: StepId): boolean {
   return stepId === "package_platform" || stepId === "prepare_platform_json";
 }
 
+const TITLE_REQUIRED_MSG =
+  'This step needs a problem title. Open "Pipeline settings", fill in "Title (short text)", click Save, then re-run.';
+const TITLE_PREREQ_MSG =
+  'Skipped: depends on "Package for Platform", which was skipped because no problem title is set.';
+
+/**
+ * Which of `candidates` (in workflow order) cannot run without an owner title:
+ * the packaging steps themselves, plus every step whose explicit prerequisite
+ * chain reaches one of them within this candidate set (the editorial steps).
+ */
+function titleGatedSteps(candidates: StepId[]): Set<StepId> {
+  const gated = new Set<StepId>();
+  for (const id of candidates) {
+    const prereq = getStepConfig(id).prerequisite;
+    if (requiresOwnerTitle(id) || (prereq && gated.has(prereq))) gated.add(id);
+  }
+  return gated;
+}
+
+/** Visible "skipped — title required" state, with the reason in the step log. */
+function titleSkipPatch(id: StepId, now: number): Partial<StepState> {
+  return {
+    status: "skipped",
+    exitCode: null,
+    startTime: null,
+    endTime: now,
+    logs: [
+      {
+        stream: "stderr",
+        line: requiresOwnerTitle(id) ? `Skipped: ${TITLE_REQUIRED_MSG}` : TITLE_PREREQ_MSG,
+        ts: now,
+      },
+    ],
+  };
+}
+
 /**
  * Resolve once a watched status leaves "running" (settled), with a hard safety
  * deadline so a GQ/lang orchestrator can never hang forever if the watched
@@ -439,8 +475,22 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       }),
     });
 
+    // The saved title unblocks packaging: return any step marked
+    // "skipped — title required" (and its skipped dependents) to pending.
+    for (const id of titleGatedSteps(getPipelineUiWorkflowSteps(questionType, mode))) {
+      if (stepStatesRef.current.get(id)?.status === "skipped") {
+        updateStepState(id, {
+          status: "pending",
+          exitCode: null,
+          startTime: null,
+          endTime: null,
+          logs: [],
+        });
+      }
+    }
+
     savePipelineState();
-  }, [ownerTitle, savePipelineState]);
+  }, [ownerTitle, questionType, mode, updateStepState, savePipelineState]);
 
   const setOwnerTitle = useCallback((title: string) => {
     setOwnerTitleRaw(title);
@@ -1407,10 +1457,12 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       }
 
       if (requiresOwnerTitle(state.id) && !ownerTitle.trim()) {
+        const now = Date.now();
         updateStepState(state.id, {
           status: "failed",
           exitCode: 1,
-          endTime: Date.now(),
+          endTime: now,
+          logs: [{ stream: "stderr", line: TITLE_REQUIRED_MSG, ts: now }],
         });
         savePipelineState();
         return;
@@ -1712,16 +1764,24 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   // concurrently instead of one-at-a-time.
   const runAll = useCallback(() => {
     const steps = getPipelineUiWorkflowSteps(questionType, mode);
-    const remaining = steps.filter((id) => {
+    const incomplete = steps.filter((id) => {
       const state = stepStates.get(id);
-      if (!state || state.status === "completed") return false;
-      // Packaging steps need a title — skip them in this batch if missing.
-      if (requiresOwnerTitle(id) && !ownerTitle.trim()) return false;
-      return true;
+      return !!state && state.status !== "completed";
     });
+    // Packaging steps need a title. Without one, they and their editorial
+    // dependents are marked "skipped" (visible in the UI, reason in the log)
+    // instead of silently dropped — dropping only the packaging steps used to
+    // leave the dependents queued forever behind a prerequisite that never ran.
+    const gated = ownerTitle.trim() ? new Set<StepId>() : titleGatedSteps(incomplete);
+    if (gated.size > 0) {
+      const now = Date.now();
+      for (const id of gated) updateStepState(id, titleSkipPatch(id, now));
+      savePipelineState();
+    }
+    const remaining = incomplete.filter((id) => !gated.has(id));
     if (remaining.length === 0) return;
     setRunAllQueue(remaining);
-  }, [questionType, mode, stepStates, ownerTitle]);
+  }, [questionType, mode, stepStates, ownerTitle, updateStepState, savePipelineState]);
 
   const cancelRunAll = useCallback(() => {
     setRunAllQueue([]);
@@ -1739,9 +1799,20 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   const rerunStepSet = useCallback(
     (ids: Set<StepId>) => {
       if (ids.size === 0) return;
+      const order = getPipelineUiWorkflowSteps(questionType, mode);
+      // Title-gated steps can't re-run without a title: mark them visibly
+      // skipped (reason in the log) instead of resetting them to pending and
+      // silently leaving them out of the queue.
+      const gated = ownerTitle.trim()
+        ? new Set<StepId>()
+        : titleGatedSteps(order.filter((id) => ids.has(id)));
       for (const id of ids) {
         const cur = stepStatesRef.current.get(id);
         if (!cur) continue;
+        if (gated.has(id)) {
+          updateStepState(id, titleSkipPatch(id, Date.now()));
+          continue;
+        }
         const reset: Partial<StepState> = {
           status: "pending",
           exitCode: null,
@@ -1771,10 +1842,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         const bf = stepStatesRef.current.get("generate_brute_force");
         if (bf) runStepRef.current({ ...bf, status: "pending" });
       }
-      const order = getPipelineUiWorkflowSteps(questionType, mode);
-      const queue = order.filter(
-        (id) => ids.has(id) && !(requiresOwnerTitle(id) && !ownerTitle.trim())
-      );
+      const queue = order.filter((id) => ids.has(id) && !gated.has(id));
       if (queue.length) setRunAllQueue(queue);
     },
     [questionType, mode, ownerTitle, updateStepState, savePipelineState]
@@ -1852,7 +1920,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           const st = stepStates.get(b)?.status;
           const beingRetried =
             alive.has(b) || launchingStepsRef.current.has(b) || st === "running";
-          return (st === "failed" || st === "stopped") && !beingRetried;
+          return (st === "failed" || st === "stopped" || st === "skipped") && !beingRetried;
         });
         if (!anyBlockingDead) {
           remaining.push(id);

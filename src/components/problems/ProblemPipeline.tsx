@@ -9,7 +9,7 @@ import { getPipelineUiWorkflowSteps } from "@/lib/pipeline-config";
 import { usePipeline } from "@/lib/pipeline-context";
 import type { PipelineStepUsageMap } from "@/lib/pipeline-step-list";
 import type { StepId } from "@/types/pipeline";
-import { ChevronDown, Loader2, PlayCircle, RotateCcw, StopCircle } from "lucide-react";
+import { AlertTriangle, ChevronDown, Loader2, PlayCircle, RotateCcw, StopCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ProblemPipelineProps {
@@ -55,7 +55,9 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
   } = usePipeline();
 
   const [stepUsage, setStepUsage] = useState<PipelineStepUsageMap>({});
-  const [configOpen, setConfigOpen] = useState(false);
+  // null = user hasn't toggled the panel; it then auto-opens while the title
+  // is missing (the title field lives inside) and stays closed otherwise.
+  const [configToggle, setConfigToggle] = useState<boolean | null>(null);
 
   const fetchStepUsage = useCallback(() => {
     fetch(`/api/pipeline/usage?problemId=${encodeURIComponent(problemId)}`)
@@ -113,6 +115,9 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
 
   const gqEnabledSubSteps = stepStates.get("generate_question")?.enabledSubSteps ?? [];
 
+  const titleMissing = packagingStepsPending && !ownerTitle.trim();
+  const configOpen = configToggle ?? (!stateLoading && titleMissing);
+
   if (stateLoading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -128,7 +133,7 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
         <button
           type="button"
           className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-muted/40 transition-colors"
-          onClick={() => setConfigOpen((o) => !o)}
+          onClick={() => setConfigToggle(!configOpen)}
         >
           <div className="flex items-center gap-2 min-w-0">
             <ChevronDown
@@ -225,14 +230,27 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
                 Rerun affected ({affectedStepIds.size})
               </Button>
             )}
-            {packagingStepsPending && !ownerTitle.trim() && (
-              <p className="text-[10px] text-muted-foreground text-center max-w-md">
-                Set a title in Pipeline settings (and Save) to include Package &amp; JSON in run all.
-              </p>
-            )}
           </div>
         )}
       </div>
+
+      {titleMissing && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2">
+          <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <p className="text-xs text-amber-700 dark:text-amber-300">
+            <span className="font-medium">No problem title set.</span> Package for Platform,
+            Platform JSON and the editorial steps that depend on them will be skipped until you{" "}
+            <button
+              type="button"
+              className="font-medium underline underline-offset-2 hover:opacity-80"
+              onClick={() => setConfigToggle(true)}
+            >
+              set a title in Pipeline settings
+            </button>{" "}
+            and click Save.
+          </p>
+        </div>
+      )}
 
       <PipelineWaveFlow
         questionType={questionType}
