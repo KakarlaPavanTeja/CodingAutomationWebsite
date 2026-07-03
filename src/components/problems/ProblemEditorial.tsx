@@ -27,6 +27,10 @@ import {
   formatTokenCount,
   type RunUsageSummary,
 } from "@/lib/pipeline-usage-match";
+import {
+  evaluateEditorialPrerequisites,
+  type EditorialPrereqCheck,
+} from "@/lib/editorial-prerequisites";
 
 interface ProblemEditorialProps {
   problemId: string;
@@ -522,6 +526,8 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
   const {
     stepStates,
     globalLanguages,
+    questionType,
+    ownerTitle,
     isAnyRunning,
     stateLoading,
     loadProblemState,
@@ -547,10 +553,10 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
     latest: RunUsageSummary | null;
     total: RunUsageSummary | null;
   }>({ latest: null, total: null });
+  const [prereqCheck, setPrereqCheck] = useState<EditorialPrereqCheck | null>(null);
 
   const generateState = stepStates.get("generate_editorial");
   const executeState = stepStates.get("execute_editorial");
-  const packageState = stepStates.get("package_platform");
   const genRunning = generateState?.status === "running";
   const execRunning = executeState?.status === "running";
 
@@ -589,15 +595,48 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
     load();
   }, [load]);
 
+  const fetchPrereqs = useCallback(() => {
+    Promise.all([
+      fetch(`/api/files/outputs?problemId=${encodeURIComponent(problemId)}`).then((r) =>
+        r.ok ? r.json() : { files: [] }
+      ),
+      fetch(`/api/files/inputs?problemId=${encodeURIComponent(problemId)}`).then((r) =>
+        r.ok ? r.json() : { files: [] }
+      ),
+    ])
+      .then(([outputsData, inputsData]) => {
+        const outputPaths = (outputsData.files ?? [])
+          .filter((f: { isDirectory?: boolean }) => !f.isDirectory)
+          .map((f: { path: string }) => f.path);
+        const inputPaths = (inputsData.files ?? [])
+          .filter((f: { isDirectory?: boolean }) => !f.isDirectory)
+          .map((f: { path: string }) => f.path);
+        setPrereqCheck(
+          evaluateEditorialPrerequisites(
+            outputPaths,
+            inputPaths.includes("problem.md"),
+            questionType,
+            ownerTitle
+          )
+        );
+      })
+      .catch(() => setPrereqCheck(null));
+  }, [problemId, questionType, ownerTitle]);
+
+  useEffect(() => {
+    fetchPrereqs();
+  }, [fetchPrereqs]);
+
   const prevGenStatus = useRef(generateState?.status);
   useEffect(() => {
     const status = generateState?.status;
     if (prevGenStatus.current === "running" && status === "completed") {
       load();
+      fetchPrereqs();
       onStatusChange?.();
     }
     prevGenStatus.current = status;
-  }, [generateState?.status, load, onStatusChange]);
+  }, [generateState?.status, load, fetchPrereqs, onStatusChange]);
 
   const prevExecStatus = useRef(executeState?.status);
   useEffect(() => {
@@ -712,10 +751,10 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
     URL.revokeObjectURL(url);
   };
 
-  const packageComplete = packageState?.status === "completed";
+  const prereqsReady = prereqCheck?.ready ?? false;
   const editorialComplete = generateState?.status === "completed";
   const canGenerate =
-    packageComplete && !genRunning && !execRunning && generateState?.status !== "running";
+    prereqsReady && !genRunning && !execRunning && generateState?.status !== "running";
   const canExecute =
     editorialComplete &&
     !notFound &&
@@ -752,6 +791,13 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
   const handleStopExecute = () => stopStep("execute_editorial");
 
   const pipelineBusy = stateLoading || isAnyRunning;
+  const generateDisabledReason = genRunning
+    ? undefined
+    : pipelineBusy
+      ? "Another pipeline step is running — wait for it to finish or stop it on the Pipeline tab."
+      : !prereqsReady
+        ? "Required outputs are missing — see the checklist below."
+        : undefined;
 
   if (loading) {
     return (
@@ -791,13 +837,10 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
                 size="sm"
                 className="h-8"
                 disabled={!canGenerate || pipelineBusy}
+                title={generateDisabledReason}
                 onClick={handleGenerateEditorial}
               >
-                {pipelineBusy && !genRunning ? (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-                )}
+                <Sparkles className="mr-1.5 h-3.5 w-3.5" />
                 Generate Editorial
               </Button>
             )}
@@ -807,10 +850,40 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
           <BookOpen className="mx-auto h-10 w-10 text-muted-foreground/40" />
           <h3 className="mt-3 text-sm font-semibold">No editorial yet</h3>
           <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-            {packageComplete
+            {prereqsReady
               ? "Click Generate Editorial to produce a complete multi-solution editorial."
-              : "Complete Package for Platform in the Pipeline tab first, then generate the editorial here."}
+              : "The pipeline may show Completed, but editorial generation needs specific output files on disk — see below."}
           </p>
+          {prereqCheck && (prereqCheck.missingRequired.length > 0 || prereqCheck.warnings.length > 0) && (
+            <div className="mx-auto mt-6 max-w-lg text-left text-sm">
+              {prereqCheck.missingRequired.length > 0 && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4">
+                  <p className="font-semibold text-destructive">Required before generating</p>
+                  <ul className="mt-2 space-y-2">
+                    {prereqCheck.missingRequired.map((item) => (
+                      <li key={item.id}>
+                        <span className="font-medium text-foreground">{item.label}</span>
+                        <span className="mt-0.5 block text-muted-foreground">{item.hint}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {prereqCheck.warnings.length > 0 && (
+                <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-4">
+                  <p className="font-semibold text-amber-700 dark:text-amber-400">Recommended (optional)</p>
+                  <ul className="mt-2 space-y-2">
+                    {prereqCheck.warnings.map((item) => (
+                      <li key={item.id}>
+                        <span className="font-medium text-foreground">{item.label}</span>
+                        <span className="mt-0.5 block text-muted-foreground">{item.hint}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -865,6 +938,7 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
               variant="outline"
               className="h-8"
               disabled={!canGenerate || pipelineBusy}
+              title={generateDisabledReason}
               onClick={handleGenerateEditorial}
             >
               <Sparkles className="mr-1.5 h-3.5 w-3.5" />

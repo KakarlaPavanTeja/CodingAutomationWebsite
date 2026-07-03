@@ -1,8 +1,0 @@
-- Index Pair Sum - 98%
-- Two-Sum Indices - 97%
-- Target Pair Lookup - 95%
-- Complement Index Search - 94%
-- Resonance Pair Match - 92%
-- Array Sum Positions - 91%
-- Zero-Based Pair Finder - 89%
-- Sequence Target Match - 88%

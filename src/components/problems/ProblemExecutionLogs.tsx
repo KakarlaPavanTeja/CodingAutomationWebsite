@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { languageSubStepLogKey } from "@/lib/pipeline-language-steps";
 
 interface ProblemExecutionLogsProps {
   problemId: string;
@@ -61,6 +62,14 @@ const STEP_META: { key: StepKey; stepId: (qt: string) => string; title: string; 
     subtitle: "Every editorial approach run in each language (informational — naive approaches may time out).",
   },
 ];
+
+const EXEC_LANG_IDS = ["python", "cpp", "java", "nodejs"];
+
+function executionLogStepIds(questionType: string, meta: (typeof STEP_META)[number]): string[] {
+  const base = meta.stepId(questionType);
+  if (meta.key === "execute_editorial") return [base];
+  return [base, ...EXEC_LANG_IDS.map((lang) => languageSubStepLogKey(base, lang))];
+}
 
 const PERSISTED_FILENAME: Record<StepKey, string> = {
   execute_tests: "execution_results.json",
@@ -446,7 +455,7 @@ export function ProblemExecutionLogs({ problemId, questionType, isActive }: Prob
       // Live-log records (available while a step is running) keyed for merge.
       const merged = new Map<string, TcRecord>();
       for (const meta of STEP_META) {
-        const stepId = meta.stepId(questionType);
+        for (const stepId of executionLogStepIds(questionType, meta)) {
         try {
           const res = await fetch(
             `/api/pipeline/run/logs?problemId=${encodeURIComponent(problemId)}&stepId=${encodeURIComponent(stepId)}&tail=200000`,
@@ -458,6 +467,7 @@ export function ProblemExecutionLogs({ problemId, questionType, isActive }: Prob
           }
         } catch {
           // ignore per-step fetch error
+        }
         }
       }
       // Persisted Outputs files are the source of truth after a run completes;

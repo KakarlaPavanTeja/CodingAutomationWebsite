@@ -1,6 +1,12 @@
 import { getStepConfig } from "@/lib/pipeline-config";
 import type { StepId, StepState } from "@/types/pipeline";
 
+/** Whether Strengthen Test Cases is actively mutating the suite (execute should wait). */
+function isHardenActivelyRunning(stepStates: Map<StepId, StepState>): boolean {
+  const st = stepStates.get("harden_testcases")?.status;
+  return st === "running" || st === "stopping";
+}
+
 /** Whether a tracked workflow step is done (GQ uses the phase gate, not parent status). */
 export function isTrackedStepComplete(
   stepId: StepId,
@@ -47,6 +53,15 @@ export function isWorkflowStepUnlocked(
 ): boolean {
   if (stepId === "generate_enrichment") {
     return questionPhaseComplete;
+  }
+
+  // Execute reads testcases.json — wait out an in-flight Strengthen pass even
+  // though Strengthen is non-blocking for Split Code and packaging.
+  if (
+    (stepId === "execute_tests_function" || stepId === "execute_tests_nonfunction") &&
+    isHardenActivelyRunning(stepStates)
+  ) {
+    return false;
   }
 
   const explicit = getStepConfig(stepId).prerequisite;
@@ -125,6 +140,13 @@ export function getIncompletePrerequisites(
 
   if (stepId === "generate_enrichment") {
     return questionPhaseComplete ? [] : ["generate_question"];
+  }
+
+  if (
+    (stepId === "execute_tests_function" || stepId === "execute_tests_nonfunction") &&
+    isHardenActivelyRunning(stepStates)
+  ) {
+    return ["harden_testcases"];
   }
 
   const explicit = getStepConfig(stepId).prerequisite;

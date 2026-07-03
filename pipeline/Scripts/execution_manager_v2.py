@@ -183,7 +183,8 @@ def _write_blob_and_get_s3_url(base_dir, question_id, question_name, order, io_k
         uploaded, info = _upload_blob_to_s3(local_path, filename)
     if uploaded:
         return info, local_path, True
-    print(f"  S3 upload error for {filename}: {info}", flush=True)
+    if os.environ.get("SUPPRESS_S3_UPLOAD_LOGS", "").lower() not in ("1", "true", "yes"):
+        print(f"  S3 upload error for {filename}: {info}", flush=True)
     return "", local_path, False
 
 
@@ -308,17 +309,16 @@ def _print_progress(
     s3_error="",
     error_details="",
 ):
-    parts = [
-        f"[{lang}] Progress {index}/{total} - {status}",
-        f"time={_format_seconds(api_time)}",
-        f"memory={_format_memory_mb(memory_mb)}",
-        f"input_s3={'yes' if input_s3_used else 'no'}",
-        f"output_s3={'yes' if output_s3_used else 'no'}",
-    ]
-    if s3_error:
-        parts.append(f"s3_error={_safe_text(s3_error, 140)}")
-    if error_details:
-        parts.append(f"error={_safe_text(error_details, 180)}")
+    """Stdout progress — verdict + timing only (no IO / error text).
+
+    IO and error detail live in @@TCRESULT@@ sentinels and execution_results.json.
+    Extra kwargs are accepted for call-site compatibility but not printed."""
+    del input_s3_used, output_s3_used, s3_error, error_details
+    parts = [f"[{lang}] Progress {index}/{total} - {status}"]
+    if isinstance(api_time, (int, float)):
+        parts.append(f"time={_format_seconds(api_time)}")
+    if isinstance(memory_mb, (int, float)):
+        parts.append(f"memory={_format_memory_mb(memory_mb)}")
     print(" | ".join(parts), flush=True)
 
 
@@ -432,6 +432,20 @@ def emit_language_results(step, solution_label, solution_index, lang, language_r
         emit_tc_result(step, solution_label, solution_index, lang, test_res, total=total)
 
 
+def _merge_language_result_lists(existing_langs, new_langs):
+    """Merge per-language result blocks; newer run wins for the same language name."""
+    by_lang = {}
+    for entry in existing_langs or []:
+        name = entry.get("language")
+        if name:
+            by_lang[name] = entry
+    for entry in new_langs or []:
+        name = entry.get("language")
+        if name:
+            by_lang[name] = entry
+    return list(by_lang.values())
+
+
 def write_execution_results_file(base_dir, step, question_id, solutions, total_testcases=None):
     """
     Persist a structured results file in Outputs/.
@@ -439,6 +453,9 @@ def write_execution_results_file(base_dir, step, question_id, solutions, total_t
     `solutions` is a list of dicts: {"label": str, "index": int,
     "results": {lang: [test_res, ...]}}. `total_testcases` is the full suite
     size (may exceed executed count when a language halted early).
+
+    When parallel per-language runs each write this file, results are merged by
+    language so every enabled language is retained (not overwritten).
     Best-effort — never raises.
     """
     try:
@@ -484,6 +501,37 @@ def write_execution_results_file(base_dir, step, question_id, solutions, total_t
         os.makedirs(outputs_dir, exist_ok=True)
         filename = _RESULTS_FILENAME.get(step, f"{step}_results.json")
         path = os.path.join(outputs_dir, filename)
+
+        existing = None
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+            except Exception:
+                existing = None
+
+        if existing and isinstance(existing.get("solutions"), list):
+            merged_by_index = {
+                s.get("index", 0): s for s in existing["solutions"] if isinstance(s, dict)
+            }
+            for sol in out["solutions"]:
+                idx = sol.get("index", 0)
+                prev = merged_by_index.get(idx)
+                if prev:
+                    sol["languages"] = _merge_language_result_lists(
+                        prev.get("languages"), sol.get("languages")
+                    )
+                    if not sol.get("label") and prev.get("label"):
+                        sol["label"] = prev["label"]
+                merged_by_index[idx] = sol
+            out["solutions"] = sorted(
+                merged_by_index.values(), key=lambda s: s.get("index", 0)
+            )
+            if out.get("totalTestcases") is None and existing.get("totalTestcases") is not None:
+                out["totalTestcases"] = existing["totalTestcases"]
+            if existing.get("questionId") and (not question_id or question_id == "unknown"):
+                out["questionId"] = existing["questionId"]
+
         _write_json(path, out)
         print(f"Wrote execution results: {_short_path(path, base_dir)}", flush=True)
     except Exception as exc:
@@ -766,7 +814,7 @@ def run_test_case_nonfunction(base_dir, config, code_content, tc, question_id, q
         return {"_request_error": f"Failed to decode JSON: {response.text}", "_input_s3_used": input_s3_used, "_output_s3_used": output_s3_used, "_s3_error": s3_error}
 
 
-def run_all_tests_nonfunction(base_dir=None, selected_lang=None):
+def run_all_tests_nonfunction(base_dir=None, selected_lang=None, persist_results=True):
     """Run non-function based execution using the v2 IO testcase API (same format as function-based)."""
     base_dir = base_dir or os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -959,13 +1007,14 @@ def run_all_tests_nonfunction(base_dir=None, selected_lang=None):
         # language (its code can't run at all); other languages still execute.
         _emit_lang_end(lang, len(testcases), len(language_results), passed_count, global_error_occurred)
 
-    write_execution_results_file(
-        base_dir,
-        "execute_tests",
-        question_id,
-        [{"label": "Reference Solution", "index": 0, "results": all_results}],
-        total_testcases=len(testcases),
-    )
+    if persist_results:
+        write_execution_results_file(
+            base_dir,
+            "execute_tests",
+            question_id,
+            [{"label": "Reference Solution", "index": 0, "results": all_results}],
+            total_testcases=len(testcases),
+        )
 
     all_passed = bool(all_results) and all(
         tests and all(t.get("passed") for t in tests) for tests in all_results.values()
@@ -973,7 +1022,7 @@ def run_all_tests_nonfunction(base_dir=None, selected_lang=None):
     return all_passed, all_results, testcases
 
 
-def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
+def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None, persist_results=True):
     base_dir = base_dir or os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     testcases_path = testcases_path or os.path.join(base_dir, "Outputs", "testcases.json")
     if not os.path.exists(testcases_path):
@@ -1203,13 +1252,14 @@ def run_all_tests_v2(base_dir=None, testcases_path=None, selected_lang=None):
         # language (its code can't run at all); other languages still execute.
         _emit_lang_end(lang, len(testcases), len(language_results), passed_count, global_error_occurred)
 
-    write_execution_results_file(
-        base_dir,
-        "execute_tests",
-        question_id,
-        [{"label": "Reference Solution", "index": 0, "results": all_results}],
-        total_testcases=len(testcases),
-    )
+    if persist_results:
+        write_execution_results_file(
+            base_dir,
+            "execute_tests",
+            question_id,
+            [{"label": "Reference Solution", "index": 0, "results": all_results}],
+            total_testcases=len(testcases),
+        )
 
     all_passed = bool(all_results) and all(
         tests and all(t.get("passed") for t in tests) for tests in all_results.values()
@@ -1265,7 +1315,6 @@ def main():
         pass_rate = (passed_count / total_count) * 100 if total_count else 0
         summary_rows.append([lang, f"{passed_count}/{total_count}", f"{pass_rate:.1f}%"])
     _print_table("Language Summary", ["Language", "Passed", "Pass Rate"], summary_rows)
-    _print_error_table(all_results)
     print(f"All passed: {all_passed}")
     print(f"Total testcases processed: {len(testcases)}")
     print("[EXEC_EVENT] run_end", flush=True)

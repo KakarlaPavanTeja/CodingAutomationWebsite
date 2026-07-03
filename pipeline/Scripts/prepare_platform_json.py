@@ -497,6 +497,7 @@ def normalize_tags(tc):
         raw = []
 
     out = []
+    seen = set()
     for t in raw:
         if isinstance(t, dict):
             name = str(t.get("name_enum", "")).strip()
@@ -504,8 +505,10 @@ def normalize_tags(tc):
         else:
             name = str(t).strip()
             display = ""
-        if name:
-            out.append({"name_enum": name, "display_name": display or _tag_display_name(name)})
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append({"name_enum": name, "display_name": display or _tag_display_name(name)})
     return out
 
 

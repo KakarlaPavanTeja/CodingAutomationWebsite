@@ -78,6 +78,44 @@ function titleGatedSteps(candidates: StepId[]): Set<StepId> {
   return gated;
 }
 
+/** Reset a failed/stopped step so Run All can launch it again (keeps completed lang tiles). */
+function buildRunAllResetPatch(cur: StepState): Partial<StepState> {
+  if (cur.id === "generate_question") {
+    return {
+      status: "pending",
+      exitCode: null,
+      startTime: null,
+      endTime: null,
+    };
+  }
+  const reset: Partial<StepState> = {
+    status: "pending",
+    exitCode: null,
+    startTime: null,
+    endTime: null,
+    logs: [],
+  };
+  if (cur.languageSubRuns && Object.keys(cur.languageSubRuns).length > 0) {
+    const languageSubRuns: Record<string, SubStepRunState> = {};
+    for (const [lang, run] of Object.entries(cur.languageSubRuns)) {
+      if (run.status === "completed") {
+        languageSubRuns[lang] = run;
+      } else {
+        languageSubRuns[lang] = {
+          ...run,
+          status: "pending",
+          exitCode: null,
+          startTime: null,
+          endTime: null,
+          logs: [],
+        };
+      }
+    }
+    reset.languageSubRuns = languageSubRuns;
+  }
+  return reset;
+}
+
 /** Visible "skipped — title required" state, with the reason in the step log. */
 function titleSkipPatch(id: StepId, now: number): Partial<StepState> {
   return {
@@ -1141,7 +1179,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
               });
               runningSubStepsRef.current.delete(subStepId);
 
-              if (subStepId === "titles" && run.status === "completed" && currentProblemIdRef.current) {
+              if (subStepId === "titles" && run.status === "completed" && generateTitleWithAi && currentProblemIdRef.current) {
                 fetch(
                   `/api/files/read?problemId=${encodeURIComponent(currentProblemIdRef.current)}&path=${encodeURIComponent("Outputs/generated_titles.txt")}`
                 )
@@ -1829,8 +1867,9 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   // concurrently instead of one-at-a-time.
   const runAll = useCallback(() => {
     const steps = getPipelineUiWorkflowSteps(questionType, mode);
+    const snapshot = stepStatesRef.current;
     const incomplete = steps.filter((id) => {
-      const state = stepStates.get(id);
+      const state = snapshot.get(id);
       return !!state && state.status !== "completed";
     });
     // Packaging steps need a title. Without one, they and their editorial
@@ -1838,7 +1877,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     // instead of silently dropped — dropping only the packaging steps used to
     // leave the dependents queued forever behind a prerequisite that never ran.
     const titlesSubStepStatus = getTitlesSubStepStatus(
-      stepStates.get("generate_question")?.subStepRuns
+      snapshot.get("generate_question")?.subStepRuns
     );
     const titleResolvable = packagingTitleResolvable({
       ownerTitle,
@@ -1850,12 +1889,25 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     if (gated.size > 0) {
       const now = Date.now();
       for (const id of gated) updateStepState(id, titleSkipPatch(id, now));
-      savePipelineState();
     }
     const remaining = incomplete.filter((id) => !gated.has(id));
-    if (remaining.length === 0) return;
+    if (remaining.length === 0) {
+      if (gated.size > 0) savePipelineState();
+      return;
+    }
+    // Clear stale launch guards and reset failed/stopped steps so the driver
+    // can pick them up again (completed language tiles are preserved).
+    for (const id of remaining) {
+      const cur = stepStatesRef.current.get(id);
+      if (!cur) continue;
+      if (cur.status === "failed" || cur.status === "stopped") {
+        launchingStepsRef.current.delete(id);
+        updateStepState(id, buildRunAllResetPatch(cur));
+      }
+    }
+    savePipelineState();
     setRunAllQueue(remaining);
-  }, [questionType, mode, stepStates, ownerTitle, generateTitleWithAi, updateStepState, savePipelineState]);
+  }, [questionType, mode, ownerTitle, generateTitleWithAi, updateStepState, savePipelineState]);
 
   const cancelRunAll = useCallback(() => {
     setRunAllQueue([]);
@@ -1964,6 +2016,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     // Steps that are kept (waiting) or launched — used to decide whether a
     // pending prerequisite is still going to run or was already dropped.
     const alive = new Set<StepId>();
+    const queued = new Set(runAllQueue);
 
     const gqState = stepStates.get("generate_question");
     const questionPhaseComplete = isQuestionPhaseComplete(gqState, questionType, gqContext());
@@ -1996,15 +2049,17 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           questionPhaseComplete
         );
         // Only DROP a queued step if a prerequisite has terminally failed/stopped
-        // and is NOT being retried. A prerequisite that is merely transitioning
-        // (running -> completed, or its status briefly lagging the wave) must keep
-        // the step queued — previously, that transient window dropped the whole
-        // downstream chain and stalled Run All between phases (GQ->testcases,
-        // execute->package, ...).
+        // and is NOT being retried. Count any prerequisite still on this Run All
+        // queue as "being retried" even before it is processed in this pass —
+        // otherwise a downstream step could be dropped while its failed upstream
+        // is still queued to run, stalling the whole chain on a second Run All.
         const anyBlockingDead = blocking.some((b) => {
           const st = stepStates.get(b)?.status;
           const beingRetried =
-            alive.has(b) || launchingStepsRef.current.has(b) || st === "running";
+            alive.has(b) ||
+            queued.has(b) ||
+            launchingStepsRef.current.has(b) ||
+            st === "running";
           return (st === "failed" || st === "stopped" || st === "skipped") && !beingRetried;
         });
         if (!anyBlockingDead) {

@@ -108,6 +108,9 @@ export function GlobalConfig({
           <Input
             value={ownerTitle}
             onChange={(e) => onOwnerTitleChange(e.target.value)}
+            onBlur={() => {
+              if (ownerTitle.trim()) void onSaveTitle();
+            }}
             placeholder="Problem title for platform JSON"
             className={compact ? "h-7 text-xs flex-1 min-w-[180px]" : "flex-1 min-w-[220px]"}
             disabled={disabled}

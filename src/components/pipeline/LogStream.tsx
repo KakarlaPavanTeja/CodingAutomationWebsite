@@ -4,6 +4,7 @@ import { useEffect, useRef, useCallback, useMemo } from "react";
 import {
   classifyPipelineLogLine,
   formatLogElapsed,
+  groupLogLinesForDisplay,
   pipelineLogDisplayText,
   pipelineLogPrefixIcon,
   type PipelineLogLineKind,
@@ -61,6 +62,7 @@ export function LogStream({ logs, maxHeight = "300px" }: LogStreamProps) {
   const fillHeight = maxHeight === "100%";
 
   const baseTs = useMemo(() => logs[0]?.ts ?? Date.now(), [logs]);
+  const displayEntries = useMemo(() => groupLogLinesForDisplay(logs), [logs]);
 
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
@@ -107,7 +109,34 @@ export function LogStream({ logs, maxHeight = "300px" }: LogStreamProps) {
       </div>
 
       <div className="p-1.5 space-y-0.5">
-        {logs.map((log, i) => {
+        {displayEntries.map((entry) => {
+          if (entry.kind === "table") {
+            const firstLog = entry.logs[0];
+            return (
+              <div
+                key={`table-${entry.index}-${firstLog.ts}`}
+                className="rounded-sm px-2 py-1.5 bg-zinc-900/40 border border-zinc-800/80"
+              >
+                <div className="flex gap-2 mb-1">
+                  <span
+                    className="w-[3.5rem] shrink-0 text-right tabular-nums text-zinc-600 select-none"
+                    title={new Date(firstLog.ts).toLocaleString()}
+                  >
+                    {formatLogElapsed(baseTs, firstLog.ts)}
+                  </span>
+                  {entry.title && (
+                    <span className="text-xs font-semibold text-cyan-200/90">{entry.title}</span>
+                  )}
+                </div>
+                <pre className="ml-[3.5rem] overflow-x-auto text-[11px] leading-[1.45] text-zinc-300 whitespace-pre">
+                  {entry.body}
+                </pre>
+              </div>
+            );
+          }
+
+          const log = entry.log;
+          const i = entry.index;
           const kind = classifyPipelineLogLine(log.line, log.stream);
           const display = pipelineLogDisplayText(log.line);
           const icon = pipelineLogPrefixIcon(kind);

@@ -127,6 +127,68 @@ def tag_size_bucket(tags: list) -> str | None:
     return None
 
 
+
+def dedupe_tags(tags: list) -> list:
+    """Drop duplicate tag entries (by name_enum or string value), preserving order."""
+    seen: set[str] = set()
+    out: list = []
+    for t in tags or []:
+        if isinstance(t, dict):
+            name = str(t.get("name_enum", "")).strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            out.append(t)
+        else:
+            key = str(t).strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(key)
+    return out
+
+
+def sync_example_testcases(test_cases: list, description: str) -> int:
+    """Force order-1 and order-2 cases to match description Examples 1 & 2."""
+    if not test_cases or not description:
+        return 0
+    try:
+        from benchmark_suite import extract_example_io
+    except ImportError:
+        return 0
+    pairs = extract_example_io(description)
+    if not pairs:
+        return 0
+    cases = [tc for tc in test_cases if isinstance(tc, dict)]
+    if not cases:
+        return 0
+    by_order = sorted(
+        cases,
+        key=lambda tc: tc.get("order") if isinstance(tc.get("order"), int) else 10**9,
+    )
+    changed = 0
+    for i, (inp, out) in enumerate(pairs[:2]):
+        if i >= len(by_order):
+            break
+        tc = by_order[i]
+        want_inp = inp if inp.endswith("\n") else inp + "\n"
+        want_out = out.rstrip("\n") if isinstance(out, str) else str(out)
+        cur_inp = tc.get("input", "") or ""
+        cur_out = tc.get("output", "") or ""
+        if cur_inp != want_inp or cur_out != want_out:
+            tc["input"] = want_inp
+            tc["output"] = want_out
+            changed += 1
+        tags = dedupe_tags(list(tc.get("tags") or []))
+        if "example" not in tags:
+            tags = tags + ["example"]
+            tc["tags"] = tags
+            changed += 1
+        else:
+            tc["tags"] = tags
+    return changed
+
+
 def _strip_size_tags(tags: list) -> list:
     kept: list = []
     for t in tags or []:
@@ -154,7 +216,7 @@ def sync_size_tags(test_cases: list, description: str) -> int:
         declared = tag_size_bucket(tc.get("tags") or [])
         if declared == bucket:
             continue
-        tc["tags"] = _strip_size_tags(tc.get("tags") or []) + [size_tag(bucket)]
+        tc["tags"] = dedupe_tags(_strip_size_tags(tc.get("tags") or []) + [size_tag(bucket)])
         fixed += 1
     return fixed
 
@@ -330,7 +392,7 @@ def sync_subtask_tags(test_cases: list, description: str) -> int:
         for _ in range(group_size):
             tc = ordered[idx]
             idx += 1
-            new_tags = _strip_subtask_tags(tc.get("tags") or []) + [subtask_tag(tier)]
+            new_tags = dedupe_tags(_strip_subtask_tags(tc.get("tags") or []) + [subtask_tag(tier)])
             if tc.get("tags") != new_tags:
                 tc["tags"] = new_tags
                 changed += 1

@@ -4,7 +4,7 @@ problems).
 
 Loads the problem statement, the per-language full solution code, and (when
 present) the per-language driver code, builds the per-problem user message, calls
-the editorial LLM (purpose="editorial", default openai/gpt-5.5, 100K output cap),
+the editorial LLM (purpose="editorial", default anthropic/claude-sonnet-5, 100K output cap),
 and writes the result to Outputs/editorial.md. Token usage + real USD cost are
 recorded like every other step. Follows the enrichment_manager.py pattern.
 """
@@ -12,7 +12,7 @@ recorded like every other step. Follows the enrichment_manager.py pattern.
 import os
 import re
 
-from llm_client import call_llm
+from llm_client import call_llm, set_editorial_fallback_efforts
 from usage_tracker import update_usage as track_usage
 from Prompts.editorialPrompt import (
     EDITORIAL_PROMPT,
@@ -205,8 +205,15 @@ def generate_editorial():
     effort = decide_reasoning_effort(statement, solutions)
 
     editorial_kwargs = {"purpose": "editorial"}
+    effective_fb_effort: str | None = None
     if effort != "ENV":  # "ENV" => let call_llm read OPENAI_REASONING_EFFORT_EDITORIAL
         editorial_kwargs["reasoning_effort"] = effort
+        effective_fb_effort = effort
+    else:
+        raw = os.environ.get("OPENAI_REASONING_EFFORT_EDITORIAL")
+        if raw and raw.strip():
+            effective_fb_effort = raw.strip().lower()
+    set_editorial_fallback_efforts(effective_fb_effort)
 
     print("\nGenerating editorial (this can take several minutes)...")
     content, usage = call_llm(EDITORIAL_PROMPT, user_message, **editorial_kwargs)

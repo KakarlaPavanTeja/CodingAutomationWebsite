@@ -131,6 +131,29 @@ def tier_from_tags(tags: list) -> int:
     return tier
 
 
+
+
+def _mandatory_example_block(description: str) -> str:
+    """Prompt block requiring order 1-2 cases to mirror description examples."""
+    try:
+        from benchmark_suite import extract_example_io
+        pairs = extract_example_io(description or "")
+    except Exception:
+        pairs = []
+    if not pairs:
+        return """
+(MANDATORY PUBLIC EXAMPLES):
+The first 2 test cases (`order` 1 and `order` 2) MUST reproduce Example 1 and Example 2 from the problem description exactly (same `input` and `output` fields). Tag both with scenario tag `example`. These are the public sample cases users see first.
+"""
+    lines = [
+        "(MANDATORY PUBLIC EXAMPLES):",
+        "The first 2 test cases (`order` 1 and `order` 2) MUST use EXACTLY these IO pairs copied verbatim from the description (tag both `example`):",
+    ]
+    for i, (inp, out) in enumerate(pairs[:2], 1):
+        lines.append(f"  Example {i} input:\n{inp!r}")
+        lines.append(f"  Example {i} output:\n{out!r}")
+    return "\n".join(lines) + "\n"
+
 def _format_distribution_tables() -> str:
     lines = []
     for mode, by_count in DISTRIBUTION_BY_MODE.items():
@@ -267,6 +290,7 @@ Inputs:
 6. Distribution mode: `{distribution_preset}`.
 {oracle_block}
 {scoring_block}
+{_mandatory_example_block(description)}
 
 (SIZE DISTRIBUTION — CORRECTNESS-HEAVY, FEW HIGH-VALUE STRESS — CRITICAL):
 Like real judges (LeetCode): MANY cheap small/edge correctness cases, FEW large

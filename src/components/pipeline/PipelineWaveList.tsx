@@ -101,7 +101,12 @@ function WaveStepButton({
     if (costUsd != null && costUsd > 0) parts.push(formatPipelineCost(costUsd));
     sub = parts.join(" · ");
   } else if (status === "running") {
-    sub = costUsd != null && costUsd > 0 ? `Running… · ${formatPipelineCost(costUsd)}` : "Running…";
+    sub =
+      nonBlocking && item.kind === "step" && item.id === "harden_testcases"
+        ? "Running… · non-blocking"
+        : costUsd != null && costUsd > 0
+          ? `Running… · ${formatPipelineCost(costUsd)}`
+          : "Running…";
   } else if (status === "stopping") {
     sub = "Stopping…";
   } else if (status === "stopped") {
