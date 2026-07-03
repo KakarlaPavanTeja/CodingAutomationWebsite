@@ -435,7 +435,7 @@ def run_titles_step(problem_name):
         sys.exit(1)
 
     title_prompt = get_title_prompt(desc_response)
-    title_response, title_usage = call_llm(title_prompt, "", purpose="chat")
+    title_response, title_usage = call_llm(title_prompt, "", purpose="chat", reasoning_effort="medium")
     _track_llm_usage(title_usage, f"{problem_name}_titles")
 
     with open(titles_path, 'w', encoding='utf-8') as f:
@@ -489,7 +489,7 @@ def run_topics_step(problem_name, user_code, detected_lang):
 
     working_code = _load_normalized_source(detected_lang, user_code)
     topics_prompt = get_topics_prompt(desc_response, working_code, topics_list_content)
-    topics_response, topics_usage = call_llm(topics_prompt, "", purpose="chat")
+    topics_response, topics_usage = call_llm(topics_prompt, "", purpose="chat", reasoning_effort="medium")
     _track_llm_usage(topics_usage, f"{problem_name}_topics")
 
     topics_out_path = os.path.join(OUTPUT_DIR, 'generated_topics.json')

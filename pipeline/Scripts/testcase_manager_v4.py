@@ -21,13 +21,14 @@ from Prompts.testcasesprompt_v4 import (
     get_testcases_prompt,
     get_size_fix_prompt,
 )
-from llm_client import call_llm
+from llm_client import apply_testcases_routing, call_llm, resolve_pipeline_difficulty
 from usage_tracker import update_usage
 from testcase_helpers import (
     audit_size_distribution,
     detect_problem_type,
     sync_size_tags_json_root,
     sync_subtask_tags,
+    sync_example_testcases,
 )
 
 
@@ -286,6 +287,8 @@ def _reformat_and_audit(out_path: str, description: str) -> dict:
         print(f"Corrected size_* tags on {tags_fixed} case(s) from derived input sizes.")
     if subtasks_fixed:
         print(f"Assigned subtask tags on {subtasks_fixed} case(s) (generator emitted none/invalid).")
+    if examples_fixed:
+        print(f"Synced {examples_fixed} public example case(s) from description Examples 1 & 2.")
     if did_reorder:
         if _has_subtask_tags(tcs):
             print("Reordered within subtask tag blocks (payload sort for subtask >= 3).")
@@ -413,9 +416,9 @@ def main():
             "Add a brute force for full LeetCode-grade validation."
         )
 
-    # 3. Difficulty -> total weightage (owner score overrides).
+    # 3. Difficulty (owner-set is FINAL, else LLM-generated file) + weightage.
     total_score = 100
-    difficulty = None
+    difficulty, difficulty_source = resolve_pipeline_difficulty()
     owner_score_raw = os.environ.get("PIPELINE_OWNER_SCORE", "").strip()
     owner_score = None
     if owner_score_raw:
@@ -426,19 +429,35 @@ def main():
         except ValueError:
             owner_score = None
 
-    difficulty_path = os.path.join("Outputs", "generated_difficulty.txt")
-    if os.path.exists(difficulty_path):
-        with open(difficulty_path, "r") as f:
-            difficulty = f.read().strip().lower()
-
     if owner_score is not None:
         total_score = owner_score
         print(f"Using owner-set score (final). Total weightage: {total_score}")
     elif difficulty:
         total_score = {"easy": 20, "medium": 25, "hard": 30}.get(difficulty, 100)
-        print(f"Detected difficulty: {difficulty}. Total weightage: {total_score}")
+        source_label = {
+            "owner": "owner-set",
+            "llm": "LLM-generated",
+            "default": "default",
+        }.get(difficulty_source, difficulty_source)
+        print(f"Using {source_label} difficulty: {difficulty}. Total weightage: {total_score}")
     else:
-        print("Warning: generated_difficulty.txt not found. Using default total weightage: 100")
+        print(
+            "Warning: no owner difficulty and generated_difficulty.txt not found. "
+            "Using default total weightage: 100"
+        )
+
+    routing = apply_testcases_routing(difficulty)
+    effective = difficulty or routing["tier"]
+    source_label = {
+        "owner": "owner",
+        "llm": "llm",
+        "default": "default→medium",
+    }.get(difficulty_source, difficulty_source)
+    print(
+        f"Testcase LLM routing: difficulty={effective} (source={source_label}) "
+        f"primary={routing['model']}@{routing['effort']} "
+        f"fallbacks=[{routing['fallbacks_display']}]"
+    )
 
     # 4. Count + type
     num_testcases = args.count

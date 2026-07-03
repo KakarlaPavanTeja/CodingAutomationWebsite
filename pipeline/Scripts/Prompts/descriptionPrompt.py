@@ -1,3 +1,8 @@
+_CONSTRAINTS_NO_META = """
+- **NO preparer meta-notes in Constraints.** List only the bounds/invariants themselves — e.g. `1 ≤ N ≤ 10^5`. NEVER append editorial asides such as `(inferred; ...)`, `*(inferred; the source omitted explicit bounds — adjust to the actual judge limits)*`, or similar notes about how a bound was chosen. If the input statement contains such notes, drop them and keep only the numeric limits.
+"""
+
+
 def get_structure_only_prompt(problem_name, question_type, user_code):
     """
     Prompt for scenario_level == "none".
@@ -21,7 +26,7 @@ Rewrite the descriptive prose so it reads well and is easy to follow — but you
 1. **Scenario / framing** — Keep the SAME context. If the original is a direct, technical problem (no story), keep it technical — do NOT invent a story. If the original has a story/scenario, keep that same story — do NOT replace it with a different one.
 2. **Variable & function names** — Keep the EXACT original variable names and the EXACT original function name and signature. Do NOT rename or invent new names.
 3. **Examples** — Keep the SAME examples: identical input values, identical output values, identical indices/explanatory facts. Do NOT add, drop, reorder, or alter any example's values. You MAY clean up the wording/formatting of an explanation, but every number/string/index stays the same.
-4. **Constraints** — Keep the SAME constraint bounds and values exactly. Do NOT tighten, loosen, add, or remove any limit.
+4. **Constraints** — Keep the SAME constraint bounds and values exactly. Do NOT tighten, loosen, add, or remove any limit. Preparer meta-notes (e.g. `(inferred; ...)`) are NOT part of the constraint — omit them even if present in the source.
 
 **WHAT YOU SHOULD DO (THE REBUILD):**
 - Rewrite the problem statement prose for clarity and flow (you are NOT limited to the original sentences), as long as the meaning, the four pillars above, and the I/O behavior stay identical.
@@ -111,6 +116,7 @@ Your response MUST END immediately after the **Output Format** section.
 
 **Constraints**
 - Present the ORIGINAL constraints as bullet points with backticks and normalized notation (e.g. `5 ≤ |s| ≤ 10^5`). Do NOT change any values or bounds.
+{_CONSTRAINTS_NO_META}
 
 **Input Format**
 - Title: **Input Format** followed by a blank line.
@@ -131,6 +137,7 @@ Your response MUST END immediately after the **Output Format** section.
 If any instruction above ever conflicts with the FOUR PILLARS (scenario, variable/function names, example values, constraint values), **THE FOUR PILLARS WIN** — never change them to satisfy a formatting or rewriting rule.
 """
 
+    prompt += _function_example_format_addon(question_type)
     if question_type.lower() == 'node':
         prompt += """
     **For Node-Based Questions:**
@@ -227,6 +234,20 @@ You MUST use the `USER CODE` provided below as the absolute SOURCE OF TRUTH for 
 """
 
 
+
+
+def _function_example_format_addon(question_type: str) -> str:
+    qt = (question_type or "").lower()
+    if qt in ("node", "nonfunction"):
+        return ""
+    return """
+**FUNCTION-BASED EXAMPLE INPUT/OUTPUT (MANDATORY)**:
+- In each **Input:** block, write ONE NAMED VARIABLE ASSIGNMENT PER LINE using the function parameter names from **Your Task** (e.g. `n = 3`, `nums = [1, 2, 3]`).
+- Do NOT use raw stdin layout or anonymous lines without variable names.
+- In each **Output:** block, write ONLY the function return value (scalar, array, or structured value) exactly as the reference code returns it — not full-program stdout unless the code prints as its final result.
+- **Input Format** and **Output Format** must describe the same variable-based representation shown in the examples.
+"""
+
 def _node_type_addon(question_type: str) -> str:
     if question_type.lower() == "node":
         return """
@@ -271,6 +292,7 @@ Write ONLY the **problem statement prose** for a rephrased coding question. Use 
 - function: `yourChosenFunctionName`
 - variables: `name1`, `name2`, ...
 {_node_type_addon(question_type)}
+{_function_example_format_addon(question_type)}
 """
 
 
@@ -362,6 +384,7 @@ Write ONLY these four sections, in order: **Your Task**, **Constraints**, **Inpu
 - Bullet points with backticks.
 - Every numeric range MUST have explicit bounds (e.g. `0 ≤ n ≤ 10^5`).
 - Infer reasonable bounds from the problem and examples if unspecified.
+{_CONSTRAINTS_NO_META}
 
 **Input Format**
 - Title: **Input Format** followed by a blank line.
@@ -615,6 +638,7 @@ Your response MUST END immediately after the **Output Format** section.
 - **CRITICAL - VALUES MUST BE DEFINED**: Every constraint that has a numeric range MUST state explicit bounds. Do NOT use vague phrasing like "non-negative integer", "values may be negative, zero, or positive", or "finite count" without giving concrete limits.
 - **REQUIRED FORMAT**: For each bounded quantity, write inequalities with concrete values, e.g. `0 ≤ k ≤ 10^4`, `−10^4 ≤ value ≤ 10^4`, `0 ≤ length ≤ 500`, `1 ≤ n ≤ 10^5`. Infer reasonable bounds from the problem and examples if the original does not specify them.
 - Include one bullet per variable or quantity that has a range (e.g. count of inputs, size of arrays, value range of elements). Optional invariants (e.g. "list is sorted") may stay as short sentences.
+{_CONSTRAINTS_NO_META}
 
 **Input Format**
 - Title: **Input Format** followed by a blank line.
@@ -639,6 +663,7 @@ Your response MUST END immediately after the **Output Format** section.
 - **CONSISTENCY**: The output representation (e.g., a JSON-formatted string, a space-separated list, or a single value) MUST match exactly what the `USER CODE` produces.
 """
     
+    prompt += _function_example_format_addon(question_type)
     if question_type.lower() == 'node':
         prompt += """
     **For Node-Based Questions:**
@@ -668,7 +693,7 @@ Rewrite the descriptive prose for clarity — but keep the problem's identity in
 1. **Scenario / framing** — Keep the SAME context. If the original is direct/technical, keep it technical; if it has a story, keep that same story.
 2. **Variable names** — Keep the EXACT original variable names. Do NOT rename or invent new names.
 3. **Examples** — Keep the SAME examples: identical input values, identical output values, identical explanatory facts. You MAY clean wording, but every number/string stays the same.
-4. **Constraints** — Keep the SAME constraint bounds and values exactly.
+4. **Constraints** — Keep the SAME constraint bounds and values exactly. Preparer meta-notes (e.g. `(inferred; ...)`) are NOT part of the constraint — omit them even if present in the source.
 
 **CRITICAL — NOTATION NORMALIZATION:**
 The rendered page does NOT support LaTeX/MathJax. Convert all math notation to clean plain text. Remove `$...$`, `\\(...\\)`, `\\[...\\]`; replace `\\le`/`\\leq` → `≤`, `\\ge`/`\\geq` → `≥`, `\\times` → `×`, `\\cdot` → `·`, `\\ldots`/`\\dots` → `...`; keep exponents as `10^9 + 7`. There must be ZERO backslash-LaTeX commands left.
@@ -707,6 +732,7 @@ The rendered page does NOT support LaTeX/MathJax. Convert all math notation to c
 
 **Constraints**
 - Present the ORIGINAL constraints as bullet points with backticks and normalized notation (e.g. `5 ≤ |s| ≤ 10^5`). Do NOT change any values.
+{_CONSTRAINTS_NO_META}
 
 **Examples**
 - Keep the SAME examples as the original (same number, same values). Re-format into this exact layout:
@@ -796,6 +822,7 @@ Use the `USER CODE` below as the absolute source of truth for **Input Format** a
 
 **Constraints:**
 - Explicit numeric bounds with inequalities, e.g. `1 ≤ n ≤ 10^5`
+{_CONSTRAINTS_NO_META}
 
 **Examples format:**
 

@@ -1,4 +1,5 @@
 # LLM API client — OpenAI SDK pointed at the Replit AI (OpenRouter) gateway
 openai>=1.0.0
+tiktoken>=0.7.0
 requests>=2.31.0
 boto3>=1.34.0

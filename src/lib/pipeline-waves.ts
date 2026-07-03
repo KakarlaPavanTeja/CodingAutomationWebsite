@@ -36,6 +36,24 @@ export const TESTCASE_CHAIN_STEPS: StepId[] = [
   "harden_testcases",
 ];
 
+
+function requiresLabelAfterStep(
+  stepId: StepId,
+  downstream: StepId[],
+  index: number
+): { label: string; subtitleSuffix?: string } {
+  const hardenIdx = downstream.indexOf("harden_testcases");
+  if (hardenIdx >= 0 && index > hardenIdx) {
+    return {
+      label: getStepConfig("benchmark_testcases").label,
+      subtitleSuffix: " — Strengthen may still be running in parallel (optional)",
+    };
+  }
+  const prevId = index === 0 ? ("generate_question" as StepId) : downstream[index - 1];
+  const label = prevId === "generate_question" ? "Generate Question" : getStepConfig(prevId).label;
+  return { label };
+}
+
 export interface PipelineWave {
   id: string;
   title: string;
@@ -203,7 +221,7 @@ export function buildMainPipelineSection(
       waves.push({
         id: "main-testcase-chain",
         title: `Step ${waves.length + 1}`,
-        subtitle: "Testcase pipeline — sequential after Generate Question",
+        subtitle: "Testcase pipeline — sequential after Generate Question (Strengthen is optional / non-blocking)",
         parallel: false,
         horizontal: true,
         items: chainIds.map((stepId, idx) => {
@@ -215,8 +233,11 @@ export function buildMainPipelineSection(
           return {
             kind: "step" as const,
             id: stepId,
-            label: config.label,
-            description: config.description,
+            label: stepId === "harden_testcases" ? `${config.label} (optional)` : config.label,
+            description:
+              stepId === "harden_testcases"
+                ? `${config.description ?? ""} Does not block Split Code or packaging; Execute waits while this step is running.`.trim()
+                : config.description,
             requiresLabel,
           };
         }),
@@ -226,19 +247,22 @@ export function buildMainPipelineSection(
     }
 
     const config = getStepConfig(id);
-    const prevId = i === 0 ? ("generate_question" as StepId) : downstream[i - 1];
-    const requiresLabel =
-      prevId === "generate_question" ? "Generate Question" : getStepConfig(prevId).label;
+    const req = requiresLabelAfterStep(id, downstream, i);
+    const requiresLabel = req.label;
 
     if (PARALLEL_LANG_STEPS.includes(id)) {
       const langs = getLangsForStep(id, enabledLanguages);
+      const executeNote =
+        id === "execute_tests_function" || id === "execute_tests_nonfunction"
+          ? " — waits for Strengthen if it is still running"
+          : "";
       waves.push({
         id: `main-${id}`,
         title: `Step ${waves.length + 1}`,
         subtitle:
           langs.length > 1
-            ? `Parallel per language — after ${requiresLabel}`
-            : `After ${requiresLabel}`,
+            ? `Parallel per language — after ${requiresLabel}${req.subtitleSuffix ?? ""}${executeNote}`
+            : `After ${requiresLabel}${req.subtitleSuffix ?? ""}${executeNote}`,
         parallel: langs.length > 1,
         horizontal: langs.length > 1,
         items: langs.map((lang) => ({
@@ -257,7 +281,7 @@ export function buildMainPipelineSection(
     waves.push({
       id: `main-${id}`,
       title: `Step ${waves.length + 1}`,
-      subtitle: `After ${requiresLabel}`,
+      subtitle: `After ${requiresLabel}${req.subtitleSuffix ?? ""}`,
       parallel: false,
       items: [
         {

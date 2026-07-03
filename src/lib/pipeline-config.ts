@@ -60,7 +60,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     id: "generate_wrong_solutions",
     label: "Generate Wrong Solutions",
     description:
-      "Create plausible incorrect Python solutions for the wrong-approach benchmark gate (B2). Uses Claude Sonnet 4.5 via OpenRouter.",
+      "Create plausible incorrect Python solutions for the wrong-approach benchmark gate (B2). Uses Claude Sonnet 5 via OpenRouter (reasoning medium).",
     script: "Scripts/generate_wrong_solutions.py",
     subSteps: [],
     hasLanguageSelector: false,
@@ -110,7 +110,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     id: "execute_tests_function",
     label: "Execute Tests (Function-based)",
     description: "Run test cases against split code for each language",
-    script: "Scripts/execution_manager_v2.py",
+    script: "Scripts/execution_manager_v3.py",
     subSteps: [],
     hasLanguageSelector: true,
     hasTestcaseCount: false,
@@ -121,7 +121,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     id: "execute_tests_nonfunction",
     label: "Execute Tests (Non-function)",
     description: "Run test cases against full solutions for each language",
-    script: "Scripts/execution_manager_v2.py",
+    script: "Scripts/execution_manager_v3.py",
     subSteps: [],
     hasLanguageSelector: true,
     hasTestcaseCount: false,
@@ -267,6 +267,18 @@ const SUBSTEP_TO_PY: Record<string, { steps: string; langs?: string }> = {
   translate_nodejs: { steps: "codes", langs: "nodejs" },
 };
 
+const EXECUTE_TESTS_V2_SCRIPT = "Scripts/execution_manager_v2.py";
+const EXECUTE_TESTS_V3_SCRIPT = "Scripts/execution_manager_v3.py";
+
+/** Node.js stays on v2; Python/C++/Java use the new compiler (v3). */
+export function executionScriptForExecuteTests(languages: string[]): string {
+  const langs = languages.filter(Boolean);
+  if (langs.length > 0 && langs.every((l) => l === "nodejs")) {
+    return EXECUTE_TESTS_V2_SCRIPT;
+  }
+  return EXECUTE_TESTS_V3_SCRIPT;
+}
+
 export function buildCommand(
   stepId: StepId,
   mode: PipelineMode,
@@ -332,5 +344,11 @@ export function buildCommand(
     if (maxRounds) args.push("--max-rounds", maxRounds);
   }
 
-  return { script: config.script, args };
+  let script = config.script;
+  if (stepId === "execute_tests_function" || stepId === "execute_tests_nonfunction") {
+    const langs = filterLanguagesForCommand(stepId, languages, languages);
+    script = executionScriptForExecuteTests(langs.length ? langs : languages);
+  }
+
+  return { script, args };
 }

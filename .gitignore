@@ -51,6 +51,7 @@ __pycache__/
 # pipeline runtime / generated workspaces (per-problem Inputs/Outputs, usage counters)
 pipeline/problems/
 pipeline/Outputs/usage_tracker.json
+pipeline/temp_compiler_sandbox/
 
 # stray working notes
 /clear picture.md

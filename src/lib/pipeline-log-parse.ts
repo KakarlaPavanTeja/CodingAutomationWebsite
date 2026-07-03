@@ -60,6 +60,74 @@ export type PipelineLogLineKind =
   | "info"
   | "default";
 
+
+/** Hide machine-readable sentinel lines from the live log stream (shown in Execution Logs tab). */
+export function shouldHideFromLogDisplay(line: string): boolean {
+  return line.trimStart().startsWith("@@TCRESULT@@");
+}
+
+/** True for ASCII table border / row lines emitted by execution_manager_*._print_table. */
+export function isAsciiTableLine(line: string): boolean {
+  const t = line.trimStart();
+  return /^\+[-+]+\+$/.test(t) || /^\| /.test(t);
+}
+
+export type DisplayLogEntry =
+  | { kind: "line"; log: LogLine; index: number }
+  | { kind: "table"; title: string | null; body: string; logs: LogLine[]; index: number };
+
+/** Group consecutive table lines into one block; drop sentinel records from display. */
+export function groupLogLinesForDisplay(logs: LogLine[]): DisplayLogEntry[] {
+  const entries: DisplayLogEntry[] = [];
+  let i = 0;
+
+  while (i < logs.length) {
+    const log = logs[i];
+    if (shouldHideFromLogDisplay(log.line)) {
+      i++;
+      continue;
+    }
+
+    const trimmed = log.line.trimStart();
+    const nextIsTable = i + 1 < logs.length && isAsciiTableLine(logs[i + 1].line.trimStart());
+
+    if (isAsciiTableLine(trimmed) || nextIsTable) {
+      let title: string | null = null;
+      let start = i;
+      if (!isAsciiTableLine(trimmed) && nextIsTable) {
+        title = pipelineLogDisplayText(log.line);
+        start = i + 1;
+        i++;
+      }
+
+      const tableLogs: LogLine[] = [];
+      const bodyLines: string[] = [];
+      while (i < logs.length && !shouldHideFromLogDisplay(logs[i].line)) {
+        const t = logs[i].line.trimStart();
+        if (!isAsciiTableLine(t)) break;
+        bodyLines.push(t);
+        tableLogs.push(logs[i]);
+        i++;
+      }
+
+      if (bodyLines.length > 0) {
+        entries.push({ kind: "table", title, body: bodyLines.join("\n"), logs: tableLogs, index: start });
+        continue;
+      }
+      if (title) {
+        entries.push({ kind: "line", log, index: start - 1 });
+        i = start;
+        continue;
+      }
+    }
+
+    entries.push({ kind: "line", log, index: i });
+    i++;
+  }
+
+  return entries;
+}
+
 export function classifyPipelineLogLine(line: string, stream: LogLine["stream"]): PipelineLogLineKind {
   const trimmed = line.trimStart();
 
@@ -76,6 +144,7 @@ export function classifyPipelineLogLine(line: string, stream: LogLine["stream"])
   if (/^(Gate |Hard failures:)/i.test(trimmed)) return "gate";
   if (/^    (Optimal|Cases:|Test cases:|Brute|Size split:|total=)/i.test(line)) return "info";
   if (/^Loaded \d+/i.test(trimmed)) return "info";
+  if (/\]\s+Progress\s+\d+\/\d+\s+-/i.test(trimmed)) return "progress";
 
   return "default";
 }
@@ -96,7 +165,16 @@ export function formatLogElapsed(baseTs: number, lineTs: number): string {
 
 /** Display text with leading indent / bullet removed (layout handles hierarchy). */
 export function pipelineLogDisplayText(line: string): string {
-  return line.trimStart().replace(/^[▸✓✗⚠]\s*/, "");
+  let text = line.trimStart().replace(/^[▸✓✗⚠]\s*/, "");
+  // Legacy execution progress lines may include IO/error tails — keep verdict + timing only.
+  if (/\]\s+Progress\s+\d+\/\d+\s+-/i.test(text)) {
+    text = text
+      .replace(/\s*\|\s*input_s3=[^|]*/gi, "")
+      .replace(/\s*\|\s*output_s3=[^|]*/gi, "")
+      .replace(/\s*\|\s*s3_error=[^|]*/gi, "")
+      .replace(/\s*\|\s*error=[^|]*/gi, "");
+  }
+  return text;
 }
 
 export function pipelineLogPrefixIcon(kind: PipelineLogLineKind): string | null {

@@ -5,7 +5,7 @@ Runs AFTER `generate_testcases` and BEFORE `benchmark_testcases` / `harden_testc
 Writes runnable incorrect Python programs to `Outputs/wrong_solutions/*.py` for the
 B2 wrong-approach gate in benchmark_suite.py.
 
-Uses Claude via OpenRouter (purpose `wrong_solutions`, default anthropic/claude-sonnet-4.5).
+Uses Claude Sonnet 5 via OpenRouter (purpose `wrong_solutions`, reasoning medium).
 """
 
 from __future__ import annotations
@@ -230,7 +230,7 @@ def main():
         "cost_usd": 0.0,
     }
 
-    print("Calling LLM via OpenRouter (Claude Sonnet 4.5) for wrong-approach solutions...")
+    print("Calling LLM via OpenRouter (Claude Sonnet 5) for wrong-approach solutions...")
     content, usage = call_llm(system_prompt, user_prompt, purpose="wrong_solutions")
     _log_usage(usage, "wrong_solutions_generation", usage_totals)
 

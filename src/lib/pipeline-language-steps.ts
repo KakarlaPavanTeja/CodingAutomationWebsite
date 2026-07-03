@@ -1,5 +1,6 @@
 import { LANGUAGES } from "@/lib/pipeline-config";
 import type { QuestionSubStepId, StepId, StepState, SubStepRunState } from "@/types/pipeline";
+import { isSoftOrphanExitCode } from "@/lib/pipeline-orphan";
 
 const LANG_TO_TRANSLATE: Record<string, QuestionSubStepId> = {
   cpp: "translate_cpp",
@@ -120,13 +121,20 @@ export function recomputeLanguageStepStatus(
   if (statuses.every((s) => s === "completed" || s === "skipped")) {
     const ends = required.map((l) => runs[l]?.endTime).filter((t): t is number => t != null);
     const starts = required.map((l) => runs[l]?.startTime).filter((t): t is number => t != null);
+    const anyHardFail = required.some((l) => {
+      const run = runs[l];
+      if (!run) return false;
+      if (run.status === "failed") return true;
+      const code = run.exitCode;
+      return code !== null && code !== 0 && !isSoftOrphanExitCode(code);
+    });
     return {
-      status: "completed",
+      status: anyHardFail ? "failed" : "completed",
       startTime: starts.length ? Math.min(...starts) : state.startTime,
       // Reuse the stored end time when child end times are absent so the
       // displayed duration stays stable across recomputes (P1-M4 / timer bug #1).
       endTime: ends.length ? Math.max(...ends) : state.endTime ?? Date.now(),
-      exitCode: 0,
+      exitCode: anyHardFail ? 1 : 0,
     };
   }
   if (statuses.some((s) => s === "failed")) {

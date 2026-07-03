@@ -7,6 +7,7 @@ import { GlobalConfig } from "@/components/pipeline/GlobalConfig";
 import { PipelineWaveFlow } from "@/components/pipeline/PipelineWaveFlow";
 import { getPipelineUiWorkflowSteps } from "@/lib/pipeline-config";
 import { usePipeline } from "@/lib/pipeline-context";
+import { getTitlesSubStepStatus, hasTitleForPackaging } from "@/lib/pipeline-title";
 import type { PipelineStepUsageMap } from "@/lib/pipeline-step-list";
 import type { StepId } from "@/types/pipeline";
 import { AlertTriangle, ChevronDown, Loader2, PlayCircle, RotateCcw, StopCircle } from "lucide-react";
@@ -115,7 +116,12 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
 
   const gqEnabledSubSteps = stepStates.get("generate_question")?.enabledSubSteps ?? [];
 
-  const titleMissing = packagingStepsPending && !ownerTitle.trim();
+  const titlesSubStepStatus = getTitlesSubStepStatus(
+    stepStates.get("generate_question")?.subStepRuns
+  );
+  const titleMissing =
+    packagingStepsPending &&
+    !hasTitleForPackaging({ ownerTitle, generateTitleWithAi, titlesSubStepStatus });
   const configOpen = configToggle ?? (!stateLoading && titleMissing);
 
   if (stateLoading) {
@@ -198,15 +204,27 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
             <p className="text-xs text-muted-foreground min-w-0">
               Running pipeline… steps launch as prerequisites complete.
             </p>
-            <Button
-              size="sm"
-              variant="destructive"
-              className="h-9 px-3 text-sm shrink-0"
-              onClick={cancelRunAll}
-            >
-              <StopCircle className="w-4 h-4 mr-1.5" />
-              Cancel run all
-            </Button>
+            <div className="flex items-center gap-2 shrink-0">
+              {!isAnyRunning && hasIncompleteSteps && (
+                <Button
+                  size="sm"
+                  className="h-9 px-3 text-sm"
+                  onClick={runAll}
+                >
+                  <PlayCircle className="w-4 h-4 mr-1.5" />
+                  Continue run all
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="destructive"
+                className="h-9 px-3 text-sm"
+                onClick={cancelRunAll}
+              >
+                <StopCircle className="w-4 h-4 mr-1.5" />
+                Cancel run all
+              </Button>
+            </div>
           </>
         ) : (
           <div className="flex flex-col items-center gap-1 w-full sm:w-auto sm:flex-row">

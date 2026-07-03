@@ -48,13 +48,19 @@ import {
 import { parsePipelineLogContent } from "@/lib/pipeline-log-parse";
 import { effectiveStepStatus, isRunStillInFlight, isSoftOrphanExitCode } from "@/lib/pipeline-orphan";
 import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
+import {
+  getTitlesSubStepStatus,
+  hasTitleForPackaging,
+  packagingTitleResolvable,
+  parseGeneratedTitleFirstLine,
+} from "@/lib/pipeline-title";
 
 function requiresOwnerTitle(stepId: StepId): boolean {
   return stepId === "package_platform" || stepId === "prepare_platform_json";
 }
 
 const TITLE_REQUIRED_MSG =
-  'This step needs a problem title. Open "Pipeline settings", fill in "Title (short text)", click Save, then re-run.';
+  'This step needs a problem title. Enter one in "Pipeline settings" and Save, or enable "Generate title with AI" and complete the Titles step, then re-run.';
 const TITLE_PREREQ_MSG =
   'Skipped: depends on "Package for Platform", which was skipped because no problem title is set.';
 
@@ -70,6 +76,44 @@ function titleGatedSteps(candidates: StepId[]): Set<StepId> {
     if (requiresOwnerTitle(id) || (prereq && gated.has(prereq))) gated.add(id);
   }
   return gated;
+}
+
+/** Reset a failed/stopped step so Run All can launch it again (keeps completed lang tiles). */
+function buildRunAllResetPatch(cur: StepState): Partial<StepState> {
+  if (cur.id === "generate_question") {
+    return {
+      status: "pending",
+      exitCode: null,
+      startTime: null,
+      endTime: null,
+    };
+  }
+  const reset: Partial<StepState> = {
+    status: "pending",
+    exitCode: null,
+    startTime: null,
+    endTime: null,
+    logs: [],
+  };
+  if (cur.languageSubRuns && Object.keys(cur.languageSubRuns).length > 0) {
+    const languageSubRuns: Record<string, SubStepRunState> = {};
+    for (const [lang, run] of Object.entries(cur.languageSubRuns)) {
+      if (run.status === "completed") {
+        languageSubRuns[lang] = run;
+      } else {
+        languageSubRuns[lang] = {
+          ...run,
+          status: "pending",
+          exitCode: null,
+          startTime: null,
+          endTime: null,
+          logs: [],
+        };
+      }
+    }
+    reset.languageSubRuns = languageSubRuns;
+  }
+  return reset;
 }
 
 /** Visible "skipped — title required" state, with the reason in the step log. */
@@ -270,8 +314,13 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   );
   const [globalTestcaseCount, setGlobalTestcaseCount] = useState(0);
   const [ownerTitle, setOwnerTitleRaw] = useState("");
+  const ownerTitleRef = useRef("");
   const [generateTitleWithAi, setGenerateTitleWithAiRaw] = useState(false);
   const [defaultTagNames, setDefaultTagNamesRaw] = useState("");
+  useEffect(() => {
+    ownerTitleRef.current = ownerTitle;
+  }, [ownerTitle]);
+
   const ownerDifficultyRef = useRef("");
   // Reactive mirror of ownerDifficultyRef so the wave-graph gate can apply the
   // difficulty-skip rule (P1-H5). The ref stays for synchronous reads.
@@ -457,7 +506,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       }
 
       stepConfigs[GLOBAL_CONFIG_KEY] = {
-        ownerTitle,
+        ownerTitle: ownerTitleRef.current,
         generateTitleWithAi,
         defaultTagNames,
       };
@@ -509,6 +558,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   }, [ownerTitle, questionType, mode, updateStepState, savePipelineState]);
 
   const setOwnerTitle = useCallback((title: string) => {
+    ownerTitleRef.current = title;
     setOwnerTitleRaw(title);
   }, []);
 
@@ -587,6 +637,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         setGlobalTestcaseCount(state.testcase_count ?? 0);
 
         const savedGlobal = (state.step_configs?.[GLOBAL_CONFIG_KEY] ?? {}) as Partial<GlobalPipelineConfig>;
+        ownerTitleRef.current = savedGlobal.ownerTitle ?? "";
         setOwnerTitleRaw(savedGlobal.ownerTitle ?? "");
         setGenerateTitleWithAiRaw(savedGlobal.generateTitleWithAi ?? false);
         setDefaultTagNamesRaw(savedGlobal.defaultTagNames ?? "");
@@ -654,11 +705,10 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
             );
             if (titleRes.ok) {
               const data = await titleRes.json();
-              const firstLine =
-                data?.content?.split("\n").find((l: string) => l.trim())?.trim() ?? "";
-              if (firstLine) {
-                const cleaned = firstLine.replace(/^-\s*/, "").split("-")[0].trim();
-                if (cleaned) setOwnerTitleRaw(cleaned);
+              const cleaned = parseGeneratedTitleFirstLine(data?.content ?? "");
+              if (cleaned) {
+                ownerTitleRef.current = cleaned;
+                setOwnerTitleRaw(cleaned);
               }
             }
           } catch {
@@ -1129,18 +1179,18 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
               });
               runningSubStepsRef.current.delete(subStepId);
 
-              if (subStepId === "titles" && run.status === "completed" && currentProblemIdRef.current) {
+              if (subStepId === "titles" && run.status === "completed" && generateTitleWithAi && currentProblemIdRef.current) {
                 fetch(
                   `/api/files/read?problemId=${encodeURIComponent(currentProblemIdRef.current)}&path=${encodeURIComponent("Outputs/generated_titles.txt")}`
                 )
                   .then((r) => (r.ok ? r.json() : null))
                   .then((data) => {
                     if (data?.content) {
-                      const firstLine =
-                        data.content.split("\n").find((l: string) => l.trim())?.trim() ?? "";
-                      if (firstLine) {
-                        const cleaned = firstLine.replace(/^-\s*/, "").split("-")[0].trim();
+                      const cleaned = parseGeneratedTitleFirstLine(data.content);
+                      if (cleaned) {
+                        ownerTitleRef.current = cleaned;
                         setOwnerTitleRaw(cleaned);
+                        savePipelineState();
                       }
                     }
                   })
@@ -1495,16 +1545,27 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      if (requiresOwnerTitle(state.id) && !ownerTitle.trim()) {
-        const now = Date.now();
-        updateStepState(state.id, {
-          status: "failed",
-          exitCode: 1,
-          endTime: now,
-          logs: [{ stream: "stderr", line: TITLE_REQUIRED_MSG, ts: now }],
-        });
-        savePipelineState();
-        return;
+      if (requiresOwnerTitle(state.id)) {
+        const titlesSubStepStatus = getTitlesSubStepStatus(
+          stepStatesRef.current.get("generate_question")?.subStepRuns
+        );
+        if (
+          !hasTitleForPackaging({
+            ownerTitle: ownerTitleRef.current,
+            generateTitleWithAi,
+            titlesSubStepStatus,
+          })
+        ) {
+          const now = Date.now();
+          updateStepState(state.id, {
+            status: "failed",
+            exitCode: 1,
+            endTime: now,
+            logs: [{ stream: "stderr", line: TITLE_REQUIRED_MSG, ts: now }],
+          });
+          savePipelineState();
+          return;
+        }
       }
 
       if (PARALLEL_LANG_STEPS.includes(state.id)) {
@@ -1587,7 +1648,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       stopPolling,
       runGenerateQuestionOrchestrator,
       runParallelLanguageStep,
-      ownerTitle,
+      generateTitleWithAi,
     ]
   );
 
@@ -1806,24 +1867,47 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   // concurrently instead of one-at-a-time.
   const runAll = useCallback(() => {
     const steps = getPipelineUiWorkflowSteps(questionType, mode);
+    const snapshot = stepStatesRef.current;
     const incomplete = steps.filter((id) => {
-      const state = stepStates.get(id);
+      const state = snapshot.get(id);
       return !!state && state.status !== "completed";
     });
     // Packaging steps need a title. Without one, they and their editorial
     // dependents are marked "skipped" (visible in the UI, reason in the log)
     // instead of silently dropped — dropping only the packaging steps used to
     // leave the dependents queued forever behind a prerequisite that never ran.
-    const gated = ownerTitle.trim() ? new Set<StepId>() : titleGatedSteps(incomplete);
+    const titlesSubStepStatus = getTitlesSubStepStatus(
+      snapshot.get("generate_question")?.subStepRuns
+    );
+    const titleResolvable = packagingTitleResolvable({
+      ownerTitle,
+      generateTitleWithAi,
+      titlesSubStepStatus,
+      generateQuestionStillQueued: incomplete.includes("generate_question"),
+    });
+    const gated = titleResolvable ? new Set<StepId>() : titleGatedSteps(incomplete);
     if (gated.size > 0) {
       const now = Date.now();
       for (const id of gated) updateStepState(id, titleSkipPatch(id, now));
-      savePipelineState();
     }
     const remaining = incomplete.filter((id) => !gated.has(id));
-    if (remaining.length === 0) return;
+    if (remaining.length === 0) {
+      if (gated.size > 0) savePipelineState();
+      return;
+    }
+    // Clear stale launch guards and reset failed/stopped steps so the driver
+    // can pick them up again (completed language tiles are preserved).
+    for (const id of remaining) {
+      const cur = stepStatesRef.current.get(id);
+      if (!cur) continue;
+      if (cur.status === "failed" || cur.status === "stopped") {
+        launchingStepsRef.current.delete(id);
+        updateStepState(id, buildRunAllResetPatch(cur));
+      }
+    }
+    savePipelineState();
     setRunAllQueue(remaining);
-  }, [questionType, mode, stepStates, ownerTitle, updateStepState, savePipelineState]);
+  }, [questionType, mode, ownerTitle, generateTitleWithAi, updateStepState, savePipelineState]);
 
   const cancelRunAll = useCallback(() => {
     setRunAllQueue([]);
@@ -1845,7 +1929,18 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       // Title-gated steps can't re-run without a title: mark them visibly
       // skipped (reason in the log) instead of resetting them to pending and
       // silently leaving them out of the queue.
-      const gated = ownerTitle.trim()
+      const titlesSubStepStatus = getTitlesSubStepStatus(
+        stepStatesRef.current.get("generate_question")?.subStepRuns
+      );
+      const titleResolvable = packagingTitleResolvable({
+        ownerTitle,
+        generateTitleWithAi,
+        titlesSubStepStatus,
+        generateQuestionStillQueued:
+          ids.has("generate_question") &&
+          stepStatesRef.current.get("generate_question")?.status !== "completed",
+      });
+      const gated = titleResolvable
         ? new Set<StepId>()
         : titleGatedSteps(order.filter((id) => ids.has(id)));
       for (const id of ids) {
@@ -1921,6 +2016,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     // Steps that are kept (waiting) or launched — used to decide whether a
     // pending prerequisite is still going to run or was already dropped.
     const alive = new Set<StepId>();
+    const queued = new Set(runAllQueue);
 
     const gqState = stepStates.get("generate_question");
     const questionPhaseComplete = isQuestionPhaseComplete(gqState, questionType, gqContext());
@@ -1953,15 +2049,17 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           questionPhaseComplete
         );
         // Only DROP a queued step if a prerequisite has terminally failed/stopped
-        // and is NOT being retried. A prerequisite that is merely transitioning
-        // (running -> completed, or its status briefly lagging the wave) must keep
-        // the step queued — previously, that transient window dropped the whole
-        // downstream chain and stalled Run All between phases (GQ->testcases,
-        // execute->package, ...).
+        // and is NOT being retried. Count any prerequisite still on this Run All
+        // queue as "being retried" even before it is processed in this pass —
+        // otherwise a downstream step could be dropped while its failed upstream
+        // is still queued to run, stalling the whole chain on a second Run All.
         const anyBlockingDead = blocking.some((b) => {
           const st = stepStates.get(b)?.status;
           const beingRetried =
-            alive.has(b) || launchingStepsRef.current.has(b) || st === "running";
+            alive.has(b) ||
+            queued.has(b) ||
+            launchingStepsRef.current.has(b) ||
+            st === "running";
           return (st === "failed" || st === "stopped" || st === "skipped") && !beingRetried;
         });
         if (!anyBlockingDead) {
