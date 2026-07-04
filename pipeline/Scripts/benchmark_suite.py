@@ -61,6 +61,15 @@ BENCHMARK_STRESS_INPUT_CHARS = int(os.environ.get("BENCHMARK_STRESS_INPUT_CHARS"
 
 _BATCH_RUNNER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_batch_runner.py")
 
+
+def _use_compiler() -> bool:
+    return os.environ.get("BENCHMARK_USE_COMPILER", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
 SIZE_PREFIX = "size_"
 SIZE_BUCKETS = ("edge", "small", "medium", "large")
 
@@ -160,6 +169,11 @@ def run_solution(
     Run Python solution code with stdin piped. Returns (stdout, status).
     status: ok | timeout | error
     """
+    if _use_compiler():
+        from benchmark_compiler import run_solution_compiler
+
+        return run_solution_compiler(code_str, stdin_str, timeout)
+
     fd, path = tempfile.mkstemp(suffix=".py", text=True)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -190,6 +204,11 @@ def run_solutions_batch(
     timeout: float = BENCHMARK_RUN_TIMEOUT,
 ) -> list[tuple[str, str]]:
     """Run many stdin inputs in one Python process (much faster than N subprocess spawns)."""
+    if _use_compiler():
+        from benchmark_compiler import run_solutions_batch_compiler
+
+        return run_solutions_batch_compiler(code_str, inputs, timeout)
+
     if not inputs:
         return []
     if not os.path.exists(_BATCH_RUNNER):

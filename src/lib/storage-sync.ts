@@ -209,25 +209,13 @@ export async function uploadOutputsFromDir(
   return uploadDirToStorage(localOutputsDir, `${problemId}/outputs`);
 }
 
-/** Upload a log file content + save to pipeline_logs table. */
-export async function uploadLog(
+/** Live run: DB only (UI reads pipeline_logs). Skips object-storage egress. */
+export async function syncLogToDb(
   problemId: string,
   stepId: string,
   runId: string,
   content: string,
 ): Promise<void> {
-  // Storage backup. Two objects are written:
-  //  - a "latest" pointer keyed by step, convenient for a quick current view;
-  //  - a per-RUN archive keyed by runId, so re-running the same step no longer
-  //    overwrites earlier runs in storage. Without the per-run copy an exported
-  //    folder only ever shows the latest run per step, even though the DB
-  //    (pipeline_logs, one row per runId) has kept them all.
-  await uploadFile(`${problemId}/logs/${stepId}.log`, content);
-  if (runId) {
-    await uploadFile(`${problemId}/logs/runs/${stepId}/${runId}.log`, content);
-  }
-
-  // Upsert into pipeline_logs table for fast retrieval
   await db
     .insert(pipelineLogs)
     .values({
@@ -240,6 +228,20 @@ export async function uploadLog(
       target: pipelineLogs.runId,
       set: { content, createdAt: new Date() },
     });
+}
+
+/** End of run: persist log to object storage + DB. */
+export async function uploadLog(
+  problemId: string,
+  stepId: string,
+  runId: string,
+  content: string,
+): Promise<void> {
+  await uploadFile(`${problemId}/logs/${stepId}.log`, content);
+  if (runId) {
+    await uploadFile(`${problemId}/logs/runs/${stepId}/${runId}.log`, content);
+  }
+  await syncLogToDb(problemId, stepId, runId, content);
 }
 
 // ---------------------------------------------------------------------------
@@ -601,10 +603,15 @@ export async function cleanupTempDir(tmpDir: string): Promise<void> {
 export function startPeriodicSync(
   problemId: string,
   localOutputsDir: string,
-  intervalMs = 5000,
+  intervalMs = 30_000,
 ): { stop: () => Promise<void> } {
   const knownFiles = new Map<string, number>(); // path → last modified time
   let stopped = false;
+  // Large artifacts (testcases JSON, etc.) are uploaded once at step end.
+  const maxPeriodicBytes = Math.max(
+    0,
+    parseInt(process.env.PIPELINE_SYNC_MAX_FILE_BYTES || "524288", 10) || 524288,
+  );
 
   const sync = async () => {
     try {
@@ -616,6 +623,7 @@ export function startPeriodicSync(
         const mtime = s.mtimeMs;
 
         if (!knownFiles.has(relPath) || knownFiles.get(relPath)! < mtime) {
+          if (maxPeriodicBytes > 0 && s.size > maxPeriodicBytes) continue;
           const content = await readFile(localPath);
           await uploadFile(`${problemId}/outputs/${relPath}`, content);
           knownFiles.set(relPath, mtime);

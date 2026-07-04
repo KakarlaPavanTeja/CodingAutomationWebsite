@@ -62,9 +62,15 @@ export function useStepLogs(
 
   useEffect(() => {
     if (!canFetch) return;
-    fetchDiskLogs();
-    const ms = isRunning ? 2000 : 5000;
-    const id = setInterval(fetchDiskLogs, ms);
+
+    const poll = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      fetchDiskLogs();
+    };
+
+    poll();
+    const ms = isRunning ? 4000 : 8000;
+    const id = setInterval(poll, ms);
     return () => clearInterval(id);
   }, [canFetch, isRunning, fetchDiskLogs]);
 

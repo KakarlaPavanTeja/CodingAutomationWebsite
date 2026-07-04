@@ -12,7 +12,6 @@
 
 # testing
 /coverage
-.gitignore
 # next.js
 /.next/
 /out/
@@ -57,3 +56,13 @@ pipeline/temp_compiler_sandbox/
 # stray working notes
 /clear picture.md
 scripts/team-secrets.env
+/backups/
+.npmrc.local
+
+# personal quick-ref duplicate (canonical guide is docs/local-setup.md)
+LOCAL_SETUP.md
+
+# replit export/import tooling (outputs under /backups/)
+scripts/export-replit-db.mts
+scripts/export-replit-storage.mts
+scripts/import-db.mts

@@ -26,7 +26,7 @@ AWS_PROFILE = os.environ.get("AWS_PROFILE")
 # Testcase OUTPUTS are always sent inline as base64 — never uploaded to S3.
 # (Only large INPUTS use S3; see _build_testcase_io_objects.)
 
-LARGE_IO_THRESHOLD_BYTES = 10 * 1024
+LARGE_IO_THRESHOLD_BYTES = 50 * 1024
 
 LANG_CONFIG = {
     "C++": {

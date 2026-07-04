@@ -13,6 +13,7 @@ import {
   createTempWorkspace,
   uploadOutputsFromDir,
   uploadLog,
+  syncLogToDb,
   cleanupTempDir,
   startPeriodicSync,
   mirrorInputsFromDir,
@@ -82,6 +83,11 @@ async function resolveOwnerTitleForPipeline(
 function resolveInternalApiUrl(): string {
   const explicit = process.env.INTERNAL_API_URL || process.env.NEXTAUTH_URL;
   if (explicit) return explicit;
+
+  // Same-container loopback avoids billing outbound hairpin via the public URL.
+  if (process.env.PIPELINE_INTERNAL_LOOPBACK !== "0") {
+    return `http://127.0.0.1:${process.env.PORT || 5001}`;
+  }
 
   const isDeployment = Boolean(process.env.REPLIT_DEPLOYMENT);
   if (isDeployment) {
@@ -323,7 +329,15 @@ export async function POST(request: NextRequest) {
   const logFilePath = path.join(logsDir, `${logStepKey}.log`);
 
   const outputsDir = path.join(tmpDir, "Outputs");
-  const periodicSync = startPeriodicSync(safeProblemId, outputsDir, 5000);
+  const outputSyncMs = Math.max(
+    10_000,
+    parseInt(process.env.PIPELINE_OUTPUT_SYNC_MS || "30000", 10) || 30_000,
+  );
+  const logSyncMs = Math.max(
+    5_000,
+    parseInt(process.env.PIPELINE_LOG_SYNC_MS || "12000", 10) || 12_000,
+  );
+  const periodicSync = startPeriodicSync(safeProblemId, outputsDir, outputSyncMs);
 
   let logSyncInterval: ReturnType<typeof setInterval> | null = null;
   if (runId) {
@@ -331,12 +345,13 @@ export async function POST(request: NextRequest) {
       try {
         const logContent = await readFile(logFilePath, "utf-8").catch(() => "");
         if (logContent) {
-          await uploadLog(safeProblemId, logStepKey, runId!, logContent);
+          // DB only while running — UI polls pipeline_logs. Storage upload runs once on exit.
+          await syncLogToDb(safeProblemId, logStepKey, runId!, logContent);
         }
       } catch {
         // Non-fatal
       }
-    }, 3000);
+    }, logSyncMs);
   }
 
   const internalApiUrl = resolveInternalApiUrl();

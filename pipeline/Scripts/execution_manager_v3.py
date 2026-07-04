@@ -19,7 +19,7 @@ execution_manager_v2 so the frontend parser keeps working unchanged.
 
 Designed for VERY LARGE testcases sent all at once. Small IO stays inline as
 plain text; inputs above the S3 threshold (same as execution_manager_v2,
-default 10 KB) are uploaded and referenced via ``url`` on the input object
+default 50 KB) are uploaded and referenced via ``url`` on the input object
 (legacy ``input_s3_url`` is normalized before submit).
 
 Usage (same shape as execution_manager_v2):
@@ -37,7 +37,7 @@ Env overrides:
     NEW_COMPILER_POLL_SECS    poll interval (default 1.0)
     NEW_COMPILER_MAX_POLLS    max poll attempts (default 120)
     NEW_COMPILER_SUBMIT_TIMEOUT  submit POST timeout secs (default 60)
-    NEW_COMPILER_S3_THRESHOLD_BYTES  input size above which S3 is used (default 10240)
+    NEW_COMPILER_S3_THRESHOLD_BYTES  input size above which S3 is used (default 51200)
     NEW_COMPILER_FORCE_S3_INPUTS     if true, upload every input to S3 (testing)
     NEW_COMPILER_FORCE_S3_OUTPUTS    if true, upload every expected output to S3 (testing)
     NEW_COMPILER_CAPTURE_API         if true, write request/response JSON to captures/
@@ -534,10 +534,11 @@ def submit_compile(base_url, compile_payload):
     return data, elapsed_ms, url
 
 
-def poll_status(base_url, request_id):
+def poll_status(base_url, request_id, max_attempts=None):
     url = f"{base_url}/status/{request_id}"
+    attempts = max_attempts if max_attempts is not None else MAX_POLL_ATTEMPTS
     consecutive_errors = 0
-    for attempt in range(1, MAX_POLL_ATTEMPTS + 1):
+    for attempt in range(1, attempts + 1):
         try:
             resp = requests.get(url, timeout=POLL_TIMEOUT_SECONDS)
             resp.raise_for_status()
@@ -547,7 +548,7 @@ def poll_status(base_url, request_id):
             # must not abort the whole run — retry a few times, then give up.
             consecutive_errors += 1
             if not QUIET:
-                print(f"  poll {attempt:>3}/{MAX_POLL_ATTEMPTS} -> network error "
+                print(f"  poll {attempt:>3}/{attempts} -> network error "
                       f"({consecutive_errors}/{POLL_MAX_CONSECUTIVE_ERRORS}): "
                       f"{type(e).__name__}", flush=True)
             if consecutive_errors >= POLL_MAX_CONSECUTIVE_ERRORS:
@@ -560,7 +561,7 @@ def poll_status(base_url, request_id):
         consecutive_errors = 0
         status = data.get("status", "UNKNOWN")
         if not QUIET:
-            print(f"  poll {attempt:>3}/{MAX_POLL_ATTEMPTS} -> {status}", flush=True)
+            print(f"  poll {attempt:>3}/{attempts} -> {status}", flush=True)
         if status in ("SUCCESS", "FAILED", "NOT_FOUND", "ERROR"):
             return data
         time.sleep(POLL_INTERVAL_SECONDS)
