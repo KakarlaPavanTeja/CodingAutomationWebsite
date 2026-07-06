@@ -25,30 +25,47 @@ function parseArgs(argv: string[]): Record<string, string | boolean> {
   return out;
 }
 
+function loadEnvFiles() {
+  for (const file of [".env.local", ".env"]) {
+    const p = resolve(process.cwd(), file);
+    if (existsSync(p)) loadEnv({ path: p, quiet: true });
+  }
+}
+
 function maskUrl(url: string): string {
   try {
     const u = new URL(url);
-    return `host=${u.hostname} db=${u.pathname.replace(/^\//, "")}`;
+    const kind = u.hostname.includes("helium") ? "replit-helium" : "postgres";
+    return `${kind} host=${u.hostname} db=${u.pathname.replace(/^\//, "")}`;
   } catch {
     return "(local/socket)";
   }
 }
 
-function resolveSsl(url: string): false | "require" {
-  if (/^postgres(ql)?:\/\/\/[^/]/.test(url)) return false;
+function isLocalPostgresUrl(url: string): boolean {
+  if (/^postgres(ql)?:\/\/\/[^/]/.test(url)) return true;
   try {
-    const u = new URL(url);
-    if (["localhost", "127.0.0.1", "::1", ""].includes(u.hostname)) return false;
+    const host = new URL(url).hostname;
+    return ["localhost", "127.0.0.1", "::1", ""].includes(host);
   } catch {
     return false;
   }
-  return "require";
+}
+
+function connectPostgres(url: string) {
+  // Match src/lib/db/index.ts — do not force ssl: "require" (breaks Replit Helium).
+  const opts: postgres.Options<Record<string, never>> = {
+    max: 1,
+    prepare: false,
+    connect_timeout: 30,
+  };
+  if (isLocalPostgresUrl(url)) opts.ssl = false;
+  return postgres(url, opts);
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const envPath = resolve(process.cwd(), ".env.local");
-  if (existsSync(envPath)) loadEnv({ path: envPath, quiet: true });
+  loadEnvFiles();
 
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is not set. Run this inside Replit.");
@@ -61,7 +78,7 @@ async function main() {
   console.log(`Source: ${maskUrl(url)}`);
   console.log("Tables: users, profiles (logins only — no problems)\n");
 
-  const sql = postgres(url, { max: 1, prepare: false, ssl: resolveSsl(url) });
+  const sql = connectPostgres(url);
   const manifest = {
     exportedAt: new Date().toISOString(),
     database: maskUrl(url),

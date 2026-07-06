@@ -23,15 +23,20 @@ function parseArgs(argv: string[]): Record<string, string | boolean> {
   return out;
 }
 
-function resolveSsl(url: string): false | "require" {
-  if (/^postgres(ql)?:\/\/\/[^/]/.test(url)) return false;
+function isLocalPostgresUrl(url: string): boolean {
+  if (/^postgres(ql)?:\/\/\/[^/]/.test(url)) return true;
   try {
-    const u = new URL(url);
-    if (["localhost", "127.0.0.1", "::1", ""].includes(u.hostname)) return false;
+    const host = new URL(url).hostname;
+    return ["localhost", "127.0.0.1", "::1", ""].includes(host);
   } catch {
     return false;
   }
-  return "require";
+}
+
+function connectPostgres(url: string) {
+  const opts: postgres.Options<Record<string, never>> = { max: 1, prepare: false };
+  if (isLocalPostgresUrl(url)) opts.ssl = false;
+  return postgres(url, opts);
 }
 
 async function importUsers(sql: postgres.Sql, fromDir: string) {
@@ -61,14 +66,16 @@ async function importUsers(sql: postgres.Sql, fromDir: string) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const fromDir = resolve(process.cwd(), String(args.from || "scripts/team-users-export"));
-  const envPath = resolve(process.cwd(), ".env.local");
-  if (existsSync(envPath)) loadEnv({ path: envPath, quiet: true });
+  for (const file of [".env.local", ".env"]) {
+    const p = resolve(process.cwd(), file);
+    if (existsSync(p)) loadEnv({ path: p, quiet: true });
+  }
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is not set in .env.local");
   if (!existsSync(join(fromDir, "json", "users.json"))) {
     throw new Error(`No export at ${fromDir}/json/users.json`);
   }
-  const sql = postgres(url, { max: 1, prepare: false, ssl: resolveSsl(url) });
+  const sql = connectPostgres(url);
   try {
     console.log(`Importing from: ${fromDir}`);
     await importUsers(sql, fromDir);
