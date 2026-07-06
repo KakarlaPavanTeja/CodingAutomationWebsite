@@ -1,27 +1,26 @@
 # Local Setup Guide
 
-Run the whole app on your own machine — no Replit. Postgres runs in **Docker**
-(identical on Windows / macOS / Linux, no password/login headaches), files are
-stored on your local disk, and you create your own account.
+Run the whole app on your own machine. It connects to the team's **shared cloud
+Postgres (Neon)** via `DATABASE_URL` — **no local database, no Docker**. Uploaded
+files are stored on your local disk, and you create your own account.
 
-> The Replit database is **not** imported. You start with an empty DB and sign up fresh.
+> Everyone shares the same cloud database, so the users and problems you see are
+> the same as your teammates'.
 
 ---
 
 ## Prerequisites
 
-The setup script can auto-install Node and Python for you, but **Docker you must
-install yourself** (it needs a GUI installer on Windows/macOS):
+The setup script can auto-install Node and Python for you. You only need Git and
+an internet connection.
 
 | Tool | Version | Notes |
 |------|---------|-------|
-| **Docker** | latest | **Windows/macOS:** [Docker Desktop](https://www.docker.com/products/docker-desktop/). **Linux:** Docker Engine. Must be **running** before setup. |
+| Git | any | Auto-installed if missing |
 | Node.js | 20+ | Auto-installed if missing |
 | Python | 3.11+ | Auto-installed if missing |
-| Git | any | Auto-installed if missing |
 
-**Before running setup, start Docker** and wait until it reports *running*
-(whale icon steady on Windows/macOS).
+No Docker, no local Postgres — the database lives in the cloud.
 
 ---
 
@@ -34,14 +33,16 @@ git clone https://github.com/KakarlaPavanTeja/CodingAutomationWebsite.git
 cd CodingAutomationWebsite
 ```
 
-### 2. API keys (from team lead)
+### 2. Secrets (from team lead)
 
 ```bash
 cp scripts/team-secrets.env.example scripts/team-secrets.env
-# Edit scripts/team-secrets.env — OPENROUTER_API_KEY, CRON_SECRET, ADMIN_SECRET_KEY
+# Edit scripts/team-secrets.env — fill in all four:
+#   OPENROUTER_API_KEY, ADMIN_SECRET_KEY, CRON_SECRET, DATABASE_URL
 ```
 
-> Do **not** put a `DATABASE_URL` in this file — setup configures the local Docker DB.
+> `DATABASE_URL` is the shared Neon connection string — ask your team lead. It must
+> end with `?sslmode=require`. Setup writes it into `.env.local` for you.
 
 ### 3. Run setup
 
@@ -52,7 +53,7 @@ chmod +x scripts/setup-local.sh
 ./scripts/setup-local.sh --yes
 ```
 
-On a fresh Linux box that also needs Node/Python/Docker installed:
+On a fresh Linux box that also needs Node/Python installed:
 
 ```bash
 ./scripts/setup-local.sh --install-system-deps --yes
@@ -67,11 +68,12 @@ powershell -ExecutionPolicy Bypass -File scripts/setup-local.ps1 -Yes
 
 The script will:
 1. check/install Node, Python, Git
-2. verify Docker is running
-3. start Postgres in Docker (`docker compose up -d db`)
-4. create the Python venv and install pipeline deps
-5. write `.env.local`
-6. `npm install` and push the DB schema
+2. load secrets and validate `DATABASE_URL` is set
+3. create the Python venv and install pipeline deps
+4. write `.env.local`
+5. `npm install`
+
+There is **no** `db:push` — the shared database schema is managed centrally.
 
 ### 4. Start the app
 
@@ -95,74 +97,35 @@ For an **admin** account, use `ADMIN_SECRET_KEY` from `scripts/team-secrets.env`
 | Piece | Where |
 |-------|-------|
 | Web app | Node on your machine, port **5001** |
-| Database | **Postgres in Docker** (`codingautomation-db` container, port 5432) |
+| Database | **Shared cloud Postgres (Neon)** — via `DATABASE_URL` |
 | Python pipeline | venv at `~/.codingautomation-venv` |
-| Your login & problems | Local Docker Postgres |
+| Your login & problems | Shared cloud database (same for the whole team) |
 | Uploaded files | `.local-object-storage/` on your machine |
-
-Nothing connects to Replit in local mode.
 
 ---
 
 ## Daily use
 
 ```bash
-npm run db:up        # start Postgres (if not already running)
 npm run dev          # development
 # or: npm run build && npm run start
 ```
 
-Database controls:
-
-```bash
-npm run db:up        # start Postgres container
-npm run db:down      # stop it (your data is kept)
-npm run db:logs      # tail Postgres logs
-npm run db:reset     # WIPE the database and start fresh
-```
-
-Docker Desktop keeps the container across reboots (`restart: unless-stopped`),
-so usually you don't need `db:up` again after the first setup.
+Nothing to start or stop for the database — it's always available in the cloud.
 
 ---
 
 ## Troubleshooting
 
-### `Cannot connect to the Docker daemon` / "Docker is not running"
+### `DATABASE_URL missing in team-secrets.env`
 
-Start Docker Desktop (Windows/macOS) and wait until it says *running*, or on
-Linux: `sudo systemctl start docker`. Then re-run setup.
+You didn't fill in the shared database URL. Open `scripts/team-secrets.env`, paste
+the `DATABASE_URL` your team lead gave you, then re-run setup.
 
-### Linux: `permission denied` talking to Docker
+### Can't connect to the database
 
-You were just added to the `docker` group — **log out and back in** (or reboot),
-or prefix commands with `sudo` for this session. Setup handles this automatically
-by falling back to `sudo docker`.
-
-### Port 5432 already in use
-
-You have another Postgres running. Either stop it, or run on a different port:
-
-```bash
-# macOS/Linux
-DB_PORT=5433 ./scripts/setup-local.sh --yes
-```
-
-```powershell
-# Windows
-$env:DB_PORT=5433; powershell -ExecutionPolicy Bypass -File scripts/setup-local.ps1 -Yes
-```
-
-Setup writes the matching `DATABASE_URL` into `.env.local` automatically.
-
-### `db:push` reports nothing / schema errors
-
-Reset the database and re-push:
-
-```bash
-npm run db:reset
-npm run db:push
-```
+- Make sure `DATABASE_URL` is copied exactly and ends with `?sslmode=require`.
+- Check your internet connection — the database is in the cloud.
 
 ### Dev server shows "Ready" but the browser spins
 
@@ -170,11 +133,4 @@ Wait 1–2 minutes on the **first** page load, or use production mode:
 
 ```bash
 npm run build && npm run start
-```
-
-### Want a completely clean slate
-
-```bash
-docker compose down -v      # deletes the DB volume
-./scripts/setup-local.sh --yes
 ```
