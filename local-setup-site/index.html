@@ -269,7 +269,7 @@
         <h3>Shared database — keep in mind</h3>
         <ul>
           <li><b>One shared DB for everyone.</b> The problems and users you see are the same for the whole team — creating or especially <b>deleting</b> a problem affects everyone.</li>
-          <li><b>Uploaded files stay on your machine</b> (<code>.local-object-storage/</code>), they are <b>not</b> shared — you won't see files a teammate uploaded.</li>
+          <li><b>Generated outputs &amp; uploaded files are stored on your machine only</b> (<code>.local-object-storage/</code>) — they are <b>never stored in the shared Neon database</b>. The database holds only records (users, problems, pipeline configs, LLM usage), not the output files. So outputs are <b>not</b> shared between teammates.</li>
           <li><b>Old pipeline logs were not migrated</b> (the large run-log history only). Problems and generated outputs are intact; new runs create fresh logs.</li>
           <li><b>Free-tier cloud DB.</b> After a period of inactivity the first request may take a second or two to wake the database.</li>
         </ul>
