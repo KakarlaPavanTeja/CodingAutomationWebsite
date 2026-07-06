@@ -126,7 +126,7 @@ async function main() {
       const rows = await sql.unsafe(`select * from "${table}"`);
       manifest.tables[table] = rows.length;
       if (table === "users") {
-        for (const row of rows as { password_hash: string | null }[]) {
+        for (const row of rows as unknown as { password_hash: string | null }[]) {
           if (row.password_hash) manifest.usersWithPassword++;
           else manifest.usersWithoutPassword++;
         }

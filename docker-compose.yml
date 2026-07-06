@@ -1,0 +1,37 @@
+# Local development Postgres for CodingAutomationWebsite.
+#
+# Gives every teammate an identical Postgres on Windows / macOS / Linux with a
+# fixed password over TCP — no OS-user roles, no unix-socket / peer-auth issues.
+#
+#   docker compose up -d db      # start (or: npm run db:up)
+#   docker compose down          # stop, keep data (or: npm run db:down)
+#   docker compose down -v       # stop AND wipe the database volume
+#
+# The app connects to it with:
+#   DATABASE_URL=postgresql://postgres:postgres@localhost:5432/codingautomation
+#
+# If port 5432 is already in use on your machine (e.g. a native Postgres),
+# set DB_PORT to something free before starting, e.g.  DB_PORT=5433 docker compose up -d
+# and update DATABASE_URL in .env.local to match.
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: codingautomation-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: codingautomation
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - codingautomation-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d codingautomation"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  codingautomation-pgdata:

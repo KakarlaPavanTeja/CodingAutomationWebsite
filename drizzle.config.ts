@@ -2,9 +2,24 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { config as loadEnv } from "dotenv";
 import type { Config } from "drizzle-kit";
-import { resolveDatabaseUrl } from "./src/lib/db/resolve-database-url";
 
-// drizzle-kit does not use Next.js env loading — mirror .env.local / .env (same as scripts/db.mts).
+function resolveDatabaseUrl(url: string): string {
+  const m = url.match(/^postgres(ql)?:\/\/\/([^?/]+)$/);
+  if (!m) return url;
+  const db = m[2];
+  const user = process.env.USER ?? process.env.USERNAME ?? "postgres";
+  let socketDir = "/var/run/postgresql";
+  if (process.platform !== "win32") {
+    for (const dir of ["/var/run/postgresql", "/tmp"]) {
+      if (existsSync(dir)) {
+        socketDir = dir;
+        break;
+      }
+    }
+  }
+  return `postgresql://${encodeURIComponent(user)}@localhost/${db}?host=${encodeURIComponent(socketDir)}`;
+}
+
 for (const file of [".env.local", ".env"]) {
   const path = resolve(process.cwd(), file);
   if (existsSync(path)) loadEnv({ path, quiet: true, override: true });

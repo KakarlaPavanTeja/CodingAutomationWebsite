@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
-import { resolveDatabaseUrl } from "./resolve-database-url";
+import type postgres from "postgres";
+import { createPostgresClient } from "./connect-postgres";
 import * as schema from "./schema";
 
 declare global {
@@ -8,19 +8,14 @@ declare global {
   var __pgClient: ReturnType<typeof postgres> | undefined;
 }
 
-const connectionString = resolveDatabaseUrl(process.env.DATABASE_URL ?? "");
-if (!process.env.DATABASE_URL) {
+const connectionString = process.env.DATABASE_URL ?? "";
+if (!connectionString) {
   throw new Error("DATABASE_URL is not set");
 }
 
 const client =
   globalThis.__pgClient ??
-  postgres(connectionString, {
-    max: 10,
-    idle_timeout: 20,
-    connect_timeout: 10,
-    prepare: false,
-  });
+  createPostgresClient(connectionString);
 
 if (process.env.NODE_ENV !== "production") {
   globalThis.__pgClient = client;
