@@ -36,12 +36,111 @@
     "updated_at": "2026-04-06T04:06:33.187Z"
   },
   {
-    "id": "69a64335-da46-4429-8481-61e11ae8d6b5",
-    "email": "chittaloori.rekha@nxtwave.co.in",
-    "display_name": "Rekha",
+    "id": "c9252a25-c4ea-4e4c-b60b-2f93048922f7",
+    "email": "sashank@nxtwave.tech",
+    "display_name": "Sashank",
     "role": "problem_setter",
     "status": "active",
+    "created_at": "2026-04-28T08:59:46.434Z",
+    "updated_at": "2026-04-28T09:03:58.742Z"
+  },
+  {
+    "id": "6d17ee11-55b6-4214-8923-9507f24b23e6",
+    "email": "poshala.varsha@nxtwave.co.in",
+    "display_name": "Varsha",
+    "role": "problem_setter",
+    "status": "active",
+    "created_at": "2026-05-07T05:13:25.050Z",
+    "updated_at": "2026-05-07T05:14:17.083Z"
+  },
+  {
+    "id": "dae0b5ed-97b2-406c-b854-a7d39c48c524",
+    "email": "vedprathap.chawhan@nxtwave.co.in",
+    "display_name": "Ved Prathap Chawhan",
+    "role": "problem_setter",
+    "status": "active",
+    "created_at": "2026-05-07T05:13:41.563Z",
+    "updated_at": "2026-05-07T05:14:17.481Z"
+  },
+  {
+    "id": "4db4b0b2-f14d-4227-8bb4-d432e1427918",
+    "email": "meesala.chanakya@nxtwave.co.in",
+    "display_name": "Chanakya",
+    "role": "problem_setter",
+    "status": "active",
+    "created_at": "2026-05-07T10:56:20.046Z",
+    "updated_at": "2026-05-07T10:59:48.771Z"
+  },
+  {
+    "id": "6e6bc21f-ca85-4a8b-b4d2-8689a5dcbf0a",
+    "email": "jashwanth.dandu@nxtwave.co.in",
+    "display_name": "jash",
+    "role": "problem_setter",
+    "status": "active",
+    "created_at": "2026-05-12T09:45:25.374Z",
+    "updated_at": "2026-05-12T09:51:52.168Z"
+  },
+  {
+    "id": "82fbab70-4411-4822-a55d-1a5798efa514",
+    "email": "praveen.seervi@nxtwave.co.in",
+    "display_name": "Praveen",
+    "role": "problem_setter",
+    "status": "active",
+    "created_at": "2026-06-03T09:11:00.659Z",
+    "updated_at": "2026-06-03T09:11:14.339Z"
+  },
+  {
+    "id": "ccf9efa4-5b7a-4415-9a8b-afd1ea7eb3d7",
+    "email": "nokhalal.mahato@nxtwave.co.in",
+    "display_name": "Nokhalal Mahato",
+    "role": "admin",
+    "status": "active",
+    "created_at": "2026-05-06T09:49:16.001Z",
+    "updated_at": "2026-06-03T09:42:17.583Z"
+  },
+  {
+    "id": "04b8da28-6618-4a26-a770-cf59a0be83c6",
+    "email": "prince.grewal@nxtwave.co.in",
+    "display_name": "Prince Grewal",
+    "role": "problem_setter",
+    "status": "active",
+    "created_at": "2026-06-05T12:50:10.726Z",
+    "updated_at": "2026-06-05T12:53:05.295Z"
+  },
+  {
+    "id": "470018c7-507a-4436-8371-5c4d59625088",
+    "email": "vishvjeet.kumawat@nxtwave.co.in",
+    "display_name": "Vishvjeet Kumawat",
+    "role": "problem_setter",
+    "status": "active",
+    "created_at": "2026-06-05T12:49:23.433Z",
+    "updated_at": "2026-06-05T12:53:05.942Z"
+  },
+  {
+    "id": "69a64335-da46-4429-8481-61e11ae8d6b5",
+    "email": "deactivated_69a64335@removed",
+    "display_name": "[deactivated]",
+    "role": "problem_setter",
+    "status": "deactivated",
     "created_at": "2026-04-06T04:47:34.688Z",
-    "updated_at": "2026-04-06T04:47:34.688Z"
+    "updated_at": "2026-06-05T12:53:22.987Z"
+  },
+  {
+    "id": "5b22d78c-032c-4b19-9bfb-358600111ad1",
+    "email": "tushar.agarwal@nxtwave.co.in",
+    "display_name": "Tushar Agarwal",
+    "role": "problem_setter",
+    "status": "active",
+    "created_at": "2026-06-12T08:59:09.965Z",
+    "updated_at": "2026-06-12T09:00:08.623Z"
+  },
+  {
+    "id": "6302f8c1-7d89-4d54-a402-aedf8e6e7baf",
+    "email": "narender.s@nxtwave.co.in",
+    "display_name": "Narender",
+    "role": "problem_setter",
+    "status": "active",
+    "created_at": "2026-06-29T05:04:48.866Z",
+    "updated_at": "2026-06-29T05:05:06.721Z"
   }
 ]
