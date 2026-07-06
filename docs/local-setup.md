@@ -92,3 +92,34 @@ Replit problems are **not** imported — only user accounts.
 | `./scripts/setup-local.sh --install-system-deps --yes` | Everyone | Ubuntu |
 | `npm run import:team-users` | Manual re-import | Local |
 | `npm run dev` | Daily | Local |
+
+---
+
+## Troubleshooting
+
+### Login fails with `password authentication failed for user "..."`
+
+This is a **Postgres connection** error, not your Replit password.
+
+Your `.env.local` probably has a TCP URL like `postgresql://nxtwave@localhost:5432/...`. Fix it:
+
+```bash
+# 1. Fix DATABASE_URL in .env.local
+sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql:///codingautomation|' .env.local
+
+# 2. Create local Postgres role + database (Ubuntu)
+sudo systemctl start postgresql
+sudo -u postgres createuser -s $USER
+sudo -u postgres createdb -O $USER codingautomation
+
+# 3. Re-import users and restart
+npm run import:team-users
+npm run dev
+```
+
+Or re-run setup (rewrites `.env.local`):
+
+```bash
+./scripts/setup-local.sh --yes
+npm run import:team-users
+```

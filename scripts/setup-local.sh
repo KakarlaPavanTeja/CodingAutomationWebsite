@@ -111,14 +111,27 @@ install_ubuntu_python() {
 }
 
 bootstrap_local_postgres() {
-  # Ubuntu TCP to localhost often requires a password; unix-socket peer auth works
-  # when the OS user has a matching Postgres role.
-  if ! has_cmd psql || ! is_ubuntu; then
+  # Unix-socket peer auth works when the OS user has a matching Postgres role.
+  # TCP (postgresql://user@localhost:5432/...) often requires a password and breaks login.
+  if ! has_cmd psql; then
     return 0
   fi
   info "Configuring local Postgres role + database for $USER ..."
-  sudo -u postgres createuser -s "$USER" 2>/dev/null || true
-  sudo -u postgres createdb -O "$USER" codingautomation 2>/dev/null ||     createdb codingautomation 2>/dev/null || true
+  if is_ubuntu; then
+    sudo -u postgres createuser -s "$USER" 2>/dev/null || true
+    sudo -u postgres createdb -O "$USER" codingautomation 2>/dev/null || \
+      createdb codingautomation 2>/dev/null || true
+  else
+    createuser -s "$USER" 2>/dev/null || \
+      psql postgres -c "CREATE USER \"$USER\" SUPERUSER;" 2>/dev/null || true
+    createdb -O "$USER" codingautomation 2>/dev/null || \
+      psql postgres -c "CREATE DATABASE codingautomation OWNER \"$USER\";" 2>/dev/null || true
+  fi
+}
+
+is_socket_db_url() {
+  local db_url="$1"
+  [[ "$db_url" == postgresql:///* ]]
 }
 
 install_ubuntu_postgres() {
@@ -292,7 +305,7 @@ ensure_postgres() {
     return
   fi
   warn "Cannot connect to: $db_url"
-  if is_ubuntu && [[ "$db_url" != *"://"*"@"*":"*"/"* ]] && [[ "$db_url" == *"localhost"* || "$db_url" == postgresql:///* ]]; then
+  if is_socket_db_url "$db_url"; then
     bootstrap_local_postgres
     if psql "$db_url" -c 'SELECT 1' >/dev/null 2>&1; then
       ok "PostgreSQL connection OK (after bootstrap)"
@@ -311,17 +324,24 @@ ensure_postgres() {
       fi
     fi
   fi
-  fail "PostgreSQL connection failed (auth_failed).
+  fail "PostgreSQL connection failed.
 
-Fix on Ubuntu — run these, then re-run setup:
-  sudo systemctl start postgresql
-  sudo -u postgres createuser -s $USER
-  sudo -u postgres createdb -O $USER codingautomation
-
-Then set in .env.local:
+Use unix-socket auth (no password) in .env.local:
   DATABASE_URL=postgresql:///codingautomation
 
-Or use the shared Replit DATABASE_URL in scripts/team-secrets.env"
+Then create your local role + database:
+  # Ubuntu
+  sudo systemctl start postgresql
+  sudo -u postgres createuser -s \$USER
+  sudo -u postgres createdb -O \$USER codingautomation
+
+  # macOS (Homebrew)
+  createuser -s \$USER
+  createdb codingautomation
+
+Re-run: ./scripts/setup-local.sh --yes
+
+Do NOT use postgresql://user@localhost:5432/... — that causes auth_failed on login."
 }
 
 load_team_secrets() {
@@ -330,6 +350,8 @@ load_team_secrets() {
     # shellcheck disable=SC1090
     source "$SECRETS_FILE"
     set +a
+    # Local setup always uses local Postgres — never Replit or TCP URLs from secrets.
+    unset DATABASE_URL
     ok "Loaded scripts/team-secrets.env"
   else
     fail "Missing scripts/team-secrets.env — ask team lead, or: cp scripts/team-secrets.env.example scripts/team-secrets.env"
@@ -360,21 +382,22 @@ echo ""
 info "Step 2/5 — Loading secrets & configuring..."
 load_team_secrets
 
-DEFAULT_DB="postgresql:///codingautomation"  # always local; users imported from team-users-export
+DEFAULT_DB="postgresql:///codingautomation"  # unix socket — always local; never TCP @localhost
 DEFAULT_APP_URL="${APP_URL:-http://localhost:5001}"
 
 [ -n "${OPENROUTER_API_KEY:-}" ] || fail "OPENROUTER_API_KEY missing in team-secrets.env"
 [ -n "${CRON_SECRET:-}" ]        || fail "CRON_SECRET missing in team-secrets.env"
 [ -n "${ADMIN_SECRET_KEY:-}" ]    || fail "ADMIN_SECRET_KEY missing in team-secrets.env"
 
-if [ "$AUTO_YES" = false ]; then
-  echo "Press Enter to accept defaults shown in [brackets]."
-  echo ""
-fi
-
-prompt_or_default "DATABASE_URL" "$DEFAULT_DB" DATABASE_URL
-prompt_or_default "APP_URL" "$DEFAULT_APP_URL" APP_URL
+DATABASE_URL="$DEFAULT_DB"
+ok "DATABASE_URL=$DATABASE_URL (local unix socket — not Replit)"
 ok "Secrets loaded (OPENROUTER_API_KEY, CRON_SECRET, ADMIN_SECRET_KEY)"
+if [ "$AUTO_YES" = false ]; then
+  read -r -p "APP_URL [$DEFAULT_APP_URL]: " APP_URL_INPUT
+  APP_URL="${APP_URL_INPUT:-$DEFAULT_APP_URL}"
+else
+  APP_URL="$DEFAULT_APP_URL"
+fi
 echo ""
 
 ensure_postgres "$DATABASE_URL"
