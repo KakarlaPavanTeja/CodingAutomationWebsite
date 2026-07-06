@@ -223,6 +223,31 @@
     background: var(--code-bg); color: var(--code-text);
     padding: 1px 6px; border-radius: 5px; font-size: 12.5px;
   }
+
+  .notice {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+    margin: 26px 0 4px;
+  }
+  .notice h2 { font-size: 15px; margin: 0 0 14px; }
+  .notice h3 {
+    font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 6px; font-weight: 600;
+  }
+  .notice .note-grid { display: grid; gap: 16px; }
+  .notice p { margin: 0; color: var(--muted); font-size: 13.5px; }
+  .notice ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13.5px; }
+  .notice li { margin: 5px 0; }
+  .notice li b, .notice p b { color: var(--text); }
+  .notice code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--accent-soft); color: var(--text);
+    padding: 1px 6px; border-radius: 5px; font-size: 12.5px;
+  }
 </style>
 </head>
 <body>
@@ -232,6 +257,25 @@
     <h1>Run the app on your machine</h1>
     <p class="sub">Pick your OS and run the steps top to bottom. The app connects to the team's shared cloud database — no local database, no Docker.</p>
   </header>
+
+  <section class="notice">
+    <h2>Before you start — how the data works</h2>
+    <div class="note-grid">
+      <div>
+        <h3>Old data &amp; new data</h3>
+        <p>The team's existing data from the old Replit app — <b>logins, problems, pipeline configs and LLM-usage history</b> — has been migrated into one <b>shared cloud database (Neon)</b>. Any new data you or your teammates create lives in that same database. Existing accounts still work; passwords carried over.</p>
+      </div>
+      <div>
+        <h3>Shared database — keep in mind</h3>
+        <ul>
+          <li><b>One shared DB for everyone.</b> The problems and users you see are the same for the whole team — creating or especially <b>deleting</b> a problem affects everyone.</li>
+          <li><b>Uploaded files stay on your machine</b> (<code>.local-object-storage/</code>), they are <b>not</b> shared — you won't see files a teammate uploaded.</li>
+          <li><b>Old pipeline logs were not migrated</b> (the large run-log history only). Problems and generated outputs are intact; new runs create fresh logs.</li>
+          <li><b>Free-tier cloud DB.</b> After a period of inactivity the first request may take a second or two to wake the database.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
 
   <div class="tabs" role="tablist" aria-label="Operating system">
     <button class="tab" role="tab" id="tab-ubuntu"  aria-controls="p-ubuntu"  aria-selected="true"  onclick="pick('ubuntu')">Ubuntu</button>
