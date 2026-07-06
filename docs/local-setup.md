@@ -6,9 +6,18 @@
 
 ## Team lead (once, on Replit)
 
+Replit has **separate dev and production databases**. Shell `DATABASE_URL` is **development** — that export does **not** include live-site passwords.
+
+**Export from production** (passwords from `coding-question-automation.replit.app`):
+
+1. Replit → **Publishing** → **Production** → **Secrets** → copy `DATABASE_URL`
+2. In Shell:
+
 ```bash
-npm run export:team-users
+PRODUCTION_DATABASE_URL='<paste production DATABASE_URL>' npm run export:team-users:prod
 ```
+
+Check `scripts/team-users-export/manifest.json`: `"environment": "production"` and `usersWithPassword` should match your team.
 
 Zip and share `scripts/team-users-export/` with the team (Slack / Drive).
 
@@ -78,7 +87,8 @@ Replit problems are **not** imported — only user accounts.
 
 | Command | Who | Where |
 |---------|-----|-------|
-| `npm run export:team-users` | Team lead | Replit |
+| `npm run export:team-users:prod` | Team lead | Replit (production DB) |
+| `npm run import:team-users` | Re-import after new export | Local |
 | `./scripts/setup-local.sh --install-system-deps --yes` | Everyone | Ubuntu |
 | `npm run import:team-users` | Manual re-import | Local |
 | `npm run dev` | Daily | Local |

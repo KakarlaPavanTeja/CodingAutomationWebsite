@@ -15,7 +15,8 @@
     "export:team-users": "tsx scripts/export-team-users.mts",
     "import:team-users": "tsx scripts/import-team-users.mts",
     "export:db": "tsx scripts/export-replit-db.mts --pg-dump",
-    "import:db": "tsx scripts/import-db.mts"
+    "import:db": "tsx scripts/import-db.mts",
+    "export:team-users:prod": "tsx scripts/export-team-users.mts --production"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
