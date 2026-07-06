@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# One-command local dev setup (Linux / macOS) using Docker for Postgres.
+# One-command local dev setup (Linux / macOS). The app connects to the shared
+# cloud (Neon) database via DATABASE_URL in team-secrets.env — no local Postgres.
 #
 # Usage:
 #   ./scripts/setup-local.sh                       # interactive (Enter = defaults)
 #   ./scripts/setup-local.sh --yes                 # non-interactive (needs team-secrets.env)
-#   ./scripts/setup-local.sh --install-system-deps # auto-install missing Node / Python / Docker
+#   ./scripts/setup-local.sh --install-system-deps # auto-install missing Node / Python
 #
 # Before running (one-time):
 #   1. git clone <repo> && cd CodingAutomationWebsite
-#   2. cp scripts/team-secrets.env.example scripts/team-secrets.env  (fill in — ask team lead)
-#   3. Install Docker Desktop (macOS) or Docker Engine (Linux) and make sure it is running.
+#   2. cp scripts/team-secrets.env.example scripts/team-secrets.env
+#      then fill in OPENROUTER_API_KEY, ADMIN_SECRET_KEY, CRON_SECRET and the shared
+#      DATABASE_URL (ask your team lead).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -244,8 +246,7 @@ load_team_secrets() {
   # shellcheck disable=SC1090
   source "$SECRETS_FILE"
   set +a
-  # Local setup always uses the local Docker Postgres — never a URL from secrets.
-  unset DATABASE_URL
+  # DATABASE_URL comes from team-secrets (the shared cloud DB). Required.
   ok "Loaded scripts/team-secrets.env"
 }
 
@@ -296,25 +297,20 @@ schema_exists() {
 # ---------------------------------------------------------------------------
 echo ""
 echo "========================================"
-echo "  Coding Automation — Local Setup (Docker)"
+echo "  Coding Automation — Local Setup (Shared Cloud DB)"
 echo "========================================"
 echo ""
 
-info "Step 1/6 — Checking prerequisites..."
+info "Step 1/5 — Checking prerequisites..."
 check_prerequisites
 echo ""
 
-info "Step 2/6 — Checking Docker..."
-ensure_docker
-echo ""
-
-info "Step 3/6 — Loading secrets & configuring..."
+info "Step 2/5 — Loading secrets & configuring..."
 load_team_secrets
 [ -n "${OPENROUTER_API_KEY:-}" ] || fail "OPENROUTER_API_KEY missing in team-secrets.env"
 [ -n "${CRON_SECRET:-}" ]         || fail "CRON_SECRET missing in team-secrets.env"
 [ -n "${ADMIN_SECRET_KEY:-}" ]    || fail "ADMIN_SECRET_KEY missing in team-secrets.env"
-
-DATABASE_URL="$DATABASE_URL_DEFAULT"
+[ -n "${DATABASE_URL:-}" ]        || fail "DATABASE_URL missing in team-secrets.env — set the shared cloud (Neon) connection string (see scripts/team-secrets.env.example)."
 DEFAULT_APP_URL="${APP_URL:-http://localhost:5001}"
 if [ "$AUTO_YES" = false ]; then
   read -r -p "APP_URL [$DEFAULT_APP_URL]: " APP_URL_INPUT
@@ -322,11 +318,11 @@ if [ "$AUTO_YES" = false ]; then
 else
   APP_URL="$DEFAULT_APP_URL"
 fi
-ok "DATABASE_URL=$DATABASE_URL (local Docker Postgres)"
+ok "DATABASE_URL set from team-secrets (shared cloud database)"
 ok "Secrets loaded (OPENROUTER_API_KEY, CRON_SECRET, ADMIN_SECRET_KEY)"
 echo ""
 
-info "Step 4/6 — Python virtual environment..."
+info "Step 3/5 — Python virtual environment..."
 info "Location: $VENV_DIR (outside repo — avoids Turbopack build issues)"
 if [ ! -d "$VENV_DIR" ]; then
   "$PYTHON_CMD" -m venv "$VENV_DIR"; ok "Created venv"
@@ -340,7 +336,7 @@ VENV_PYTHON="$VENV_DIR/bin/python3"
 ok "Python packages installed"
 echo ""
 
-info "Step 5/6 — Writing .env.local & installing npm packages..."
+info "Step 4/5 — Writing .env.local & installing npm packages..."
 ENV_FILE="$ROOT/.env.local"
 if [ -f "$ENV_FILE" ]; then
   if [ "$AUTO_YES" = false ]; then
@@ -373,14 +369,8 @@ fi
 ok "npm packages installed"
 echo ""
 
-info "Step 6/6 — Starting database & syncing schema..."
-start_database
-if schema_exists; then
-  warn "Schema already present — skipping db:push"
-else
-  npm run db:push
-fi
-ok "Database schema ready"
+info "Step 5/5 — Database..."
+ok "Using shared cloud database — schema is managed centrally (no local DB, no db:push)."
 echo ""
 
 echo "========================================"
@@ -391,7 +381,5 @@ echo "  npm run build && npm run start    # recommended (fast, stable)"
 echo "  npm run dev                       # development (slow first load)"
 echo "  → http://localhost:5001/signup    (admin secret in .env.local)"
 echo ""
-echo "  Database controls:"
-echo "    npm run db:up      # start Postgres"
-echo "    npm run db:down    # stop Postgres (data kept)"
+echo "  Database: shared cloud (Neon) — configured via DATABASE_URL in .env.local."
 echo ""

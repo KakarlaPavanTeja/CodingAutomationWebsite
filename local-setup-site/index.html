@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local Setup — Coding Automation</title>
+<style>
+  :root {
+    --bg: #f5f7f7;
+    --surface: #ffffff;
+    --text: #16252b;
+    --muted: #5d6d73;
+    --accent: #0d9488;
+    --accent-soft: #d5efec;
+    --border: #e3e8e8;
+    --code-bg: #0d1520;
+    --code-text: #e7eef0;
+    --code-muted: #6b8a91;
+    --code-comment: #6f8a7e;
+    --shadow: 0 1px 2px rgba(16,40,48,.05), 0 8px 28px rgba(16,40,48,.06);
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a0f12;
+      --surface: #111a1f;
+      --text: #e7eef0;
+      --muted: #8fa1a7;
+      --accent: #2dd4bf;
+      --accent-soft: #123834;
+      --border: #223037;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f7f7; --surface: #ffffff; --text: #16252b; --muted: #5d6d73;
+    --accent: #0d9488; --accent-soft: #d5efec; --border: #e3e8e8;
+    --shadow: 0 1px 2px rgba(16,40,48,.05), 0 8px 28px rgba(16,40,48,.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0a0f12; --surface: #111a1f; --text: #e7eef0; --muted: #8fa1a7;
+    --accent: #2dd4bf; --accent-soft: #123834; --border: #223037;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 56px 22px 80px;
+  }
+
+  header { margin-bottom: 30px; }
+  .eyebrow {
+    font-size: 11.5px;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-size: 27px;
+    line-height: 1.15;
+    margin: 0 0 8px;
+    letter-spacing: -.02em;
+    text-wrap: balance;
+  }
+  .sub { color: var(--muted); margin: 0; max-width: 52ch; }
+
+  /* Tabs */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 4px;
+    margin: 28px 0 26px;
+    box-shadow: var(--shadow);
+  }
+  .tab {
+    flex: 1;
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-weight: 600;
+    font-size: 14px;
+    padding: 9px 10px;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { background: var(--accent); color: #04211d; }
+  @media (prefers-color-scheme: dark) { .tab[aria-selected="true"] { color: #04211d; } }
+  .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .panel { display: none; }
+  .panel.active { display: block; animation: fade .2s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .panel.active { animation: none; } }
+
+  .prereq {
+    display: flex;
+    gap: 11px;
+    align-items: flex-start;
+    background: var(--accent-soft);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 13px 15px;
+    margin-bottom: 24px;
+    font-size: 14px;
+  }
+  .prereq b { color: var(--text); }
+  .prereq .dot {
+    flex: none; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent); margin-top: 7px;
+  }
+  .prereq a { color: var(--accent); font-weight: 600; }
+
+  ol.steps { list-style: none; counter-reset: s; margin: 0; padding: 0; }
+  ol.steps > li {
+    counter-increment: s;
+    position: relative;
+    padding: 0 0 22px 40px;
+  }
+  ol.steps > li::before {
+    content: counter(s);
+    position: absolute; left: 0; top: -2px;
+    width: 26px; height: 26px;
+    display: grid; place-items: center;
+    background: var(--surface);
+    border: 1.5px solid var(--accent);
+    color: var(--accent);
+    border-radius: 50%;
+    font-size: 13px; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  ol.steps > li::after {
+    content: "";
+    position: absolute; left: 12.5px; top: 26px; bottom: 2px;
+    width: 1.5px; background: var(--border);
+  }
+  ol.steps > li:last-child::after { display: none; }
+  .step-label { font-weight: 600; margin: 2px 0 9px; }
+  .step-label span { color: var(--muted); font-weight: 400; }
+
+  /* Code block */
+  .cmd {
+    position: relative;
+    background: var(--code-bg);
+    border-radius: 9px;
+    overflow: hidden;
+  }
+  .cmd pre {
+    margin: 0;
+    padding: 13px 46px 13px 15px;
+    overflow-x: auto;
+    color: var(--code-text);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    tab-size: 2;
+  }
+  .cmd pre .c { color: var(--code-comment); }
+  .copy {
+    position: absolute; top: 8px; right: 8px;
+    appearance: none; border: 1px solid rgba(255,255,255,.14);
+    background: rgba(255,255,255,.06); color: #cfe7e3;
+    font: inherit; font-size: 11px; font-weight: 600;
+    padding: 4px 9px; border-radius: 6px; cursor: pointer;
+    transition: background .15s;
+  }
+  .copy:hover { background: rgba(255,255,255,.13); }
+  .copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .copy.done { color: #7ff0dc; border-color: rgba(127,240,220,.4); }
+
+  .finish {
+    margin-top: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+  }
+  .finish h2 { font-size: 15px; margin: 0 0 6px; }
+  .finish p { margin: 0; color: var(--muted); font-size: 14px; }
+  .finish p + p { margin-top: 8px; }
+  .finish code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--accent-soft); color: var(--text);
+    padding: 1px 6px; border-radius: 5px; font-size: 13px;
+  }
+  .finish a { color: var(--accent); font-weight: 600; text-decoration: none; }
+  .finish a:hover { text-decoration: underline; }
+
+  .gotchas {
+    margin-top: 26px; padding-top: 20px;
+    border-top: 1px solid var(--border);
+  }
+  .gotchas h3 {
+    font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 12px; font-weight: 600;
+  }
+  .gotchas dl { margin: 0; display: grid; gap: 12px; }
+  .gotchas dt { font-weight: 600; font-size: 14px; }
+  .gotchas dd { margin: 2px 0 0; color: var(--muted); font-size: 13.5px; }
+  .gotchas code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--code-bg); color: var(--code-text);
+    padding: 1px 6px; border-radius: 5px; font-size: 12.5px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Coding Automation · Local Setup</p>
+    <h1>Run the app on your machine</h1>
+    <p class="sub">Pick your OS and run the steps top to bottom. The app connects to the team's shared cloud database — no local database, no Docker.</p>
+  </header>
+
+  <div class="tabs" role="tablist" aria-label="Operating system">
+    <button class="tab" role="tab" id="tab-ubuntu"  aria-controls="p-ubuntu"  aria-selected="true"  onclick="pick('ubuntu')">Ubuntu</button>
+    <button class="tab" role="tab" id="tab-windows" aria-controls="p-windows" aria-selected="false" onclick="pick('windows')">Windows</button>
+    <button class="tab" role="tab" id="tab-macos"   aria-controls="p-macos"   aria-selected="false" onclick="pick('macos')">macOS</button>
+  </div>
+
+  <!-- UBUNTU -->
+  <section class="panel active" id="p-ubuntu" role="tabpanel" aria-labelledby="tab-ubuntu">
+    <div class="prereq">
+      <span class="dot"></span>
+      <div>The script installs <b>Node &amp; Python</b> for you. You just need <b>git</b> — no Docker, no local database.</div>
+    </div>
+    <ol class="steps">
+      <li>
+        <div class="step-label">Clone the project</div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>git clone https://github.com/KakarlaPavanTeja/CodingAutomationWebsite.git
+cd CodingAutomationWebsite</pre></div>
+      </li>
+      <li>
+        <div class="step-label">Add the secrets <span>— paste the 4 values from your team lead</span></div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>cp scripts/team-secrets.env.example scripts/team-secrets.env
+nano scripts/team-secrets.env   <span class="c"># OPENROUTER_API_KEY, ADMIN_SECRET_KEY, CRON_SECRET, DATABASE_URL</span></pre></div>
+      </li>
+      <li>
+        <div class="step-label">Run setup</div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>chmod +x scripts/setup-local.sh
+./scripts/setup-local.sh --install-system-deps --yes</pre></div>
+      </li>
+      <li>
+        <div class="step-label">Start the app</div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>npm run dev</pre></div>
+      </li>
+    </ol>
+  </section>
+
+  <!-- WINDOWS -->
+  <section class="panel" id="p-windows" role="tabpanel" aria-labelledby="tab-windows" hidden>
+    <div class="prereq">
+      <span class="dot"></span>
+      <div>Run the commands below in <b>PowerShell</b>. The script installs <b>Node &amp; Python</b> for you — no Docker, no local database.</div>
+    </div>
+    <ol class="steps">
+      <li>
+        <div class="step-label">Clone the project</div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>git clone https://github.com/KakarlaPavanTeja/CodingAutomationWebsite.git
+cd CodingAutomationWebsite</pre></div>
+      </li>
+      <li>
+        <div class="step-label">Add the secrets <span>— paste the 4 values from your team lead</span></div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>copy scripts\team-secrets.env.example scripts\team-secrets.env
+notepad scripts\team-secrets.env   <span class="c"># OPENROUTER_API_KEY, ADMIN_SECRET_KEY, CRON_SECRET, DATABASE_URL</span></pre></div>
+      </li>
+      <li>
+        <div class="step-label">Run setup</div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>powershell -ExecutionPolicy Bypass -File scripts/setup-local.ps1 -InstallSystemDeps -Yes</pre></div>
+      </li>
+      <li>
+        <div class="step-label">Start the app</div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>npm run dev</pre></div>
+      </li>
+    </ol>
+  </section>
+
+  <!-- MACOS -->
+  <section class="panel" id="p-macos" role="tabpanel" aria-labelledby="tab-macos" hidden>
+    <div class="prereq">
+      <span class="dot"></span>
+      <div>The script installs <b>Node &amp; Python</b> for you. You just need <b>git</b> — no Docker, no local database.</div>
+    </div>
+    <ol class="steps">
+      <li>
+        <div class="step-label">Clone the project</div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>git clone https://github.com/KakarlaPavanTeja/CodingAutomationWebsite.git
+cd CodingAutomationWebsite</pre></div>
+      </li>
+      <li>
+        <div class="step-label">Add the secrets <span>— paste the 4 values from your team lead</span></div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>cp scripts/team-secrets.env.example scripts/team-secrets.env
+open -e scripts/team-secrets.env   <span class="c"># OPENROUTER_API_KEY, ADMIN_SECRET_KEY, CRON_SECRET, DATABASE_URL</span></pre></div>
+      </li>
+      <li>
+        <div class="step-label">Run setup</div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>chmod +x scripts/setup-local.sh
+./scripts/setup-local.sh --yes</pre></div>
+      </li>
+      <li>
+        <div class="step-label">Start the app</div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>npm run dev</pre></div>
+      </li>
+    </ol>
+  </section>
+
+  <div class="finish">
+    <h2>Then open the app</h2>
+    <p>Go to <a href="http://localhost:5001/signup">localhost:5001/signup</a> and create your account.</p>
+    <p>Sign up as <b>admin</b> using the <code>ADMIN_SECRET_KEY</code> — admin accounts work right away, no approval needed.</p>
+    <p>Everyone shares the same cloud database, so the users and problems you see match your teammates'.</p>
+  </div>
+
+  <div class="gotchas">
+    <h3>If something goes wrong</h3>
+    <dl>
+      <div>
+        <dt>“DATABASE_URL missing in team-secrets.env”</dt>
+        <dd>You didn't fill in the shared database URL. Open <code>scripts/team-secrets.env</code> and paste the <code>DATABASE_URL</code> your team lead gave you, then re-run setup.</dd>
+      </div>
+      <div>
+        <dt>Can't connect to the database</dt>
+        <dd>Make sure the <code>DATABASE_URL</code> is copied exactly and ends with <code>?sslmode=require</code>. Check your internet connection — the database lives in the cloud.</dd>
+      </div>
+      <div>
+        <dt>Dev server shows “Ready” but the browser spins</dt>
+        <dd>The first page load compiles for 1–2 min. Wait, or use <code>npm run build &amp;&amp; npm run start</code> for faster loads.</dd>
+      </div>
+    </dl>
+  </div>
+</div>
+
+<script>
+  function pick(os) {
+    ['ubuntu','windows','macos'].forEach(function (k) {
+      var tab = document.getElementById('tab-' + k);
+      var panel = document.getElementById('p-' + k);
+      var on = k === os;
+      tab.setAttribute('aria-selected', on ? 'true' : 'false');
+      panel.classList.toggle('active', on);
+      panel.hidden = !on;
+    });
+  }
+  function cp(btn) {
+    var text = btn.parentNode.querySelector('pre').innerText;
+    navigator.clipboard.writeText(text).then(function () {
+      var old = btn.textContent;
+      btn.textContent = 'Copied';
+      btn.classList.add('done');
+      setTimeout(function () { btn.textContent = old; btn.classList.remove('done'); }, 1400);
+    });
+  }
+</script>
+</body>
+</html>

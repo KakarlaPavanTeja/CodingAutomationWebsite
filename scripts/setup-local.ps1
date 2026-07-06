@@ -1,4 +1,5 @@
-# One-command local dev setup for Windows (PowerShell), using Docker for Postgres.
+# One-command local dev setup for Windows (PowerShell). The app connects to the
+# shared cloud (Neon) database via DATABASE_URL in team-secrets.env — no local Postgres.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts/setup-local.ps1
@@ -7,8 +8,9 @@
 #
 # Before running (one-time):
 #   1. git clone <repo> && cd CodingAutomationWebsite
-#   2. Copy-Item scripts/team-secrets.env.example scripts/team-secrets.env  (fill in — ask team lead)
-#   3. Install Docker Desktop and make sure it is running (whale icon steady).
+#   2. Copy-Item scripts/team-secrets.env.example scripts/team-secrets.env
+#      then fill in OPENROUTER_API_KEY, ADMIN_SECRET_KEY, CRON_SECRET and the shared
+#      DATABASE_URL (ask your team lead).
 param(
     [switch]$Yes,
     [switch]$InstallSystemDeps
@@ -201,11 +203,11 @@ function Schema-Exists {
 
 Write-Host ""
 Write-Host "========================================"
-Write-Host "  Coding Automation - Local Setup (Docker)"
+Write-Host "  Coding Automation - Local Setup (Shared Cloud DB)"
 Write-Host "========================================"
 Write-Host ""
 
-Write-Info "Step 1/6 - Checking prerequisites..."
+Write-Info "Step 1/5 - Checking prerequisites..."
 Fix-PrerequisitesIfNeeded
 $py = Get-PythonSuitable
 if (-not $py) { Write-Fail "Python 3.11+ not available." }
@@ -216,17 +218,13 @@ Write-Ok "npm v$(npm -v)"
 Write-Ok "python $($py.Version)"
 Write-Host ""
 
-Write-Info "Step 2/6 - Checking Docker..."
-Ensure-Docker
-Write-Host ""
-
-Write-Info "Step 3/6 - Loading secrets & configuring..."
+Write-Info "Step 2/5 - Loading secrets & configuring..."
 $team = Import-TeamSecrets
-foreach ($key in @("OPENROUTER_API_KEY", "CRON_SECRET", "ADMIN_SECRET_KEY")) {
-    if (-not $team[$key]) { Write-Fail "$key missing in team-secrets.env" }
+foreach ($key in @("OPENROUTER_API_KEY", "CRON_SECRET", "ADMIN_SECRET_KEY", "DATABASE_URL")) {
+    if (-not $team[$key]) { Write-Fail "$key missing in team-secrets.env - set the shared cloud (Neon) connection string (see scripts/team-secrets.env.example)." }
 }
 
-$DATABASE_URL = $DatabaseUrlDefault
+$DATABASE_URL = $team["DATABASE_URL"]
 $defaultAppUrl = if ($team["APP_URL"]) { $team["APP_URL"] } else { "http://localhost:5001" }
 if ($Yes) {
     $APP_URL = $defaultAppUrl
@@ -234,11 +232,11 @@ if ($Yes) {
     $inputApp = Read-Host "APP_URL [$defaultAppUrl]"
     $APP_URL = if ([string]::IsNullOrWhiteSpace($inputApp)) { $defaultAppUrl } else { $inputApp }
 }
-Write-Ok "DATABASE_URL=$DATABASE_URL (local Docker Postgres)"
+Write-Ok "DATABASE_URL set from team-secrets (shared cloud database)"
 Write-Ok "Secrets loaded (OPENROUTER_API_KEY, CRON_SECRET, ADMIN_SECRET_KEY)"
 Write-Host ""
 
-Write-Info "Step 4/6 - Python virtual environment..."
+Write-Info "Step 3/5 - Python virtual environment..."
 Write-Info "Location: $VenvDir (outside repo)"
 $venvPython = Join-Path $VenvDir "Scripts\python.exe"
 if (-not (Test-Path $venvPython)) {
@@ -253,7 +251,7 @@ if (-not (Test-Path $venvPython)) {
 Write-Ok "Python packages installed"
 Write-Host ""
 
-Write-Info "Step 5/6 - Writing .env.local & installing npm packages..."
+Write-Info "Step 4/5 - Writing .env.local & installing npm packages..."
 $envFile = Join-Path $Root ".env.local"
 if (Test-Path $envFile) {
     if (-not $Yes) {
@@ -286,14 +284,8 @@ if ($LASTEXITCODE -ne 0) { Write-Fail "npm install failed. Try: Remove-Item -Rec
 Write-Ok "npm packages installed"
 Write-Host ""
 
-Write-Info "Step 6/6 - Starting database & syncing schema..."
-Start-Database
-if (Schema-Exists) {
-    Write-Warn "Schema already present - skipping db:push"
-} else {
-    npm run db:push
-}
-Write-Ok "Database schema ready"
+Write-Info "Step 5/5 - Database..."
+Write-Ok "Using shared cloud database - schema is managed centrally (no local DB, no db:push)."
 Write-Host ""
 
 Write-Host "========================================"
@@ -304,7 +296,5 @@ Write-Host "  npm run build; npm run start    # recommended (fast, stable)"
 Write-Host "  npm run dev                     # development (slow first load)"
 Write-Host "  -> http://localhost:5001/signup  (admin secret in .env.local)"
 Write-Host ""
-Write-Host "  Database controls:"
-Write-Host "    npm run db:up      # start Postgres"
-Write-Host "    npm run db:down    # stop Postgres (data kept)"
+Write-Host "  Database: shared cloud (Neon) - configured via DATABASE_URL in .env.local."
 Write-Host ""
