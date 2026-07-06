@@ -92,6 +92,25 @@ For an **admin** account, use `ADMIN_SECRET_KEY` from `scripts/team-secrets.env`
 
 ---
 
+## What's available in the app
+
+Once you're signed in (base URL `http://localhost:5001`):
+
+| Page | Path | What it's for |
+|------|------|---------------|
+| Problems | `/problems` | Browse and manage CP-prep problems |
+| Pipeline | `/pipeline` | Run the multi-step content generation pipeline |
+| Outputs | `/outputs` | View the generated files for each problem |
+| Guide | `/guide` | In-app usage guide |
+| What's New | `/whats-new` | Recent changes / changelog |
+| Settings | `/settings` | Your account settings |
+| Admin | `/admin` | User management + LLM usage & cost tracking (**admins only**) |
+
+Everything is backed by the **shared cloud database**, so problems, outputs, and
+users are the same for the whole team.
+
+---
+
 ## What runs where
 
 | Piece | Where |
