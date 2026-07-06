@@ -37,8 +37,9 @@ cd CodingAutomationWebsite
 
 ```bash
 cp scripts/team-secrets.env.example scripts/team-secrets.env
-# Edit scripts/team-secrets.env — fill in all four:
-#   OPENROUTER_API_KEY, ADMIN_SECRET_KEY, CRON_SECRET, DATABASE_URL
+# Edit scripts/team-secrets.env — fill in the three required values:
+#   OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL
+# (ADMIN_SECRET_KEY is optional — only for self-registering a new admin.)
 ```
 
 > `DATABASE_URL` is the shared Neon connection string — ask your team lead. It must

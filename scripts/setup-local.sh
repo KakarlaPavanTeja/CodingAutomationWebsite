@@ -309,8 +309,9 @@ info "Step 2/5 — Loading secrets & configuring..."
 load_team_secrets
 [ -n "${OPENROUTER_API_KEY:-}" ] || fail "OPENROUTER_API_KEY missing in team-secrets.env"
 [ -n "${CRON_SECRET:-}" ]         || fail "CRON_SECRET missing in team-secrets.env"
-[ -n "${ADMIN_SECRET_KEY:-}" ]    || fail "ADMIN_SECRET_KEY missing in team-secrets.env"
 [ -n "${DATABASE_URL:-}" ]        || fail "DATABASE_URL missing in team-secrets.env — set the shared cloud (Neon) connection string (see scripts/team-secrets.env.example)."
+# ADMIN_SECRET_KEY is optional — only needed to self-register a NEW admin at signup.
+[ -n "${ADMIN_SECRET_KEY:-}" ]    || warn "ADMIN_SECRET_KEY not set — optional; existing accounts (including admins) work without it."
 DEFAULT_APP_URL="${APP_URL:-http://localhost:5001}"
 if [ "$AUTO_YES" = false ]; then
   read -r -p "APP_URL [$DEFAULT_APP_URL]: " APP_URL_INPUT
@@ -350,7 +351,7 @@ fi
   echo "PIPELINE_ROOT=$ROOT/pipeline"
   echo "PYTHON_PATH=$VENV_PYTHON"
   echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
-  echo "ADMIN_SECRET_KEY=$ADMIN_SECRET_KEY"
+  [ -n "${ADMIN_SECRET_KEY:-}" ] && echo "ADMIN_SECRET_KEY=$ADMIN_SECRET_KEY"
   echo "DATABASE_URL=$DATABASE_URL"
   echo "CRON_SECRET=$CRON_SECRET"
   [ -n "${RESEND_API_KEY:-}" ] && echo "RESEND_API_KEY=$RESEND_API_KEY"

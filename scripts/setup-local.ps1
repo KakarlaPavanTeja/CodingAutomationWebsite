@@ -220,9 +220,11 @@ Write-Host ""
 
 Write-Info "Step 2/5 - Loading secrets & configuring..."
 $team = Import-TeamSecrets
-foreach ($key in @("OPENROUTER_API_KEY", "CRON_SECRET", "ADMIN_SECRET_KEY", "DATABASE_URL")) {
+foreach ($key in @("OPENROUTER_API_KEY", "CRON_SECRET", "DATABASE_URL")) {
     if (-not $team[$key]) { Write-Fail "$key missing in team-secrets.env - set the shared cloud (Neon) connection string (see scripts/team-secrets.env.example)." }
 }
+# ADMIN_SECRET_KEY is optional — only needed to self-register a NEW admin at signup.
+if (-not $team["ADMIN_SECRET_KEY"]) { Write-Warn "ADMIN_SECRET_KEY not set — optional; existing accounts (including admins) work without it." }
 
 $DATABASE_URL = $team["DATABASE_URL"]
 $defaultAppUrl = if ($team["APP_URL"]) { $team["APP_URL"] } else { "http://localhost:5001" }
@@ -265,10 +267,10 @@ $lines = @(
     "PIPELINE_ROOT=$Root\pipeline"
     "PYTHON_PATH=$venvPython"
     "OPENROUTER_API_KEY=$($team['OPENROUTER_API_KEY'])"
-    "ADMIN_SECRET_KEY=$($team['ADMIN_SECRET_KEY'])"
     "DATABASE_URL=$DATABASE_URL"
     "CRON_SECRET=$($team['CRON_SECRET'])"
 )
+if ($team["ADMIN_SECRET_KEY"]) { $lines += "ADMIN_SECRET_KEY=$($team['ADMIN_SECRET_KEY'])" }
 if ($team["RESEND_API_KEY"]) { $lines += "RESEND_API_KEY=$($team['RESEND_API_KEY'])" }
 if ($team["OPENROUTER_BASE_URL"]) { $lines += "OPENROUTER_BASE_URL=$($team['OPENROUTER_BASE_URL'])" }
 $lines += "PORT=5001"
