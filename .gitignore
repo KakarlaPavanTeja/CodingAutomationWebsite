@@ -66,4 +66,4 @@ LOCAL_SETUP.md
 scripts/export-replit-db.mts
 scripts/export-replit-storage.mts
 scripts/import-db.mts
-scripts/team-users-export/
+

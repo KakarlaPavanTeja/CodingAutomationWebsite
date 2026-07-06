@@ -1,0 +1,9 @@
+{
+  "exportedAt": "2026-07-06T05:48:59.807Z",
+  "database": "replit-helium host=helium db=heliumdb",
+  "tables": {
+    "users": 5,
+    "profiles": 5
+  },
+  "purpose": "team-local-auth-import"
+}

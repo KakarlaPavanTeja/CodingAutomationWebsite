@@ -1,0 +1,47 @@
+[
+  {
+    "id": "608316ce-89ed-4302-89f2-a18812bfdb03",
+    "email": "kpt8978861257@gmail.com",
+    "password_hash": null,
+    "email_verified_at": "2026-04-04T22:46:40.776Z",
+    "password_reset_required": true,
+    "created_at": "2026-04-04T22:46:09.875Z",
+    "updated_at": "2026-04-22T06:35:23.774Z"
+  },
+  {
+    "id": "69a64335-da46-4429-8481-61e11ae8d6b5",
+    "email": "chittaloori.rekha@nxtwave.co.in",
+    "password_hash": "$2b$12$5ZoR4Qh162obeuAUEuPQqesOh19T/66XcumyTwyI.3WH.rDi3Cwlu",
+    "email_verified_at": "2026-04-06T04:48:08.306Z",
+    "password_reset_required": false,
+    "created_at": "2026-04-06T04:47:34.688Z",
+    "updated_at": "2026-04-22T11:19:43.922Z"
+  },
+  {
+    "id": "9f853159-41e0-49e7-ad83-cc425bd63ae5",
+    "email": "narava.harikrishna@nxtwave.co.in",
+    "password_hash": "$2b$12$A2mYjKaYkfdf5zWoBmWGpOEEJRrz5sBx46KwxJfdUDiWv/4qnQlqW",
+    "email_verified_at": "2026-04-06T04:07:03.757Z",
+    "password_reset_required": false,
+    "created_at": "2026-04-06T04:06:33.188Z",
+    "updated_at": "2026-04-22T11:25:12.604Z"
+  },
+  {
+    "id": "730bb90d-d62f-4081-8235-3e48342e1049",
+    "email": "rishap.kumar@nxtwave.co.in",
+    "password_hash": "$2b$12$NkQmwZ3x..f3LI2R74u.1eebi.VvD.t.kOfW2aUQ8/ScNWE9rvIgG",
+    "email_verified_at": "2026-04-05T10:21:17.195Z",
+    "password_reset_required": false,
+    "created_at": "2026-04-05T10:21:03.668Z",
+    "updated_at": "2026-04-22T11:26:01.403Z"
+  },
+  {
+    "id": "a1581635-8be3-441f-ba39-12cb39f1dc93",
+    "email": "kakarla.pavanteja@nxtwave.co.in",
+    "password_hash": "$2b$12$oUs6BYtxs3eVngH4wPcWeOWn5VeonypNJxO7Swu0bnujmsXDITuA6",
+    "email_verified_at": "2026-04-04T17:41:37.736Z",
+    "password_reset_required": false,
+    "created_at": "2026-04-04T17:40:44.560Z",
+    "updated_at": "2026-04-28T08:21:16.838Z"
+  }
+]

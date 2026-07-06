@@ -1,0 +1,47 @@
+[
+  {
+    "id": "a1581635-8be3-441f-ba39-12cb39f1dc93",
+    "email": "kakarla.pavanteja@nxtwave.co.in",
+    "display_name": "Kakarla Pavan Teja",
+    "role": "admin",
+    "status": "active",
+    "created_at": "2026-04-04T17:40:44.559Z",
+    "updated_at": "2026-04-04T20:53:08.763Z"
+  },
+  {
+    "id": "608316ce-89ed-4302-89f2-a18812bfdb03",
+    "email": "kpt8978861257@gmail.com",
+    "display_name": "testingProblemSetter",
+    "role": "problem_setter",
+    "status": "left",
+    "created_at": "2026-04-04T22:46:09.874Z",
+    "updated_at": "2026-04-06T04:54:39.889Z"
+  },
+  {
+    "id": "730bb90d-d62f-4081-8235-3e48342e1049",
+    "email": "rishap.kumar@nxtwave.co.in",
+    "display_name": "Rishap Kumar",
+    "role": "problem_setter",
+    "status": "active",
+    "created_at": "2026-04-05T10:21:03.667Z",
+    "updated_at": "2026-04-05T10:21:03.667Z"
+  },
+  {
+    "id": "9f853159-41e0-49e7-ad83-cc425bd63ae5",
+    "email": "narava.harikrishna@nxtwave.co.in",
+    "display_name": "Hari Krishna",
+    "role": "problem_setter",
+    "status": "active",
+    "created_at": "2026-04-06T04:06:33.187Z",
+    "updated_at": "2026-04-06T04:06:33.187Z"
+  },
+  {
+    "id": "69a64335-da46-4429-8481-61e11ae8d6b5",
+    "email": "chittaloori.rekha@nxtwave.co.in",
+    "display_name": "Rekha",
+    "role": "problem_setter",
+    "status": "active",
+    "created_at": "2026-04-06T04:47:34.688Z",
+    "updated_at": "2026-04-06T04:47:34.688Z"
+  }
+]
