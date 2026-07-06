@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import { resolveDatabaseUrl } from "./resolve-database-url";
 import * as schema from "./schema";
 
 declare global {
@@ -7,8 +8,8 @@ declare global {
   var __pgClient: ReturnType<typeof postgres> | undefined;
 }
 
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
+const connectionString = resolveDatabaseUrl(process.env.DATABASE_URL ?? "");
+if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL is not set");
 }
 

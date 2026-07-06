@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { config as loadEnv } from "dotenv";
 import postgres from "postgres";
+import { resolveDatabaseUrl } from "../src/lib/db/resolve-database-url";
 
 const USER_TABLES = ["users", "profiles"] as const;
 
@@ -43,9 +44,10 @@ function isLocalPostgresUrl(url: string): boolean {
 }
 
 function connectPostgres(url: string) {
+  const resolved = resolveDatabaseUrl(url);
   const opts: postgres.Options<Record<string, never>> = { max: 1, prepare: false };
-  if (isLocalPostgresUrl(url)) opts.ssl = false;
-  return postgres(url, opts);
+  if (isLocalPostgresUrl(resolved)) opts.ssl = false;
+  return postgres(resolved, opts);
 }
 
 async function upsertRows(
@@ -108,10 +110,14 @@ async function main() {
   const fromDir = resolve(process.cwd(), String(args.from || "scripts/team-users-export"));
   for (const file of [".env.local", ".env"]) {
     const p = resolve(process.cwd(), file);
-    if (existsSync(p)) loadEnv({ path: p, quiet: true });
+    if (existsSync(p)) loadEnv({ path: p, quiet: true, override: true });
   }
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is not set in .env.local");
+  const resolved = resolveDatabaseUrl(url);
+  if (resolved !== url) {
+    console.log(`Using unix-socket DATABASE_URL (host query param)`);
+  }
   if (!existsSync(join(fromDir, "json", "users.json"))) {
     throw new Error(`No export at ${fromDir}/json/users.json`);
   }

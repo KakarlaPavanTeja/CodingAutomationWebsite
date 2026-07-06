@@ -131,7 +131,15 @@ bootstrap_local_postgres() {
 
 is_socket_db_url() {
   local db_url="$1"
-  [[ "$db_url" == postgresql:///* ]]
+  [[ "$db_url" == postgresql:///* ]] || [[ "$db_url" == *"?host=/var/run/postgresql"* ]] || [[ "$db_url" == *"?host=/tmp"* ]]
+}
+
+local_socket_db_url() {
+  local socket_dir="/var/run/postgresql"
+  if [ ! -d "$socket_dir" ] && [ -d /tmp ]; then
+    socket_dir="/tmp"
+  fi
+  echo "postgresql://${USER}@localhost/codingautomation?host=${socket_dir}"
 }
 
 install_ubuntu_postgres() {
@@ -327,7 +335,7 @@ ensure_postgres() {
   fail "PostgreSQL connection failed.
 
 Use unix-socket auth (no password) in .env.local:
-  DATABASE_URL=postgresql:///codingautomation
+  DATABASE_URL=postgresql://\$USER@localhost/codingautomation?host=/var/run/postgresql
 
 Then create your local role + database:
   # Ubuntu
@@ -382,7 +390,7 @@ echo ""
 info "Step 2/5 — Loading secrets & configuring..."
 load_team_secrets
 
-DEFAULT_DB="postgresql:///codingautomation"  # unix socket — always local; never TCP @localhost
+DEFAULT_DB="$(local_socket_db_url)"  # explicit unix socket — works in psql and Node
 DEFAULT_APP_URL="${APP_URL:-http://localhost:5001}"
 
 [ -n "${OPENROUTER_API_KEY:-}" ] || fail "OPENROUTER_API_KEY missing in team-secrets.env"

@@ -101,18 +101,13 @@ Replit problems are **not** imported — only user accounts.
 
 This is a **Postgres connection** error, not your Replit password.
 
-Your `.env.local` probably has a TCP URL like `postgresql://nxtwave@localhost:5432/...`. Fix it:
+Your `.env.local` probably has `postgresql:///codingautomation` or a TCP URL. Node connects via TCP for those and fails; use an explicit unix socket:
 
 ```bash
-# 1. Fix DATABASE_URL in .env.local
-sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgresql:///codingautomation|' .env.local
+# Fix .env.local (Ubuntu)
+sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql://${USER}@localhost/codingautomation?host=/var/run/postgresql|" .env.local
 
-# 2. Create local Postgres role + database (Ubuntu)
-sudo systemctl start postgresql
-sudo -u postgres createuser -s $USER
-sudo -u postgres createdb -O $USER codingautomation
-
-# 3. Re-import users and restart
+# Re-import users and restart
 npm run import:team-users
 npm run dev
 ```
