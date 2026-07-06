@@ -11,7 +11,11 @@
     "db:studio": "drizzle-kit studio",
     "db": "tsx scripts/db.mts",
     "test:json": "cd pipeline/Scripts && PYTHONPATH=. python3 -m unittest discover -s tests -p 'test_*.py'",
-    "setup:local": "bash scripts/setup-local.sh"
+    "setup:local": "bash scripts/setup-local.sh",
+    "export:team-users": "tsx scripts/export-team-users.mts",
+    "import:team-users": "tsx scripts/import-team-users.mts",
+    "export:db": "tsx scripts/export-replit-db.mts --pg-dump",
+    "import:db": "tsx scripts/import-db.mts"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",

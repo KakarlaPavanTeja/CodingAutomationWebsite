@@ -217,7 +217,7 @@ foreach ($key in @("OPENROUTER_API_KEY", "CRON_SECRET", "ADMIN_SECRET_KEY")) {
     if (-not $team[$key]) { Write-Fail "$key missing in team-secrets.env" }
 }
 
-$defaultDb = if ($team["DATABASE_URL"]) { $team["DATABASE_URL"] } else { "postgresql://postgres@localhost:5432/codingautomation" }
+$defaultDb = "postgresql://postgres@localhost:5432/codingautomation"
 $defaultAppUrl = if ($team["APP_URL"]) { $team["APP_URL"] } else { "http://localhost:5001" }
 
 if ($Yes) {
@@ -284,7 +284,7 @@ $lines | Set-Content -Path $envFile -Encoding UTF8
 Write-Ok "Wrote .env.local"
 Write-Host ""
 
-Write-Info "Step 5/5 — npm install & database sync..."
+Write-Info "Step 5/6 — npm install & database sync..."
 Fix-NpmForLocal
 npm install --no-audit --no-fund
 Write-Ok "npm packages installed"
@@ -292,10 +292,28 @@ npm run db:push
 Write-Ok "Database schema synced"
 Write-Host ""
 
+$usersExport = Join-Path $Root "scripts\team-users-export"
+$usersJson = Join-Path $usersExport "json\users.json"
+if (Test-Path $usersJson) {
+    Write-Info "Step 6/6 — Importing Replit users (logins only)..."
+    npx tsx scripts/import-team-users.mts --from $usersExport
+    Write-Ok "Team users imported — use your Replit email + password"
+} else {
+    Write-Info "Step 6/6 — Team users import"
+    Write-Warn "Missing scripts/team-users-export/json/users.json — ask team lead"
+}
+
+Write-Host ""
 Write-Host "========================================"
 Write-Host "Setup complete!" -ForegroundColor Green
 Write-Host "========================================"
 Write-Host ""
 Write-Host "  npm run dev"
 Write-Host "  → http://localhost:5001"
+Write-Host ""
+if (Test-Path $usersJson) {
+    Write-Host "  Log in with your Replit email + password"
+} else {
+    Write-Host "  Sign up: /signup  (admin secret in .env.local)"
+}
 Write-Host ""

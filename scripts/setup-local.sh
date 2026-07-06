@@ -110,6 +110,17 @@ install_ubuntu_python() {
   fi
 }
 
+bootstrap_local_postgres() {
+  # Ubuntu TCP to localhost often requires a password; unix-socket peer auth works
+  # when the OS user has a matching Postgres role.
+  if ! has_cmd psql || ! is_ubuntu; then
+    return 0
+  fi
+  info "Configuring local Postgres role + database for $USER ..."
+  sudo -u postgres createuser -s "$USER" 2>/dev/null || true
+  sudo -u postgres createdb -O "$USER" codingautomation 2>/dev/null ||     createdb codingautomation 2>/dev/null || true
+}
+
 install_ubuntu_postgres() {
   if ! has_cmd psql; then
     info "Installing PostgreSQL..."
@@ -119,6 +130,7 @@ install_ubuntu_postgres() {
   fi
   sudo systemctl enable postgresql 2>/dev/null || true
   sudo systemctl start postgresql 2>/dev/null || true
+  bootstrap_local_postgres
 }
 
 install_ubuntu_system_deps() {
@@ -280,6 +292,13 @@ ensure_postgres() {
     return
   fi
   warn "Cannot connect to: $db_url"
+  if is_ubuntu && [[ "$db_url" != *"://"*"@"*":"*"/"* ]] && [[ "$db_url" == *"localhost"* || "$db_url" == postgresql:///* ]]; then
+    bootstrap_local_postgres
+    if psql "$db_url" -c 'SELECT 1' >/dev/null 2>&1; then
+      ok "PostgreSQL connection OK (after bootstrap)"
+      return
+    fi
+  fi
   local dbname
   dbname="$(echo "$db_url" | sed -n 's|.*/\([^?]*\)$|\1|p')"
   if [ -n "$dbname" ] && has_cmd createdb; then
@@ -292,12 +311,17 @@ ensure_postgres() {
       fi
     fi
   fi
-  warn "Start Postgres: sudo systemctl start postgresql"
-  warn "Create DB: createdb $dbname"
-  if [ "$AUTO_YES" = false ]; then
-    read -r -p "Continue setup anyway? (y/N): " cont
-    [[ "$cont" =~ ^[Yy]$ ]] || fail "Aborted — fix PostgreSQL first."
-  fi
+  fail "PostgreSQL connection failed (auth_failed).
+
+Fix on Ubuntu — run these, then re-run setup:
+  sudo systemctl start postgresql
+  sudo -u postgres createuser -s $USER
+  sudo -u postgres createdb -O $USER codingautomation
+
+Then set in .env.local:
+  DATABASE_URL=postgresql:///codingautomation
+
+Or use the shared Replit DATABASE_URL in scripts/team-secrets.env"
 }
 
 load_team_secrets() {
@@ -336,7 +360,7 @@ echo ""
 info "Step 2/5 — Loading secrets & configuring..."
 load_team_secrets
 
-DEFAULT_DB="${DATABASE_URL:-postgresql://${USER}@localhost:5432/codingautomation}"
+DEFAULT_DB="postgresql:///codingautomation"  # always local; users imported from team-users-export
 DEFAULT_APP_URL="${APP_URL:-http://localhost:5001}"
 
 [ -n "${OPENROUTER_API_KEY:-}" ] || fail "OPENROUTER_API_KEY missing in team-secrets.env"
@@ -401,7 +425,7 @@ fi
 ok "Wrote .env.local"
 echo ""
 
-info "Step 5/5 — npm install & database sync..."
+info "Step 5/6 — npm install & database sync..."
 fix_npm_for_local
 
 if ! npm install --no-audit --no-fund; then
@@ -417,6 +441,19 @@ npm run db:push
 ok "Database schema synced"
 echo ""
 
+USERS_EXPORT="$ROOT/scripts/team-users-export"
+if [ -f "$USERS_EXPORT/json/users.json" ]; then
+  info "Step 6/6 — Importing Replit users (logins only)..."
+  npx tsx scripts/import-team-users.mts --from "$USERS_EXPORT"
+  ok "Team users imported — use your Replit email + password to log in"
+else
+  info "Step 6/6 — Team users import"
+  warn "Missing scripts/team-users-export/json/users.json"
+  warn "Ask team lead for the export zip → extract to scripts/team-users-export/"
+  warn "Or sign up at /signup after setup"
+fi
+echo ""
+
 echo "========================================"
 echo -e "${GREEN}Setup complete!${NC}"
 echo "========================================"
@@ -424,5 +461,9 @@ echo ""
 echo "  npm run dev"
 echo "  → http://localhost:5001"
 echo ""
-echo "  Sign up: /signup  (admin secret in .env.local → ADMIN_SECRET_KEY)"
+if [ -f "$USERS_EXPORT/json/users.json" ]; then
+  echo "  Log in with your Replit email + password"
+else
+  echo "  Sign up: /signup  (admin secret → ADMIN_SECRET_KEY in .env.local)"
+fi
 echo ""
