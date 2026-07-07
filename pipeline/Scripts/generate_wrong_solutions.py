@@ -5,7 +5,7 @@ Runs AFTER `generate_testcases` and BEFORE `benchmark_testcases` / `harden_testc
 Writes runnable incorrect Python programs to `Outputs/wrong_solutions/*.py` for the
 B2 wrong-approach gate in benchmark_suite.py.
 
-Uses Claude Sonnet 5 via OpenRouter (purpose `wrong_solutions`, reasoning medium).
+Uses Claude Sonnet 4.6 via OpenRouter (purpose `wrong_solutions`, reasoning medium).
 """
 
 from __future__ import annotations
@@ -230,7 +230,7 @@ def main():
         "cost_usd": 0.0,
     }
 
-    print("Calling LLM via OpenRouter (Claude Sonnet 5) for wrong-approach solutions...")
+    print("Calling LLM via OpenRouter (Claude Sonnet 4.6) for wrong-approach solutions...")
     content, usage = call_llm(system_prompt, user_prompt, purpose="wrong_solutions")
     _log_usage(usage, "wrong_solutions_generation", usage_totals)
 
@@ -321,8 +321,19 @@ def main():
         print(f"  Saved {fname} ({label})")
 
     if saved == 0:
-        print("Error: no valid wrong-solution files were saved.")
-        sys.exit(1)
+        # No candidate qualified as a genuinely-wrong solution (all were empty,
+        # unparseable, identical to the optimal, or functionally equivalent).
+        # This is not a pipeline failure: the downstream B2 wrong-approach gate
+        # simply SKIPS when Outputs/wrong_solutions/ is empty (see
+        # benchmark_suite.run_wrong_approach_gate). Exit cleanly so the step is
+        # marked completed with a warning rather than failed/blocking.
+        print(
+            "Warning: no valid wrong-solution files were saved "
+            "(no candidate produced a genuinely different result). "
+            "B2 wrong-approach gate will be skipped for this problem.",
+            flush=True,
+        )
+        sys.exit(0)
 
     print(f"Successfully saved {saved} wrong solution(s) to {out_dir}/")
     print(

@@ -3,7 +3,7 @@ LLM calls via OpenRouter (Chat Completions API).
 
 Quick reference
 ---------------
-Primary model (all purposes): anthropic/claude-sonnet-5
+Primary model (all purposes): anthropic/claude-sonnet-4.6
 
 Purpose routing (default reasoning → fallbacks on 429/5xx):
   chat            high    → Gemini 3.1 Pro → GPT-5.4
@@ -12,7 +12,7 @@ Purpose routing (default reasoning → fallbacks on 429/5xx):
   editorial       dynamic → Gemini 3.1 Pro → GPT-5.5 → Opus 4.8
   harden          medium  → Gemini 3.1 Pro → GPT-5.5
   wrong_solutions medium  → Gemini 3.1 Pro → GPT-5.5
-  testcases       tiered  → easy/med: Sonnet 5 high; hard: Opus 4.8 high
+  testcases       tiered  → easy/med: Sonnet 4.6 high; hard: Opus 4.8 high
 
 Configuration
 -------------
@@ -54,7 +54,7 @@ from openai import (
 # Model identifiers
 # =============================================================================
 
-_SONNET_5 = "anthropic/claude-sonnet-5"
+_SONNET_46 = "anthropic/claude-sonnet-4.6"
 _GEMINI_PRO = "google/gemini-3.1-pro-preview"
 _GPT_55 = "openai/gpt-5.5"
 _GPT_54 = "openai/gpt-5.4"
@@ -67,13 +67,13 @@ _OPUS_48 = "anthropic/claude-opus-4.8"
 
 # Primary model per purpose (override: OPENROUTER_MODEL_<SUFFIX>).
 _PURPOSE_DEFAULTS: dict[str, str] = {
-    "testcases": _SONNET_5,
-    "chat": _SONNET_5,
-    "code": _SONNET_5,
-    "enrichment": _SONNET_5,
-    "editorial": _SONNET_5,
-    "harden": _SONNET_5,
-    "wrong_solutions": _SONNET_5,
+    "testcases": _SONNET_46,
+    "chat": _SONNET_46,
+    "code": _SONNET_46,
+    "enrichment": _SONNET_46,
+    "editorial": _SONNET_46,
+    "harden": _SONNET_46,
+    "wrong_solutions": _SONNET_46,
 }
 
 # Default reasoning + fallback ladder per purpose (429/5xx only).
@@ -128,13 +128,13 @@ _PURPOSE_CONFIG: dict[str, dict] = {
 # Testcase tier defaults when OPENROUTER_MODEL_TESTCASES is not pinned.
 _TESTCASES_TIER_DEFAULTS: dict[str, dict[str, str]] = {
     "easy": {
-        "model": _SONNET_5,
+        "model": _SONNET_46,
         "effort": "high",
         "fallbacks": f"{_GEMINI_PRO},{_GPT_55}",
         "fallback_efforts": "high,medium",
     },
     "medium": {
-        "model": _SONNET_5,
+        "model": _SONNET_46,
         "effort": "high",
         "fallbacks": f"{_GEMINI_PRO},{_GPT_55}",
         "fallback_efforts": "high,medium",
@@ -142,7 +142,7 @@ _TESTCASES_TIER_DEFAULTS: dict[str, dict[str, str]] = {
     "hard": {
         "model": _OPUS_48,
         "effort": "high",
-        "fallbacks": f"{_SONNET_5},{_GEMINI_PRO},{_GPT_55}",
+        "fallbacks": f"{_SONNET_46},{_GEMINI_PRO},{_GPT_55}",
         "fallback_efforts": "high,high,medium",
     },
 }
@@ -609,7 +609,7 @@ def resolve_testcases_routing(difficulty: str | None) -> dict[str, str]:
     Precedence for the model:
       1. OPENROUTER_MODEL_TESTCASES / OPENAI_MODEL_TESTCASES (pins all tiers)
       2. OPENROUTER_MODEL_TESTCASES_{EASY|MEDIUM|HARD} for the active tier
-      3. Built-in tier defaults (easy/medium→sonnet-5 high, hard→opus-4.8 high)
+      3. Built-in tier defaults (easy/medium→sonnet-4.6 high, hard→opus-4.8 high)
 
     Precedence for reasoning effort:
       1. OPENAI_REASONING_EFFORT_TESTCASES (global pin)

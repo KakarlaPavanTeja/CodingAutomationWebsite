@@ -60,7 +60,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     id: "generate_wrong_solutions",
     label: "Generate Wrong Solutions",
     description:
-      "Create plausible incorrect Python solutions for the wrong-approach benchmark gate (B2). Uses Claude Sonnet 5 via OpenRouter (reasoning medium).",
+      "Create plausible incorrect Python solutions for the wrong-approach benchmark gate (B2). Uses Claude Sonnet 4.6 via OpenRouter (reasoning medium).",
     script: "Scripts/generate_wrong_solutions.py",
     subSteps: [],
     hasLanguageSelector: false,
