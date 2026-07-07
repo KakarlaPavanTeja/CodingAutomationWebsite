@@ -111,6 +111,15 @@ const REFERENCE_LANGUAGES = [
   { id: "js", label: "JavaScript" },
 ];
 
+// Solution-file extension per reference language, used by the "use as-is" path.
+// The Python pipeline's detect_user_solution() accepts solution.{py,cpp,java,js}.
+const REFERENCE_EXTENSIONS: Record<string, string> = {
+  cpp: "cpp",
+  java: "java",
+  py: "py",
+  js: "js",
+};
+
 type Phase = "pick" | "prepare" | "review" | "advanced";
 type RawInputMode = "separate" | "combined";
 
@@ -266,6 +275,9 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
   const [presetId, setPresetId] = useState<string>("function-practice");
   const [problemType, setProblemType] = useState("standard");
 
+  // "ai" runs the raw inputs through the LLM prep step; "asis" skips the LLM
+  // and creates the problem directly from the pasted statement + solution.
+  const [prepareMode, setPrepareMode] = useState<"ai" | "asis">("ai");
   const [rawInputMode, setRawInputMode] = useState<RawInputMode>("separate");
   const [rawProblemStatement, setRawProblemStatement] = useState("");
   const [rawReferenceSolution, setRawReferenceSolution] = useState("");
@@ -405,16 +417,15 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
     });
   };
 
-  const handleUpload = async () => {
+  // Shared creation path for both the AI-reviewed output and the raw "as-is"
+  // inputs. `solutionFilename` carries the language extension so the pipeline
+  // can detect the solution (solution.py / solution.cpp / solution.java / …).
+  const submitProblem = async (
+    problemMdText: string,
+    solutionText: string,
+    solutionFilename: string
+  ) => {
     if (createdRef.current || uploading) return;
-    if (!problemName.trim()) {
-      setError("Enter a problem name");
-      return;
-    }
-    if (!hasReviewedContent) {
-      setError("Generate and review problem.md and solution.py first");
-      return;
-    }
 
     setUploading(true);
     setError(null);
@@ -434,13 +445,13 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
 
     formData.append(
       "problemMd",
-      new Blob([generatedProblemMd], { type: "text/markdown" }),
+      new Blob([problemMdText], { type: "text/markdown" }),
       "problem.md"
     );
     formData.append(
       "solution",
-      new Blob([generatedSolutionPy], { type: "text/plain" }),
-      "solution.py"
+      new Blob([solutionText], { type: "text/plain" }),
+      solutionFilename
     );
 
     try {
@@ -454,6 +465,46 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
     } finally {
       setUploading(false);
     }
+  };
+
+  const handleUpload = async () => {
+    if (!problemName.trim()) {
+      setError("Enter a problem name");
+      return;
+    }
+    if (!hasReviewedContent) {
+      setError("Generate and review problem.md and solution.py first");
+      return;
+    }
+    await submitProblem(generatedProblemMd, generatedSolutionPy, "solution.py");
+  };
+
+  const canCreateAsIs = () => {
+    if (!problemName.trim()) return false;
+    const { problemStatement, referenceSolution } = resolveRawInput();
+    return problemStatement.length > 0 && Boolean(referenceSolution?.trim());
+  };
+
+  // "Use as-is": skip the LLM and create straight from the pasted inputs. The
+  // raw statement becomes problem.md; the raw solution is stored with the
+  // extension of the selected reference language.
+  const handleUploadAsIs = async () => {
+    if (!problemName.trim()) {
+      setError("Enter a problem title before creating");
+      return;
+    }
+    const { problemStatement, referenceSolution } = resolveRawInput();
+    if (!problemStatement) {
+      setError("Add a problem statement");
+      return;
+    }
+    if (!referenceSolution?.trim()) {
+      setError("Add a reference solution to create the problem as-is");
+      return;
+    }
+    const ext = REFERENCE_EXTENSIONS[referenceLanguage] ?? "py";
+    setError(null);
+    await submitProblem(problemStatement, referenceSolution, `solution.${ext}`);
   };
 
   // ── Phase 1: Pick workflow ──────────────────────────────────────────
@@ -584,6 +635,27 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
           </div>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2">
+          <Label className="text-sm text-muted-foreground mr-2">Preparation</Label>
+          <Chip
+            selected={prepareMode === "ai"}
+            onClick={() => !isRunning && setPrepareMode("ai")}
+          >
+            Generate with AI
+          </Chip>
+          <Chip
+            selected={prepareMode === "asis"}
+            onClick={() => !isRunning && setPrepareMode("asis")}
+          >
+            Use inputs as-is
+          </Chip>
+          <span className="text-xs text-muted-foreground">
+            {prepareMode === "ai"
+              ? "Cleans up the statement and ports the solution to Python."
+              : "Skips the LLM — creates the problem straight from your pasted inputs."}
+          </span>
+        </div>
+
         <div className="space-y-2">
           <Label htmlFor="problem-name">Problem title</Label>
           <Input
@@ -630,9 +702,13 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
             <section className="flex flex-col overflow-hidden rounded-xl border-2 border-border bg-card shadow-sm">
               <div className="border-b bg-muted/50 px-4 py-3 space-y-2">
                 <div>
-                  <h3 className="text-sm font-semibold">Reference solution (optional)</h3>
+                  <h3 className="text-sm font-semibold">
+                    Reference solution {prepareMode === "asis" ? "(required)" : "(optional)"}
+                  </h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    C++, Java, or other source code to port to Python.
+                    {prepareMode === "asis"
+                      ? "Stored as-is; pick the matching language below."
+                      : "C++, Java, or other source code to port to Python."}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-1">
@@ -668,6 +744,22 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
                 <code className="text-xs">=== SOLUTION ===</code> sections.
               </p>
             </div>
+            {prepareMode === "asis" && (
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Solution language</Label>
+                <div className="flex flex-wrap gap-1">
+                  {REFERENCE_LANGUAGES.map((lang) => (
+                    <Chip
+                      key={lang.id}
+                      selected={referenceLanguage === lang.id}
+                      onClick={() => setReferenceLanguage(lang.id)}
+                    >
+                      {lang.label}
+                    </Chip>
+                  ))}
+                </div>
+              </div>
+            )}
             <div
               className="flex min-h-[200px] flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted/30 px-6 text-center"
               onDragOver={(e) => e.preventDefault()}
@@ -713,33 +805,51 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
           </section>
         )}
 
-        <div className="space-y-2">
-          <Label className="text-sm text-muted-foreground">Generation log</Label>
-          <PrepLogPanel logs={logs} />
-        </div>
+        {prepareMode === "ai" && (
+          <div className="space-y-2">
+            <Label className="text-sm text-muted-foreground">Generation log</Label>
+            <PrepLogPanel logs={logs} />
+          </div>
+        )}
 
         <div className="flex items-center justify-between border-t pt-4">
           <Button
             variant="outline"
-            disabled={isRunning}
+            disabled={isRunning || uploading}
             onClick={() => setPhase("pick")}
           >
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back
           </Button>
-          <Button onClick={handleGenerate} disabled={isRunning || !canGenerate()}>
-            {isRunning ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Generating…
-              </>
-            ) : (
-              <>
-                <Sparkles className="mr-2 h-4 w-4" />
-                Generate problem.md & solution.py
-              </>
-            )}
-          </Button>
+          {prepareMode === "ai" ? (
+            <Button onClick={handleGenerate} disabled={isRunning || !canGenerate()}>
+              {isRunning ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Generating…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  Generate problem.md & solution.py
+                </>
+              )}
+            </Button>
+          ) : (
+            <Button onClick={handleUploadAsIs} disabled={uploading || !canCreateAsIs()}>
+              {uploading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating…
+                </>
+              ) : (
+                <>
+                  Use inputs as-is & create
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </>
+              )}
+            </Button>
+          )}
         </div>
       </div>
     );
