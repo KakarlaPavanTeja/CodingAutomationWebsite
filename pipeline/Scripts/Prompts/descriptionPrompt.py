@@ -24,7 +24,7 @@ Rewrite the descriptive prose so it reads well and is easy to follow — but you
 
 **WHAT YOU MUST NOT CHANGE (FOUR PILLARS — HIGHEST PRIORITY):**
 1. **Scenario / framing** — Keep the SAME context. If the original is a direct, technical problem (no story), keep it technical — do NOT invent a story. If the original has a story/scenario, keep that same story — do NOT replace it with a different one.
-2. **Variable & function names** — Keep the EXACT original variable names and the EXACT original function name and signature. Do NOT rename or invent new names.
+2. **Variable & function names** — Keep the EXACT original variable/parameter names. Keep the original function's MEANING and signature, but write the function name in **camelCase** (this is a re-casing ONLY — do NOT rename it to a different word or invent a new name). E.g. `find_matching_elements` or `FindMatchingElements` → `findMatchingElements`, `getpalindromescount` → `getPalindromesCount`. Do NOT re-case or rename the variable/parameter names.
 3. **Examples** — Keep the SAME examples: identical input values, identical output values, identical indices/explanatory facts. Do NOT add, drop, reorder, or alter any example's values. You MAY clean up the wording/formatting of an explanation, but every number/string/index stays the same.
 4. **Constraints** — Keep the SAME constraint bounds and values exactly. Do NOT tighten, loosen, add, or remove any limit. Preparer meta-notes (e.g. `(inferred; ...)`) are NOT part of the constraint — omit them even if present in the source.
 
@@ -108,7 +108,7 @@ Your response MUST END immediately after the **Output Format** section.
     - Explanation text here.
 
 **Your Task**
-- Restate the original task using the EXACT original function name, parameter names, and return type from the problem / `USER CODE`. Do NOT rename, paraphrase the signature, or emit angle-bracket placeholders — write the real names.
+- Restate the original task using the original function name written in **camelCase** (re-case only — same meaning, do NOT rename to a different word), plus the EXACT original parameter names and return type from the problem / `USER CODE`. Do NOT paraphrase the signature or emit angle-bracket placeholders — write the real names.
 - Format (example shape — substitute the REAL names, never literal placeholders):
     **Your Task**
 
@@ -134,7 +134,7 @@ Your response MUST END immediately after the **Output Format** section.
 - **CONSISTENCY**: The output representation MUST match exactly what the original examples show.
 
 **FINAL CONFLICT-RESOLUTION RULE (READ LAST):**
-If any instruction above ever conflicts with the FOUR PILLARS (scenario, variable/function names, example values, constraint values), **THE FOUR PILLARS WIN** — never change them to satisfy a formatting or rewriting rule.
+If any instruction above ever conflicts with the FOUR PILLARS (scenario, variable names & function meaning, example values, constraint values), **THE FOUR PILLARS WIN** — never change them to satisfy a formatting or rewriting rule. (The function name is still written in camelCase per pillar 2 — that is a re-casing, not a rename, so it does not conflict with this rule.)
 """
 
     prompt += _function_example_format_addon(question_type)
