@@ -4,6 +4,8 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: [
     process.env.REPLIT_DEV_DOMAIN,
     ...(process.env.REPLIT_DOMAINS?.split(",") ?? []),
+    // Allow LAN access so teammates can reach the dev server over the local network.
+    "172.16.*.*",
   ].filter((d): d is string => Boolean(d)),
   experimental: {
     authInterrupts: true,
