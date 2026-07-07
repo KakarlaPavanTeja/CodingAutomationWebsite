@@ -167,6 +167,43 @@ def parse_problem_md(file_path):
 
     return problem_name, structure_type, question_kind, scenario_level, content
 
+def to_camel_case(name):
+    """Normalize a function name to camelCase.
+
+    Handles snake_case, kebab-case, spaced, PascalCase and SCREAMING_SNAKE
+    inputs; an already-camelCase name is returned essentially unchanged (only
+    its first character is lowercased). Any non-alphanumeric character is
+    treated as a word separator. This is the single enforcement point that
+    guarantees the function name flowing into generated code is camelCase,
+    regardless of how it was written in the source description/user code.
+    """
+    if not name:
+        return name
+    raw = name.strip()
+    if not raw:
+        return raw
+    tokens = [t for t in re.split(r'[^0-9a-zA-Z]+', raw) if t]
+    if not tokens:
+        return raw
+    if len(tokens) == 1:
+        token = tokens[0]
+        # No delimiters: keep any internal camelCase, only fix the first char.
+        # An all-uppercase token (e.g. SCREAMING) becomes fully lowercase.
+        if token.isupper():
+            return token.lower()
+        return token[0].lower() + token[1:]
+
+    def _norm(token, first):
+        # Collapse all-caps tokens (SCREAMING_SNAKE / acronyms) to lowercase so
+        # they capitalize cleanly; otherwise preserve any existing inner casing.
+        base = token.lower() if token.isupper() else token
+        if first:
+            return base[0].lower() + base[1:]
+        return base[0].upper() + base[1:]
+
+    return ''.join(_norm(t, i == 0) for i, t in enumerate(tokens))
+
+
 def _parse_signature(raw):
     """Robustly parse the function-signature JSON the extractor returns.
 
@@ -192,6 +229,9 @@ def _parse_signature(raw):
     name = str(data.get("function_name") or "").strip()
     if not name:
         return None
+    # The function name must always be camelCase in the generated code, even
+    # when the source description/user code used snake_case or PascalCase.
+    name = to_camel_case(name)
     params = data.get("parameters") or []
     if not isinstance(params, list):
         params = []
