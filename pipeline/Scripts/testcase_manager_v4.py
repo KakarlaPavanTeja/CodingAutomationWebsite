@@ -279,6 +279,10 @@ def _reformat_and_audit(out_path: str, description: str) -> dict:
         else data.get("test_cases") if isinstance(data, dict) else []
     )
     subtasks_fixed = sync_subtask_tags(tcs, description) if tcs else 0
+    # Force the public example cases (order 1 & 2) to match description Examples 1 & 2
+    # exactly and tag them `example`. Mutates the case dicts in place (they are the same
+    # objects inside `data`), so the changes persist when `data` is written below.
+    examples_fixed = sync_example_testcases(tcs, description) if tcs else 0
     # Reorder AFTER subtask tags exist so the subtask-aware sort applies.
     did_reorder = _reorder_testcases_json_root(data)
     with open(out_path, "w", encoding="utf-8") as f:
