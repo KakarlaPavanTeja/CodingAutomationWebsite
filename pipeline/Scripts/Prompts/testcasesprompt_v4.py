@@ -192,6 +192,8 @@ def get_testcases_prompt(
     distribution_preset=DEFAULT_DISTRIBUTION_PRESET,
     difficulty=None,
     problem_type=None,
+    is_function=True,
+    signature_params=None,
 ):
     """
     Build (system_prompt, user_prompt) for v4 generation.
@@ -201,6 +203,13 @@ def get_testcases_prompt(
         (optimal vs brute) and abort on any mismatch. When None, the script
         falls back to self-consistency checks only and notes the weaker guarantee.
     Output is always weighted (weightage + subtask tags) for a partial-credit judge.
+
+    is_function / signature_params : whether this is a function-based problem and,
+        if so, the reference function's parameter names. Function-based problems use
+        the description's NAMED-VARIABLE-ASSIGNMENT input representation (e.g.
+        ``n = 2`` / ``values = [3, 3]``) with a return-value output; non-function
+        problems use the classic line-based STDIN/STDOUT representation. This keeps
+        the generated `input`/`output` strings consistent with the description.
     """
     if distribution_preset not in DISTRIBUTION_BY_MODE:
         distribution_preset = DEFAULT_DISTRIBUTION_PRESET
@@ -272,6 +281,45 @@ Every case carries subtask structure and per-case weights.
   stress/large cases carry ~50% of weight (target 50%, assert >= 45%) — they are FEW in
   COUNT but high-value, so passing them gates most of the score; all weights > 0.
 """
+
+    # I/O representation depends on the problem kind. Function-based problems use
+    # the description's named-variable-assignment input + return-value output;
+    # non-function problems use line-based STDIN/STDOUT. Keeping this in lock-step
+    # with descriptionPrompt.py's _function_example_format_addon is what stops the
+    # generated `input`/`output` from drifting away from the statement.
+    if is_function:
+        params_note = ""
+        if signature_params:
+            params_note = (
+                "\n  * For context, the reference function's parameters are: "
+                f"{', '.join(signature_params)}. The input lines assign the variables the "
+                "description's Input Format lists (which may ALSO include size variables such "
+                "as `n` that the solution reads but that are not function parameters) — follow "
+                "the description's Input Format, not just the parameter list."
+            )
+        io_format_block = f"""(I/O FORMAT — match the description's Input/Output Format and public Examples EXACTLY):
+  * This is a FUNCTION-based problem. Each `input` is NAMED VARIABLE ASSIGNMENTS, ONE PER LINE,
+    using the SAME variable names and the SAME ORDER as the description's Input Format / Examples.
+    Example shape (substitute the real names/values):
+        n = 2
+        values = [3, 3]
+        edges = [[1, 2]]
+    End the input string with a trailing newline. Do NOT emit a bare "size line then
+    space-separated data line" STDIN layout and do NOT use anonymous lines without variable names.
+  * Represent arrays / matrices / strings as PYTHON LITERALS exactly as the description's Examples
+    show them: `[3, 3]`, `[[1, 2]]`, `"abc"`. Do NOT space-join array values for these problems.
+  * `output` is ONLY the value the reference solution RETURNS for that input, formatted exactly as
+    the description's Output Format / Examples show it (e.g. `1`, or a bracketed list `[0, 2]`) —
+    never full-program stdout logging.
+  * The order-1 and order-2 public example cases MUST reproduce the description's Example 1 and
+    Example 2 `input`/`output` byte-for-byte.{params_note}"""
+    else:
+        io_format_block = """(I/O FORMAT — match the description's Input/Output Format EXACTLY):
+  * This is a STDIN/STDOUT problem. Produce `input`/`output` strings byte-exact to the spec
+    (line-based STDIN/STDOUT: usually a size line then a data line per array).
+  * Space-separated values via `' '.join(map(str, values))`. Do NOT use Python's default
+    `str([1,2,3])` (gives "[1, 2, 3]") unless the spec literally uses that bracket form.
+  * Handle newlines and trailing spaces per spec. Both fields are STDIN/STDOUT strings."""
 
     system_prompt = f"""
 (Role): You are an Expert Content Developer for Competitive Programming and technical
@@ -366,12 +414,7 @@ If the statement says "exactly one solution" / "guaranteed unique":
     random filler so repeated fallbacks don't collide and re-trigger the loop).
   * Constructive generation preferred over rejection sampling.
 
-(I/O FORMAT — match the statement EXACTLY):
-  * Read the Input/Output Format sections. Produce `input`/`output` strings byte-exact to
-    the spec (line-based STDIN/STDOUT: usually a size line then a data line per array).
-  * Space-separated values via `' '.join(map(str, values))`. Do NOT use Python's default
-    `str([1,2,3])` (gives "[1, 2, 3]") unless the spec literally uses that bracket form.
-  * Handle newlines and trailing spaces per spec. Both fields are STDIN/STDOUT strings.
+{io_format_block}
 
 (SOLUTION EMBED + EXEC — avoid the classic NameError):
   * Embed OPTIMAL_CODE {"and BRUTE_CODE " if has_brute else ""}VERBATIM. Do not refactor.

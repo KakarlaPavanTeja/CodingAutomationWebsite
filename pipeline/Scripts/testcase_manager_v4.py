@@ -471,6 +471,28 @@ def main():
     print(f"Problem type (for count scaling): {problem_type}")
     print(f"Subtask weight mode: {args.distribution} (split by problem-chosen subtask count {MIN_SUBTASKS}-{MAX_SUBTASKS}).")
 
+    # 4c. Function signature — decides the I/O representation. The naming step
+    #     writes description_signature.json for function-based problems; its
+    #     presence (with a function_name) marks the problem as function-based and
+    #     supplies the parameter names. Absent => treat as a STDIN/STDOUT problem.
+    is_function = False
+    signature_params = None
+    signature_path = os.path.join("Outputs", "description_signature.json")
+    if os.path.exists(signature_path):
+        try:
+            with open(signature_path, "r") as f:
+                signature = json.load(f)
+            if isinstance(signature, dict) and str(signature.get("function_name") or "").strip():
+                is_function = True
+                params = signature.get("parameters") or []
+                if isinstance(params, list):
+                    signature_params = [str(p).strip() for p in params if str(p).strip()]
+        except Exception as exc:
+            print(f"Warning: could not read {signature_path} ({exc}); "
+                  "defaulting to STDIN/STDOUT I/O format.")
+    print(f"I/O format: {'function (named-variable-assignment input)' if is_function else 'STDIN/STDOUT'}"
+          + (f"; params={signature_params}" if signature_params else ""))
+
     # 5. Prompt
     system_prompt, user_prompt = get_testcases_prompt(
         description,
@@ -481,6 +503,8 @@ def main():
         distribution_preset=args.distribution,
         difficulty=difficulty,
         problem_type=problem_type,
+        is_function=is_function,
+        signature_params=signature_params,
     )
 
     # 6. LLM -> script

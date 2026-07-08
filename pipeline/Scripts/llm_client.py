@@ -12,7 +12,7 @@ Purpose routing (default reasoning → fallbacks on 429/5xx):
   editorial       dynamic → Gemini 3.1 Pro → GPT-5.5 → Opus 4.8
   harden          medium  → Gemini 3.1 Pro → GPT-5.5
   wrong_solutions medium  → Gemini 3.1 Pro → GPT-5.5
-  testcases       tiered  → easy/med: Sonnet 4.6 high; hard: Opus 4.8 high
+  testcases       high    → Opus 4.8 high (all tiers) → GPT-5.5 → Gemini 3.5 Flash → Sonnet 4.6
 
 Configuration
 -------------
@@ -56,6 +56,7 @@ from openai import (
 
 _SONNET_46 = "anthropic/claude-sonnet-4.6"
 _GEMINI_PRO = "google/gemini-3.1-pro-preview"
+_GEMINI_FLASH = "google/gemini-3.5-flash"
 _GPT_55 = "openai/gpt-5.5"
 _GPT_54 = "openai/gpt-5.4"
 _OPUS_48 = "anthropic/claude-opus-4.8"
@@ -128,22 +129,22 @@ _PURPOSE_CONFIG: dict[str, dict] = {
 # Testcase tier defaults when OPENROUTER_MODEL_TESTCASES is not pinned.
 _TESTCASES_TIER_DEFAULTS: dict[str, dict[str, str]] = {
     "easy": {
-        "model": _SONNET_46,
+        "model": _OPUS_48,
         "effort": "high",
-        "fallbacks": f"{_GEMINI_PRO},{_GPT_55}",
-        "fallback_efforts": "high,medium",
+        "fallbacks": f"{_GPT_55},{_GEMINI_FLASH},{_SONNET_46}",
+        "fallback_efforts": "high,high,high",
     },
     "medium": {
-        "model": _SONNET_46,
+        "model": _OPUS_48,
         "effort": "high",
-        "fallbacks": f"{_GEMINI_PRO},{_GPT_55}",
-        "fallback_efforts": "high,medium",
+        "fallbacks": f"{_GPT_55},{_GEMINI_FLASH},{_SONNET_46}",
+        "fallback_efforts": "high,high,high",
     },
     "hard": {
         "model": _OPUS_48,
         "effort": "high",
-        "fallbacks": f"{_SONNET_46},{_GEMINI_PRO},{_GPT_55}",
-        "fallback_efforts": "high,high,medium",
+        "fallbacks": f"{_GPT_55},{_GEMINI_FLASH},{_SONNET_46}",
+        "fallback_efforts": "high,high,high",
     },
 }
 
@@ -178,7 +179,7 @@ _EFFORT_DOWNGRADE = {
 }
 
 
-_DEFAULT_TESTCASES_TIMEOUT_SEC = 1800
+_DEFAULT_TESTCASES_TIMEOUT_SEC = 2700
 # A full multi-solution editorial with 4-language code at a 100K-token cap can
 # stream for many minutes; keep a generous read timeout (the run route's hard
 # cap is 45 min).
@@ -186,8 +187,8 @@ _DEFAULT_EDITORIAL_TIMEOUT_SEC = 1800
 _DEFAULT_OTHER_TIMEOUT_SEC = 300
 
 _DEFAULT_MAX_TOKENS: dict[str, int] = {
-    # Testcase generator script + reasoning tokens must fit under cap (80K).
-    "testcases": 80000,
+    # Testcase generator script + reasoning tokens must fit under cap (100K).
+    "testcases": 100000,
     "chat": 16000,
     "code": 16000,
     "enrichment": 16000,
@@ -609,7 +610,7 @@ def resolve_testcases_routing(difficulty: str | None) -> dict[str, str]:
     Precedence for the model:
       1. OPENROUTER_MODEL_TESTCASES / OPENAI_MODEL_TESTCASES (pins all tiers)
       2. OPENROUTER_MODEL_TESTCASES_{EASY|MEDIUM|HARD} for the active tier
-      3. Built-in tier defaults (easy/medium→sonnet-4.6 high, hard→opus-4.8 high)
+      3. Built-in tier defaults (all tiers → opus-4.8 high)
 
     Precedence for reasoning effort:
       1. OPENAI_REASONING_EFFORT_TESTCASES (global pin)
