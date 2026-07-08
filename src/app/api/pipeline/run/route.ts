@@ -401,7 +401,10 @@ export async function POST(request: NextRequest) {
     registerProcess(runId, proc.pid);
   }
 
-  const PIPELINE_TIMEOUT_MS = 45 * 60 * 1000;
+  // Stay above the LLM read timeout (45 min for testcases in llm_client.py) so a
+  // long reasoning call can finish and the step still has headroom for setup,
+  // parsing, and running the generated script before this hard cap fires.
+  const PIPELINE_TIMEOUT_MS = 60 * 60 * 1000;
   const timeoutHandle = setTimeout(() => {
     try {
       process.kill(-proc.pid!, "SIGTERM");
