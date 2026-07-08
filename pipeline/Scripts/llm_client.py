@@ -12,7 +12,7 @@ Purpose routing (default reasoning → fallbacks on 429/5xx):
   editorial       dynamic → Gemini 3.1 Pro → GPT-5.5 → Opus 4.8
   harden          medium  → Gemini 3.1 Pro → GPT-5.5
   wrong_solutions medium  → Gemini 3.1 Pro → GPT-5.5
-  testcases       high    → Opus 4.8 high (all tiers) → GPT-5.5 → Gemini 3.5 Flash → Sonnet 4.6
+  testcases       tiered  → Opus 4.8 (easy:min, med:medium, hard:high) → GPT-5.5 → Gemini 3.5 Flash → Sonnet 4.6
 
 Configuration
 -------------
@@ -130,15 +130,15 @@ _PURPOSE_CONFIG: dict[str, dict] = {
 _TESTCASES_TIER_DEFAULTS: dict[str, dict[str, str]] = {
     "easy": {
         "model": _OPUS_48,
-        "effort": "high",
+        "effort": "minimal",
         "fallbacks": f"{_GPT_55},{_GEMINI_FLASH},{_SONNET_46}",
-        "fallback_efforts": "high,high,high",
+        "fallback_efforts": "minimal,minimal,minimal",
     },
     "medium": {
         "model": _OPUS_48,
-        "effort": "high",
+        "effort": "medium",
         "fallbacks": f"{_GPT_55},{_GEMINI_FLASH},{_SONNET_46}",
-        "fallback_efforts": "high,high,high",
+        "fallback_efforts": "medium,medium,medium",
     },
     "hard": {
         "model": _OPUS_48,
@@ -610,7 +610,8 @@ def resolve_testcases_routing(difficulty: str | None) -> dict[str, str]:
     Precedence for the model:
       1. OPENROUTER_MODEL_TESTCASES / OPENAI_MODEL_TESTCASES (pins all tiers)
       2. OPENROUTER_MODEL_TESTCASES_{EASY|MEDIUM|HARD} for the active tier
-      3. Built-in tier defaults (all tiers → opus-4.8 high)
+      3. Built-in tier defaults (all tiers → opus-4.8; effort easy=minimal,
+         medium=medium, hard=high)
 
     Precedence for reasoning effort:
       1. OPENAI_REASONING_EFFORT_TESTCASES (global pin)
