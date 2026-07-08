@@ -36,14 +36,19 @@ cd CodingAutomationWebsite
 ### 2. Secrets (from team lead)
 
 ```bash
-cp scripts/team-secrets.env.example scripts/team-secrets.env
-# Edit scripts/team-secrets.env — fill in the three required values:
+cp .env.example .env.local
+# Edit .env.local — fill in the required values:
 #   OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL
+#   AWS S3 (optional): AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION,
+#                      AWS_BUCKET_NAME, AWS_OBJECT_KEY_PREFIX
 # (ADMIN_SECRET_KEY is optional — only for self-registering a new admin.)
 ```
 
+> `.env.example` is the single template listing every variable. Copy it to
+> `.env.local` and fill in your values; setup uses `.env.local` directly.
 > `DATABASE_URL` is the shared Neon connection string — ask your team lead. It must
-> end with `?sslmode=require`. Setup writes it into `.env.local` for you.
+> end with `?sslmode=require`. With AWS S3 creds set, uploaded files go to the
+> shared bucket; otherwise they fall back to `.local-object-storage/` on disk.
 
 ### 3. Run setup
 
@@ -89,7 +94,7 @@ npm run dev
 ```
 
 Open **http://localhost:5001/signup** and create your account.
-For an **admin** account, use `ADMIN_SECRET_KEY` from `scripts/team-secrets.env`.
+For an **admin** account, use `ADMIN_SECRET_KEY` from `.env.local`.
 
 ---
 
@@ -137,9 +142,9 @@ Nothing to start or stop for the database — it's always available in the cloud
 
 ## Troubleshooting
 
-### `DATABASE_URL missing in team-secrets.env`
+### `DATABASE_URL missing in .env.local`
 
-You didn't fill in the shared database URL. Open `scripts/team-secrets.env`, paste
+You didn't fill in the shared database URL. Open `.env.local`, paste
 the `DATABASE_URL` your team lead gave you, then re-run setup.
 
 ### Can't connect to the database

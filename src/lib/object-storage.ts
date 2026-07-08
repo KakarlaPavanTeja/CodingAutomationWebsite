@@ -1,29 +1,105 @@
 /**
- * Object storage for Next.js — Replit App Storage (GCS) in production,
- * local filesystem fallback for Cursor / offline dev.
- *
- * When `DEFAULT_OBJECT_STORAGE_BUCKET_ID` is set, uses the Replit sidecar +
- * @google-cloud/storage. Otherwise writes under `LOCAL_OBJECT_STORAGE_ROOT`
- * (default `.local-object-storage` in the project root).
+ * Object storage for Next.js — priority order:
+ *   1. AWS S3 when AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY + AWS_REGION +
+ *      AWS_BUCKET_NAME are set (local dev / shared team bucket). Object keys
+ *      are prefixed with AWS_OBJECT_KEY_PREFIX when set.
+ *   2. Replit App Storage (GCS) when DEFAULT_OBJECT_STORAGE_BUCKET_ID is set.
+ *   3. Local filesystem under LOCAL_OBJECT_STORAGE_ROOT (default
+ *      `.local-object-storage` in the project root).
  */
 
 import { mkdir, readFile, writeFile, readdir, stat, rm } from "fs/promises";
 import path from "path";
+import {
+  DeleteObjectCommand,
+  DeleteObjectsCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import { Storage, type Bucket } from "@google-cloud/storage";
 
 const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
 
+type StorageBackend = "s3" | "gcs" | "local";
+
 let _client: Storage | null = null;
 let _bucket: Bucket | null = null;
+let _s3Client: S3Client | null = null;
 
-function useLocalStorage(): boolean {
-  return !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID?.trim();
+function isS3Storage(): boolean {
+  return (
+    !!process.env.AWS_ACCESS_KEY_ID?.trim() &&
+    !!process.env.AWS_SECRET_ACCESS_KEY?.trim() &&
+    !!process.env.AWS_REGION?.trim() &&
+    !!process.env.AWS_BUCKET_NAME?.trim()
+  );
+}
+
+function isGcsStorage(): boolean {
+  return !!process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID?.trim();
+}
+
+function storageBackend(): StorageBackend {
+  if (isS3Storage()) return "s3";
+  if (isGcsStorage()) return "gcs";
+  return "local";
+}
+
+function isLocalStorage(): boolean {
+  return storageBackend() === "local";
 }
 
 function localStorageRoot(): string {
   const root =
     process.env.LOCAL_OBJECT_STORAGE_ROOT?.trim() || ".local-object-storage";
   return path.isAbsolute(root) ? root : path.join(process.cwd(), root);
+}
+
+function s3BucketName(): string {
+  return process.env.AWS_BUCKET_NAME!.trim();
+}
+
+/** S3 key prefix (e.g. `testing-coding-question-test-cases/CodingAutomationData/`). */
+function s3ObjectKeyPrefix(): string {
+  const raw = process.env.AWS_OBJECT_KEY_PREFIX?.trim() ?? "";
+  if (!raw) return "";
+  const normalized = raw.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (normalized.includes("..")) {
+    throw new Error("Invalid AWS_OBJECT_KEY_PREFIX");
+  }
+  return normalized.endsWith("/") ? normalized : `${normalized}/`;
+}
+
+function normalizeObjectPath(objectPath: string): string {
+  const normalized = objectPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (normalized.includes("..")) {
+    throw new Error(`Invalid object path: ${objectPath}`);
+  }
+  return normalized;
+}
+
+/** Map an app-relative object path to the full S3 object key. */
+function toS3Key(objectPath: string): string {
+  return s3ObjectKeyPrefix() + normalizeObjectPath(objectPath);
+}
+
+/** Map an S3 object key back to the app-relative path returned by listObjects. */
+function fromS3Key(s3Key: string): string {
+  const prefix = s3ObjectKeyPrefix();
+  if (!prefix || !s3Key.startsWith(prefix)) return s3Key;
+  return s3Key.slice(prefix.length);
+}
+
+/** Map an app-relative list/delete prefix to the S3 prefix. */
+function toS3Prefix(prefix: string): string {
+  const normalized = prefix.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+  if (normalized.includes("..")) {
+    throw new Error(`Invalid object prefix: ${prefix}`);
+  }
+  const base = s3ObjectKeyPrefix();
+  return normalized ? `${base}${normalized}/` : base;
 }
 
 /** Resolve an object key to a safe path under the local storage root. */
@@ -67,6 +143,18 @@ async function walkLocalDir(
   return results;
 }
 
+function getS3Client(): S3Client {
+  if (_s3Client) return _s3Client;
+  _s3Client = new S3Client({
+    region: process.env.AWS_REGION!.trim(),
+    credentials: {
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID!.trim(),
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!.trim(),
+    },
+  });
+  return _s3Client;
+}
+
 function getClient(): Storage {
   if (_client) return _client;
   _client = new Storage({
@@ -90,9 +178,9 @@ function getClient(): Storage {
 }
 
 export function getBucket(): Bucket {
-  if (useLocalStorage()) {
+  if (storageBackend() !== "gcs") {
     throw new Error(
-      "getBucket() is unavailable in local storage mode. Set DEFAULT_OBJECT_STORAGE_BUCKET_ID for Replit App Storage.",
+      "getBucket() is unavailable outside GCS mode. Set DEFAULT_OBJECT_STORAGE_BUCKET_ID for Replit App Storage.",
     );
   }
   if (_bucket) return _bucket;
@@ -109,11 +197,23 @@ export async function putObject(
 ): Promise<void> {
   const buf = typeof content === "string" ? Buffer.from(content, "utf-8") : content;
 
-  if (useLocalStorage()) {
+  if (isLocalStorage()) {
     const filePath = localFilePath(objectPath);
     await mkdir(path.dirname(filePath), { recursive: true });
     await writeFile(filePath, buf);
     void contentType;
+    return;
+  }
+
+  if (storageBackend() === "s3") {
+    await getS3Client().send(
+      new PutObjectCommand({
+        Bucket: s3BucketName(),
+        Key: toS3Key(objectPath),
+        Body: buf,
+        ContentType: contentType,
+      }),
+    );
     return;
   }
 
@@ -131,11 +231,32 @@ export async function putObject(
 
 /** Read a file as Buffer. Throws if not found. */
 export async function getObjectBuffer(objectPath: string): Promise<Buffer> {
-  if (useLocalStorage()) {
+  if (isLocalStorage()) {
     try {
       return await readFile(localFilePath(objectPath));
     } catch {
       throw new Error(`File not found: ${objectPath}`);
+    }
+  }
+
+  if (storageBackend() === "s3") {
+    try {
+      const response = await getS3Client().send(
+        new GetObjectCommand({
+          Bucket: s3BucketName(),
+          Key: toS3Key(objectPath),
+        }),
+      );
+      if (!response.Body) {
+        throw new Error(`File not found: ${objectPath}`);
+      }
+      return Buffer.from(await response.Body.transformToByteArray());
+    } catch (err) {
+      const e = err as { name?: string; message?: string };
+      if (e.name === "NoSuchKey" || e.name === "NotFound") {
+        throw new Error(`File not found: ${objectPath}`);
+      }
+      throw new Error(`Storage download failed (${objectPath}): ${e.message ?? "unknown"}`);
     }
   }
 
@@ -159,14 +280,51 @@ export async function getObjectString(objectPath: string): Promise<string> {
 const PAGE_SIZE = 500;
 const DELETE_CONCURRENCY = 16;
 
+async function listS3Objects(
+  prefix: string,
+): Promise<{ name: string; size: number; updated: string }[]> {
+  const results: { name: string; size: number; updated: string }[] = [];
+  let continuationToken: string | undefined;
+  const s3Prefix = toS3Prefix(prefix);
+
+  do {
+    const response = await getS3Client().send(
+      new ListObjectsV2Command({
+        Bucket: s3BucketName(),
+        Prefix: s3Prefix,
+        MaxKeys: PAGE_SIZE,
+        ContinuationToken: continuationToken,
+      }),
+    );
+
+    for (const item of response.Contents ?? []) {
+      if (!item.Key) continue;
+      results.push({
+        name: fromS3Key(item.Key),
+        size: item.Size ?? 0,
+        updated: item.LastModified?.toISOString() ?? "",
+      });
+    }
+
+    continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  return results;
+}
+
 /** List all objects under a prefix (recursive), paginated under the hood. */
 export async function listObjects(
   prefix: string,
 ): Promise<{ name: string; size: number; updated: string }[]> {
-  if (useLocalStorage()) {
+  if (isLocalStorage()) {
     const normalizedPrefix = prefix.replace(/\\/g, "/").replace(/\/+$/, "");
     const dir = localFilePath(normalizedPrefix);
     const files = await walkLocalDir(dir, normalizedPrefix);
+    return files.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  if (storageBackend() === "s3") {
+    const files = await listS3Objects(prefix);
     return files.sort((a, b) => a.name.localeCompare(b.name));
   }
 
@@ -196,9 +354,23 @@ export async function listObjects(
 
 /** Delete a single object. Best-effort (no error if missing). */
 export async function deleteObject(objectPath: string): Promise<void> {
-  if (useLocalStorage()) {
+  if (isLocalStorage()) {
     try {
       await rm(localFilePath(objectPath), { force: true });
+    } catch {
+      // Best-effort
+    }
+    return;
+  }
+
+  if (storageBackend() === "s3") {
+    try {
+      await getS3Client().send(
+        new DeleteObjectCommand({
+          Bucket: s3BucketName(),
+          Key: toS3Key(objectPath),
+        }),
+      );
     } catch {
       // Best-effort
     }
@@ -212,18 +384,65 @@ export async function deleteObject(objectPath: string): Promise<void> {
   }
 }
 
+async function deleteS3Prefix(prefix: string): Promise<number> {
+  const keys: string[] = [];
+  let continuationToken: string | undefined;
+  const s3Prefix = toS3Prefix(prefix);
+
+  do {
+    const response = await getS3Client().send(
+      new ListObjectsV2Command({
+        Bucket: s3BucketName(),
+        Prefix: s3Prefix,
+        MaxKeys: PAGE_SIZE,
+        ContinuationToken: continuationToken,
+      }),
+    );
+
+    for (const item of response.Contents ?? []) {
+      if (item.Key) keys.push(item.Key);
+    }
+
+    continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  for (let i = 0; i < keys.length; i += PAGE_SIZE) {
+    const batch = keys.slice(i, i + PAGE_SIZE);
+    if (batch.length === 0) continue;
+    try {
+      await getS3Client().send(
+        new DeleteObjectsCommand({
+          Bucket: s3BucketName(),
+          Delete: {
+            Objects: batch.map((Key) => ({ Key })),
+            Quiet: true,
+          },
+        }),
+      );
+    } catch {
+      // Best-effort
+    }
+  }
+
+  return keys.length;
+}
+
 /**
  * Delete all objects under a prefix. Returns count of objects we attempted to
  * delete. Streams pages and runs deletes with bounded concurrency to avoid
  * loading huge prefixes into memory or saturating the network.
  */
 export async function deletePrefix(prefix: string): Promise<number> {
-  if (useLocalStorage()) {
+  if (isLocalStorage()) {
     const items = await listObjects(prefix);
     for (const item of items) {
       await deleteObject(item.name);
     }
     return items.length;
+  }
+
+  if (storageBackend() === "s3") {
+    return deleteS3Prefix(prefix);
   }
 
   const bucket = getBucket();
