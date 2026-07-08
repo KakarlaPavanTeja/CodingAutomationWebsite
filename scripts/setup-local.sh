@@ -10,8 +10,9 @@
 # Before running (one-time):
 #   1. git clone <repo> && cd CodingAutomationWebsite
 #   2. cp scripts/team-secrets.env.example scripts/team-secrets.env
-#      then fill in OPENROUTER_API_KEY, ADMIN_SECRET_KEY, CRON_SECRET and the shared
-#      DATABASE_URL (ask your team lead).
+#      then fill in OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL, and the
+#      AWS S3 credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+#      AWS_REGION, AWS_BUCKET_NAME, AWS_OBJECT_KEY_PREFIX) — ask your team lead.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -312,6 +313,18 @@ load_team_secrets
 [ -n "${DATABASE_URL:-}" ]        || fail "DATABASE_URL missing in team-secrets.env — set the shared cloud (Neon) connection string (see scripts/team-secrets.env.example)."
 # ADMIN_SECRET_KEY is optional — only needed to self-register a NEW admin at signup.
 [ -n "${ADMIN_SECRET_KEY:-}" ]    || warn "ADMIN_SECRET_KEY not set — optional; existing accounts (including admins) work without it."
+aws_s3_complete() {
+  [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && \
+  [ -n "${AWS_REGION:-}" ] && [ -n "${AWS_BUCKET_NAME:-}" ] && \
+  [ -n "${AWS_OBJECT_KEY_PREFIX:-}" ]
+}
+if aws_s3_complete; then
+  ok "AWS S3 storage configured (bucket: $AWS_BUCKET_NAME, prefix: $AWS_OBJECT_KEY_PREFIX)"
+elif [ -n "${AWS_ACCESS_KEY_ID:-}${AWS_SECRET_ACCESS_KEY:-}${AWS_REGION:-}${AWS_BUCKET_NAME:-}${AWS_OBJECT_KEY_PREFIX:-}" ]; then
+  warn "AWS S3 creds incomplete — file storage will fall back to .local-object-storage/"
+else
+  warn "AWS S3 not configured — file storage will use .local-object-storage/ on disk"
+fi
 DEFAULT_APP_URL="${APP_URL:-http://localhost:5001}"
 if [ "$AUTO_YES" = false ]; then
   read -r -p "APP_URL [$DEFAULT_APP_URL]: " APP_URL_INPUT
@@ -356,6 +369,11 @@ fi
   echo "CRON_SECRET=$CRON_SECRET"
   [ -n "${RESEND_API_KEY:-}" ] && echo "RESEND_API_KEY=$RESEND_API_KEY"
   [ -n "${OPENROUTER_BASE_URL:-}" ] && echo "OPENROUTER_BASE_URL=$OPENROUTER_BASE_URL"
+  [ -n "${AWS_ACCESS_KEY_ID:-}" ] && echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
+  [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
+  [ -n "${AWS_REGION:-}" ] && echo "AWS_REGION=$AWS_REGION"
+  [ -n "${AWS_BUCKET_NAME:-}" ] && echo "AWS_BUCKET_NAME=$AWS_BUCKET_NAME"
+  [ -n "${AWS_OBJECT_KEY_PREFIX:-}" ] && echo "AWS_OBJECT_KEY_PREFIX=$AWS_OBJECT_KEY_PREFIX"
   echo "PORT=5001"
   echo "INTERNAL_API_URL=http://127.0.0.1:5001"
   echo "APP_URL=$APP_URL"

@@ -37,8 +37,10 @@ cd CodingAutomationWebsite
 
 ```bash
 cp scripts/team-secrets.env.example scripts/team-secrets.env
-# Edit scripts/team-secrets.env — fill in the three required values:
+# Edit scripts/team-secrets.env — fill in the required values:
 #   OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_BUCKET_NAME,
+#   AWS_OBJECT_KEY_PREFIX
 # (ADMIN_SECRET_KEY is optional — only for self-registering a new admin.)
 ```
 
@@ -120,7 +122,7 @@ users are the same for the whole team.
 | Database | **Shared cloud Postgres (Neon)** — via `DATABASE_URL` |
 | Python pipeline | venv at `~/.codingautomation-venv` |
 | Your login & problems | Shared cloud database (same for the whole team) |
-| Uploaded files | `.local-object-storage/` on your machine |
+| Uploaded files | **Shared AWS S3 bucket** when AWS creds are in `.env.local`; otherwise `.local-object-storage/` on your machine |
 
 ---
 

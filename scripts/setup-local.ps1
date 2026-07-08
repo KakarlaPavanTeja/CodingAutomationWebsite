@@ -226,6 +226,23 @@ foreach ($key in @("OPENROUTER_API_KEY", "CRON_SECRET", "DATABASE_URL")) {
 # ADMIN_SECRET_KEY is optional — only needed to self-register a NEW admin at signup.
 if (-not $team["ADMIN_SECRET_KEY"]) { Write-Warn "ADMIN_SECRET_KEY not set — optional; existing accounts (including admins) work without it." }
 
+$awsKeys = @("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_BUCKET_NAME", "AWS_OBJECT_KEY_PREFIX")
+$awsComplete = $true
+foreach ($key in $awsKeys) {
+    if ([string]::IsNullOrWhiteSpace($team[$key])) { $awsComplete = $false; break }
+}
+$awsPartial = $false
+foreach ($key in $awsKeys) {
+    if (-not [string]::IsNullOrWhiteSpace($team[$key])) { $awsPartial = $true; break }
+}
+if ($awsComplete) {
+    Write-Ok "AWS S3 storage configured (bucket: $($team['AWS_BUCKET_NAME']), prefix: $($team['AWS_OBJECT_KEY_PREFIX']))"
+} elseif ($awsPartial) {
+    Write-Warn "AWS S3 creds incomplete — file storage will fall back to .local-object-storage/"
+} else {
+    Write-Warn "AWS S3 not configured — file storage will use .local-object-storage/ on disk"
+}
+
 $DATABASE_URL = $team["DATABASE_URL"]
 $defaultAppUrl = if ($team["APP_URL"]) { $team["APP_URL"] } else { "http://localhost:5001" }
 if ($Yes) {
@@ -273,6 +290,7 @@ $lines = @(
 if ($team["ADMIN_SECRET_KEY"]) { $lines += "ADMIN_SECRET_KEY=$($team['ADMIN_SECRET_KEY'])" }
 if ($team["RESEND_API_KEY"]) { $lines += "RESEND_API_KEY=$($team['RESEND_API_KEY'])" }
 if ($team["OPENROUTER_BASE_URL"]) { $lines += "OPENROUTER_BASE_URL=$($team['OPENROUTER_BASE_URL'])" }
+foreach ($key in $awsKeys) { if ($team[$key]) { $lines += "$key=$($team[$key])" } }
 $lines += "PORT=5001"
 $lines += "INTERNAL_API_URL=http://127.0.0.1:5001"
 $lines += "APP_URL=$APP_URL"
