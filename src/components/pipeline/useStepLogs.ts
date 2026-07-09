@@ -69,7 +69,7 @@ export function useStepLogs(
     };
 
     poll();
-    const ms = isRunning ? 4000 : 8000;
+    const ms = isRunning ? 6000 : 12000;
     const id = setInterval(poll, ms);
     return () => clearInterval(id);
   }, [canFetch, isRunning, fetchDiskLogs]);

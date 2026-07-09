@@ -503,7 +503,11 @@ export function ProblemExecutionLogs({ problemId, questionType, isActive }: Prob
 
   useEffect(() => {
     if (!isActive) return;
-    const interval = setInterval(load, 5000);
+    const interval = setInterval(() => {
+      // Skip while the tab is backgrounded — cuts idle DB/network traffic.
+      if (typeof document !== "undefined" && document.hidden) return;
+      load();
+    }, 10000);
     return () => clearInterval(interval);
   }, [isActive, load]);
 

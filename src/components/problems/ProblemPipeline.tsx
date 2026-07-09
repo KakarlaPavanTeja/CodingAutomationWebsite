@@ -84,7 +84,11 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
       return;
     }
     fetchStepUsage();
-    const interval = setInterval(fetchStepUsage, 5000);
+    const interval = setInterval(() => {
+      // Skip while the tab is backgrounded — cuts idle DB/network traffic.
+      if (typeof document !== "undefined" && document.hidden) return;
+      fetchStepUsage();
+    }, 15000);
     return () => clearInterval(interval);
   }, [isAnyRunning, fetchStepUsage]);
 
