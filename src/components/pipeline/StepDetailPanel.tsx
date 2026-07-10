@@ -102,9 +102,13 @@ export function StepDetailPanel({
   useEffect(() => {
     if (!canFetchLogs) return;
     fetchDiskLogs();
-    const intervalMs = isRunning ? 2000 : tab === "raw" ? 4000 : null;
+    const intervalMs = isRunning ? 5000 : tab === "raw" ? 8000 : null;
     if (!intervalMs) return;
-    const id = setInterval(fetchDiskLogs, intervalMs);
+    const id = setInterval(() => {
+      // Skip while the tab is backgrounded — cuts idle DB/network traffic.
+      if (typeof document !== "undefined" && document.hidden) return;
+      fetchDiskLogs();
+    }, intervalMs);
     return () => clearInterval(id);
   }, [canFetchLogs, isRunning, tab, fetchDiskLogs]);
 

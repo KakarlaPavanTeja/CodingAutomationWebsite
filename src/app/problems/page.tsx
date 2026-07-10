@@ -56,7 +56,11 @@ export default function ProblemsPage() {
   useEffect(() => {
     const hasProcessing = problems.some((p) => p.status === "processing");
     if (!hasProcessing) return;
-    const id = setInterval(() => refresh(), 5000);
+    const id = setInterval(() => {
+      // Skip while the tab is backgrounded — cuts idle DB/network traffic.
+      if (typeof document !== "undefined" && document.hidden) return;
+      refresh();
+    }, 15000);
     return () => clearInterval(id);
   }, [problems, refresh]);
 

@@ -668,7 +668,11 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
 
   useEffect(() => {
     if (!genRunning) return;
-    const t = setInterval(fetchUsage, 5000);
+    const t = setInterval(() => {
+      // Skip while the tab is backgrounded — cuts idle DB/network traffic.
+      if (typeof document !== "undefined" && document.hidden) return;
+      fetchUsage();
+    }, 15000);
     return () => clearInterval(t);
   }, [genRunning, fetchUsage]);
 
