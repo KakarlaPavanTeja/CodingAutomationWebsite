@@ -1222,14 +1222,33 @@ def fuzz_kill_wrong_solutions(
 
 _EXAMPLE_INPUT_RE = re.compile(r"\*\*Input:\*\*\s*```[^\n]*\n(.*?)```", re.S)
 _EXAMPLE_OUTPUT_RE = re.compile(r"\*\*Output:\*\*\s*```[^\n]*\n(.*?)```", re.S)
+_NAMED_VAR_LINE_RE = re.compile(r"^\s*[A-Za-z_]\w*\s*=\s*\S")
+
+
+def is_named_var_example_block(block: str) -> bool:
+    """True when an example **Input:** block is human-readable NAMED-VARIABLE
+    assignments (e.g. `n = 5` / `arr = [1, 2, 3]`) rather than raw stdin.
+
+    For function-based problems the description shows named variables for readability,
+    but the reference solution reads raw-token stdin — so these blocks are NOT
+    executable as stdin and must not be fed to the solution (it would crash) or copied
+    verbatim into the graded token test cases. Correctness for these problems is enforced
+    upstream by the testcase-generation grounding step (which runs the solution on every
+    token input) plus the token example cases. Raw-stdin blocks (a size line, a data line)
+    are unaffected: their first token is not an identifier followed by `=`."""
+    lines = [ln for ln in block.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    return all(_NAMED_VAR_LINE_RE.match(ln) for ln in lines)
 
 
 def extract_example_inputs(description: str) -> list[str]:
-    """Pull the stdin from each `**Input:** ``` ... ``` ` block in a description."""
+    """Pull the stdin from each `**Input:** ``` ... ``` ` block in a description.
+    Named-variable (display-only) blocks are skipped — they are not executable stdin."""
     out: list[str] = []
     for m in _EXAMPLE_INPUT_RE.finditer(description or ""):
         s = m.group(1).strip("\n")
-        if s.strip():
+        if s.strip() and not is_named_var_example_block(s):
             out.append(s + "\n")
     return out
 
@@ -1245,6 +1264,11 @@ def extract_example_io(description: str) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
     for pos, inp in ins:
         if not inp.strip():
+            continue
+        # Named-variable example inputs are display-only (function-based problems) and
+        # cannot be piped to the solution as stdin — skip so we never false-flag the
+        # optimal as "buggy" or copy them into the graded token test cases.
+        if is_named_var_example_block(inp):
             continue
         expected = next((o for (opos, o) in outs if opos > pos), None)
         if expected is not None and expected.strip():

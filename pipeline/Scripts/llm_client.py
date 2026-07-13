@@ -189,7 +189,10 @@ _DEFAULT_OTHER_TIMEOUT_SEC = 300
 _DEFAULT_MAX_TOKENS: dict[str, int] = {
     # Testcase generator script + reasoning tokens must fit under cap (100K).
     "testcases": 100000,
-    "chat": 16000,
+    # Description/naming/refactor. Raised from 16K: reasoning models spend part of
+    # this budget on hidden reasoning tokens, so a full description + worked-example
+    # explanation was hitting the cap and truncating the last section (finish=length).
+    "chat": 32000,
     "code": 16000,
     "enrichment": 16000,
     "editorial": 100000,
