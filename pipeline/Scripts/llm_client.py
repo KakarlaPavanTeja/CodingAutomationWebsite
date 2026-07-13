@@ -129,21 +129,21 @@ _PURPOSE_CONFIG: dict[str, dict] = {
 # Testcase tier defaults when OPENROUTER_MODEL_TESTCASES is not pinned.
 _TESTCASES_TIER_DEFAULTS: dict[str, dict[str, str]] = {
     "easy": {
-        "model": _OPUS_48,
+        "model": _GPT_55,
         "effort": "minimal",
-        "fallbacks": f"{_GPT_55},{_GEMINI_FLASH},{_SONNET_46}",
+        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_SONNET_46}",
         "fallback_efforts": "minimal,minimal,minimal",
     },
     "medium": {
-        "model": _OPUS_48,
+        "model": _GPT_55,
         "effort": "medium",
-        "fallbacks": f"{_GPT_55},{_GEMINI_FLASH},{_SONNET_46}",
+        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_SONNET_46}",
         "fallback_efforts": "medium,medium,medium",
     },
     "hard": {
-        "model": _OPUS_48,
+        "model": _GPT_55,
         "effort": "high",
-        "fallbacks": f"{_GPT_55},{_GEMINI_FLASH},{_SONNET_46}",
+        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_SONNET_46}",
         "fallback_efforts": "high,high,high",
     },
 }

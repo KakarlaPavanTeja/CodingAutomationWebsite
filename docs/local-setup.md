@@ -140,6 +140,30 @@ Nothing to start or stop for the database — it's always available in the cloud
 
 ---
 
+## Sharing dev via ngrok
+
+Teammates can reach your machine while you run `npm run dev`:
+
+```bash
+npm run dev
+ngrok http 5001
+```
+
+`next.config.ts` already allows `*.ngrok-free.dev`, `*.ngrok-free.app`, and related
+ngrok hostnames for HMR / dev assets.
+
+For correct redirects and links, set your tunnel URL in `.env.local` (or
+`scripts/team-secrets.env` before re-running setup):
+
+```bash
+APP_URL=https://your-subdomain.ngrok-free.dev
+NEXT_PUBLIC_APP_URL=https://your-subdomain.ngrok-free.dev
+```
+
+Restart the dev server after changing env vars or `next.config.ts`.
+
+---
+
 ## Troubleshooting
 
 ### `DATABASE_URL missing in .env.local`
@@ -159,3 +183,10 @@ Wait 1–2 minutes on the **first** page load, or use production mode:
 ```bash
 npm run build && npm run start
 ```
+
+### ngrok: "Blocked cross-origin request to Next.js dev resource"
+
+Restart `npm run dev` after pulling — ngrok hostnames are allowlisted in
+`next.config.ts`. If you use a custom tunnel domain, add it via
+`ALLOWED_DEV_ORIGINS=your-host.example.com` in `.env.local` or set
+`NGROK_DOMAIN=your-host.example.com`.
