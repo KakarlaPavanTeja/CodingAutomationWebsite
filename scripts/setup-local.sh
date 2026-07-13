@@ -1,24 +1,30 @@
 #!/usr/bin/env bash
 # One-command local dev setup (Linux / macOS). The app connects to the shared
-# cloud (Neon) database via DATABASE_URL in team-secrets.env — no local Postgres.
+# cloud (Neon) database via DATABASE_URL in .env.local — no local Postgres.
 #
 # Usage:
 #   ./scripts/setup-local.sh                       # interactive (Enter = defaults)
-#   ./scripts/setup-local.sh --yes                 # non-interactive (needs team-secrets.env)
+#   ./scripts/setup-local.sh --yes                 # non-interactive (needs .env.local)
 #   ./scripts/setup-local.sh --install-system-deps # auto-install missing Node / Python
 #
 # Before running (one-time):
 #   1. git clone <repo> && cd CodingAutomationWebsite
+<<<<<<< HEAD
 #   2. cp scripts/team-secrets.env.example scripts/team-secrets.env
 #      then fill in OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL, and the
 #      AWS S3 credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
 #      AWS_REGION, AWS_BUCKET_NAME, AWS_OBJECT_KEY_PREFIX) — ask your team lead.
+=======
+#   2. cp .env.example .env.local
+#      then fill in OPENROUTER_API_KEY, CRON_SECRET, the shared DATABASE_URL, and
+#      the AWS S3 credentials (ask your team lead).
+>>>>>>> main
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-SECRETS_FILE="$ROOT/scripts/team-secrets.env"
+SECRETS_FILE="$ROOT/.env.local"
 VENV_DIR="${HOME}/.codingautomation-venv"
 DB_NAME="codingautomation"
 DB_PORT="${DB_PORT:-5432}"
@@ -241,14 +247,14 @@ check_prerequisites() {
 # Secrets
 # ---------------------------------------------------------------------------
 load_team_secrets() {
-  [ -f "$SECRETS_FILE" ] || fail "Missing scripts/team-secrets.env — ask team lead, or:
-  cp scripts/team-secrets.env.example scripts/team-secrets.env"
+  [ -f "$SECRETS_FILE" ] || fail "Missing .env.local — create it, then fill in the required values:
+  cp .env.example .env.local"
   set -a
   # shellcheck disable=SC1090
   source "$SECRETS_FILE"
   set +a
-  # DATABASE_URL comes from team-secrets (the shared cloud DB). Required.
-  ok "Loaded scripts/team-secrets.env"
+  # DATABASE_URL comes from .env.local (the shared cloud DB). Required.
+  ok "Loaded .env.local"
 }
 
 # ---------------------------------------------------------------------------
@@ -308,11 +314,12 @@ echo ""
 
 info "Step 2/5 — Loading secrets & configuring..."
 load_team_secrets
-[ -n "${OPENROUTER_API_KEY:-}" ] || fail "OPENROUTER_API_KEY missing in team-secrets.env"
-[ -n "${CRON_SECRET:-}" ]         || fail "CRON_SECRET missing in team-secrets.env"
-[ -n "${DATABASE_URL:-}" ]        || fail "DATABASE_URL missing in team-secrets.env — set the shared cloud (Neon) connection string (see scripts/team-secrets.env.example)."
+[ -n "${OPENROUTER_API_KEY:-}" ] || fail "OPENROUTER_API_KEY missing in .env.local"
+[ -n "${CRON_SECRET:-}" ]         || fail "CRON_SECRET missing in .env.local"
+[ -n "${DATABASE_URL:-}" ]        || fail "DATABASE_URL missing in .env.local — set the shared cloud (Neon) connection string (see .env.example)."
 # ADMIN_SECRET_KEY is optional — only needed to self-register a NEW admin at signup.
 [ -n "${ADMIN_SECRET_KEY:-}" ]    || warn "ADMIN_SECRET_KEY not set — optional; existing accounts (including admins) work without it."
+<<<<<<< HEAD
 aws_s3_complete() {
   [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && \
   [ -n "${AWS_REGION:-}" ] && [ -n "${AWS_BUCKET_NAME:-}" ] && \
@@ -321,6 +328,16 @@ aws_s3_complete() {
 if aws_s3_complete; then
   ok "AWS S3 storage configured (bucket: $AWS_BUCKET_NAME, prefix: $AWS_OBJECT_KEY_PREFIX)"
 elif [ -n "${AWS_ACCESS_KEY_ID:-}${AWS_SECRET_ACCESS_KEY:-}${AWS_REGION:-}${AWS_BUCKET_NAME:-}${AWS_OBJECT_KEY_PREFIX:-}" ]; then
+=======
+# AWS S3 file storage is optional — falls back to .local-object-storage/ on disk.
+aws_s3_complete() {
+  [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && \
+  [ -n "${AWS_REGION:-}" ] && [ -n "${AWS_BUCKET_NAME:-}" ]
+}
+if aws_s3_complete; then
+  ok "AWS S3 storage configured (bucket: $AWS_BUCKET_NAME, prefix: ${AWS_OBJECT_KEY_PREFIX:-<none>})"
+elif [ -n "${AWS_ACCESS_KEY_ID:-}${AWS_SECRET_ACCESS_KEY:-}${AWS_REGION:-}${AWS_BUCKET_NAME:-}" ]; then
+>>>>>>> main
   warn "AWS S3 creds incomplete — file storage will fall back to .local-object-storage/"
 else
   warn "AWS S3 not configured — file storage will use .local-object-storage/ on disk"
@@ -332,7 +349,7 @@ if [ "$AUTO_YES" = false ]; then
 else
   APP_URL="$DEFAULT_APP_URL"
 fi
-ok "DATABASE_URL set from team-secrets (shared cloud database)"
+ok "DATABASE_URL set from .env.local (shared cloud database)"
 ok "Secrets loaded (OPENROUTER_API_KEY, CRON_SECRET, ADMIN_SECRET_KEY)"
 echo ""
 
@@ -350,8 +367,9 @@ VENV_PYTHON="$VENV_DIR/bin/python3"
 ok "Python packages installed"
 echo ""
 
-info "Step 4/5 — Writing .env.local & installing npm packages..."
+info "Step 4/5 — Updating .env.local & installing npm packages..."
 ENV_FILE="$ROOT/.env.local"
+<<<<<<< HEAD
 if [ -f "$ENV_FILE" ]; then
   if [ "$AUTO_YES" = false ]; then
     read -r -p ".env.local exists. Overwrite? (y/N): " OVERWRITE
@@ -380,6 +398,32 @@ fi
   echo "NEXT_PUBLIC_APP_URL=$APP_URL"
 } > "$ENV_FILE"
 ok "Wrote .env.local"
+=======
+cp "$ENV_FILE" "${ENV_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
+
+# Upsert KEY=value into .env.local without disturbing the user's other lines
+# (AWS creds, optional tuning vars, comments) — portable across macOS/Linux.
+upsert_env() {
+  local key="$1" val="$2" tmp
+  tmp="$(mktemp)"
+  grep -vE "^[[:space:]]*${key}=" "$ENV_FILE" > "$tmp" 2>/dev/null || true
+  echo "${key}=${val}" >> "$tmp"
+  mv "$tmp" "$ENV_FILE"
+}
+ensure_env() {  # add KEY=value only if not already present (uncommented)
+  grep -qE "^[[:space:]]*$1=" "$ENV_FILE" || echo "$1=$2" >> "$ENV_FILE"
+}
+
+# Machine-specific paths computed during setup — always override.
+upsert_env PIPELINE_ROOT "$ROOT/pipeline"
+upsert_env PYTHON_PATH "$VENV_PYTHON"
+# Sane local defaults — only if the user left them unset.
+ensure_env PORT "5001"
+ensure_env INTERNAL_API_URL "http://127.0.0.1:5001"
+ensure_env APP_URL "$APP_URL"
+ensure_env NEXT_PUBLIC_APP_URL "$APP_URL"
+ok "Updated .env.local (PIPELINE_ROOT, PYTHON_PATH; preserved your other values)"
+>>>>>>> main
 
 fix_npm_for_local
 if ! npm install --no-audit --no-fund; then

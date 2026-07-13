@@ -1,5 +1,5 @@
 # One-command local dev setup for Windows (PowerShell). The app connects to the
-# shared cloud (Neon) database via DATABASE_URL in team-secrets.env — no local Postgres.
+# shared cloud (Neon) database via DATABASE_URL in .env.local — no local Postgres.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts/setup-local.ps1
@@ -8,9 +8,9 @@
 #
 # Before running (one-time):
 #   1. git clone <repo> && cd CodingAutomationWebsite
-#   2. Copy-Item scripts/team-secrets.env.example scripts/team-secrets.env
-#      then fill in OPENROUTER_API_KEY, ADMIN_SECRET_KEY, CRON_SECRET and the shared
-#      DATABASE_URL (ask your team lead).
+#   2. Copy-Item .env.example .env.local
+#      then fill in OPENROUTER_API_KEY, CRON_SECRET, the shared DATABASE_URL, and
+#      the AWS S3 credentials (ask your team lead).
 param(
     [switch]$Yes,
     [switch]$InstallSystemDeps
@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
-$SecretsFile = Join-Path $Root "scripts\team-secrets.env"
+$SecretsFile = Join-Path $Root ".env.local"
 $VenvDir = Join-Path $env:USERPROFILE ".codingautomation-venv"
 $DbName = "codingautomation"
 $DbPort = if ($env:DB_PORT) { $env:DB_PORT } else { "5432" }
@@ -153,7 +153,7 @@ Open Docker Desktop, wait until it reports 'running', then re-run this script.
 
 function Import-TeamSecrets {
     if (-not (Test-Path $SecretsFile)) {
-        Write-Fail "Missing scripts/team-secrets.env - ask team lead, or: Copy-Item scripts/team-secrets.env.example scripts/team-secrets.env"
+        Write-Fail "Missing .env.local - create it, then fill in the required values: Copy-Item .env.example .env.local"
     }
     $map = @{}
     Get-Content $SecretsFile | ForEach-Object {
@@ -163,7 +163,7 @@ function Import-TeamSecrets {
         if ($eq -lt 1) { return }
         $map[$line.Substring(0, $eq).Trim()] = $line.Substring($eq + 1).Trim()
     }
-    Write-Ok "Loaded scripts/team-secrets.env"
+    Write-Ok "Loaded .env.local"
     return $map
 }
 
@@ -221,10 +221,18 @@ Write-Host ""
 Write-Info "Step 2/5 - Loading secrets & configuring..."
 $team = Import-TeamSecrets
 foreach ($key in @("OPENROUTER_API_KEY", "CRON_SECRET", "DATABASE_URL")) {
-    if (-not $team[$key]) { Write-Fail "$key missing in team-secrets.env - set the shared cloud (Neon) connection string (see scripts/team-secrets.env.example)." }
+    if (-not $team[$key]) { Write-Fail "$key missing in .env.local - set the shared cloud (Neon) connection string (see .env.example)." }
 }
 # ADMIN_SECRET_KEY is optional — only needed to self-register a NEW admin at signup.
 if (-not $team["ADMIN_SECRET_KEY"]) { Write-Warn "ADMIN_SECRET_KEY not set — optional; existing accounts (including admins) work without it." }
+# AWS S3 file storage is optional — falls back to .local-object-storage/ on disk.
+if ($team["AWS_ACCESS_KEY_ID"] -and $team["AWS_SECRET_ACCESS_KEY"] -and $team["AWS_REGION"] -and $team["AWS_BUCKET_NAME"]) {
+    Write-Ok "AWS S3 storage configured (bucket: $($team['AWS_BUCKET_NAME']))"
+} elseif ($team["AWS_ACCESS_KEY_ID"] -or $team["AWS_SECRET_ACCESS_KEY"] -or $team["AWS_BUCKET_NAME"]) {
+    Write-Warn "AWS S3 creds incomplete — file storage will fall back to .local-object-storage/"
+} else {
+    Write-Warn "AWS S3 not configured — file storage will use .local-object-storage/ on disk"
+}
 
 $awsKeys = @("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_BUCKET_NAME", "AWS_OBJECT_KEY_PREFIX")
 $awsComplete = $true
@@ -251,7 +259,7 @@ if ($Yes) {
     $inputApp = Read-Host "APP_URL [$defaultAppUrl]"
     $APP_URL = if ([string]::IsNullOrWhiteSpace($inputApp)) { $defaultAppUrl } else { $inputApp }
 }
-Write-Ok "DATABASE_URL set from team-secrets (shared cloud database)"
+Write-Ok "DATABASE_URL set from .env.local (shared cloud database)"
 Write-Ok "Secrets loaded (OPENROUTER_API_KEY, CRON_SECRET, ADMIN_SECRET_KEY)"
 Write-Host ""
 
@@ -270,15 +278,17 @@ if (-not (Test-Path $venvPython)) {
 Write-Ok "Python packages installed"
 Write-Host ""
 
-Write-Info "Step 4/5 - Writing .env.local & installing npm packages..."
+Write-Info "Step 4/5 - Updating .env.local & installing npm packages..."
 $envFile = Join-Path $Root ".env.local"
-if (Test-Path $envFile) {
-    if (-not $Yes) {
-        $overwrite = Read-Host ".env.local exists. Overwrite? (y/N)"
-        if ($overwrite -notmatch "^[Yy]$") { Write-Fail "Aborted." }
-    }
-    Copy-Item $envFile "$envFile.bak.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+Copy-Item $envFile "$envFile.bak.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+
+# Upsert/ensure keys without clobbering the user's other values (AWS creds, etc.).
+$script:existing = @(Get-Content $envFile)
+function Upsert-Env([string]$key, [string]$val) {
+    $script:existing = @($script:existing | Where-Object { $_ -notmatch "^\s*$([regex]::Escape($key))=" })
+    $script:existing += "$key=$val"
 }
+<<<<<<< HEAD
 $lines = @(
     "# Generated by scripts/setup-local.ps1 on $(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')"
     "PIPELINE_ROOT=$Root\pipeline"
@@ -297,6 +307,23 @@ $lines += "APP_URL=$APP_URL"
 $lines += "NEXT_PUBLIC_APP_URL=$APP_URL"
 $lines | Set-Content -Path $envFile -Encoding UTF8
 Write-Ok "Wrote .env.local"
+=======
+function Ensure-Env([string]$key, [string]$val) {
+    if (-not ($script:existing | Where-Object { $_ -match "^\s*$([regex]::Escape($key))=" })) {
+        $script:existing += "$key=$val"
+    }
+}
+# Machine-specific paths computed during setup — always override.
+Upsert-Env "PIPELINE_ROOT" "$Root\pipeline"
+Upsert-Env "PYTHON_PATH" "$venvPython"
+# Sane local defaults — only if the user left them unset.
+Ensure-Env "PORT" "5001"
+Ensure-Env "INTERNAL_API_URL" "http://127.0.0.1:5001"
+Ensure-Env "APP_URL" "$APP_URL"
+Ensure-Env "NEXT_PUBLIC_APP_URL" "$APP_URL"
+$script:existing | Set-Content -Path $envFile -Encoding UTF8
+Write-Ok "Updated .env.local (PIPELINE_ROOT, PYTHON_PATH; preserved your other values)"
+>>>>>>> main
 
 Fix-NpmForLocal
 npm install --no-audit --no-fund

@@ -303,6 +303,8 @@ export default function ProblemDetailPage() {
     const isActive = problem?.status === "processing" || anyRunning;
     if (!isActive) return;
     const interval = setInterval(() => {
+      // Skip while the tab is backgrounded — cuts idle DB/network traffic.
+      if (typeof document !== "undefined" && document.hidden) return;
       fetch(`/api/problems/${id}`)
         .then((r) => r.ok ? r.json() : null)
         .then((data) => {
@@ -314,7 +316,7 @@ export default function ProblemDetailPage() {
           }
         })
         .catch(() => {});
-    }, 5000);
+    }, 15000);
     return () => clearInterval(interval);
   }, [id, problem?.status, anyRunning]);
 
