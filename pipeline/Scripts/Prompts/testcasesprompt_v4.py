@@ -411,16 +411,22 @@ If the statement says "exactly one solution" / "guaranteed unique":
   * Parse the Constraints section thoroughly. NEVER generate an input outside the stated
     ranges (e.g. do NOT emit an empty array when 2 <= n). Constraint bounds gate EVERY
     scenario above.
-  * Dedup with a `seen_inputs` set; every `while`/generation loop has a hard attempt cap
-    (e.g. `if attempts > 20000: break`) and unique fallbacks (add the attempt counter or a
-    random filler so repeated fallbacks don't collide and re-trigger the loop).
+  * Dedup with a `seen_inputs` set that gates EVERY emitted case — it is authoritative.
+    Do NOT add an `allow_duplicate`/force flag or any other bypass of `seen_inputs`, and do
+    NOT clone a scenario into `*_repeat_1..N` specs to pad a count. Every `while`/generation
+    loop has a hard attempt cap (e.g. `if attempts > 20000: break`) and unique fallbacks (add
+    the attempt counter or a random filler so repeated fallbacks don't collide and re-trigger
+    the loop).
   * NEVER `raise`, `assert`, or `sys.exit` because a scenario produced a duplicate input or
     could not reach its target case count. On a duplicate: SKIP it and continue (or perturb a
     filler within constraints and retry up to the cap, then move on). A scenario that yields
-    fewer cases than planned is ACCEPTABLE — the script must still finish and write
-    testcases.json with whatever valid unique cases it has. The ONLY fatal condition allowed
-    is a genuine oracle mismatch (optimal vs brute disagreement); every other shortfall
-    (duplicates, count, size buckets) must degrade gracefully, never crash the script.
+    fewer cases than planned is ACCEPTABLE — emit ONLY the distinct cases you actually have
+    and move on; NEVER pad the count with duplicate or near-identical inputs. If a small
+    domain (e.g. n=1) admits only one valid input, emit that ONE case, not many copies of it.
+    The script must still finish and write testcases.json with whatever valid unique cases it
+    has. The ONLY fatal condition allowed is a genuine oracle mismatch (optimal vs brute
+    disagreement); every other shortfall (duplicates, count, size buckets) must degrade
+    gracefully, never crash the script.
   * Constructive generation preferred over rejection sampling.
 
 {io_format_block}
