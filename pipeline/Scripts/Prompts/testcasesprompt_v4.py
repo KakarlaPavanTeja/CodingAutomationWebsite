@@ -414,6 +414,13 @@ If the statement says "exactly one solution" / "guaranteed unique":
   * Dedup with a `seen_inputs` set; every `while`/generation loop has a hard attempt cap
     (e.g. `if attempts > 20000: break`) and unique fallbacks (add the attempt counter or a
     random filler so repeated fallbacks don't collide and re-trigger the loop).
+  * NEVER `raise`, `assert`, or `sys.exit` because a scenario produced a duplicate input or
+    could not reach its target case count. On a duplicate: SKIP it and continue (or perturb a
+    filler within constraints and retry up to the cap, then move on). A scenario that yields
+    fewer cases than planned is ACCEPTABLE — the script must still finish and write
+    testcases.json with whatever valid unique cases it has. The ONLY fatal condition allowed
+    is a genuine oracle mismatch (optimal vs brute disagreement); every other shortfall
+    (duplicates, count, size buckets) must degrade gracefully, never crash the script.
   * Constructive generation preferred over rejection sampling.
 
 {io_format_block}
