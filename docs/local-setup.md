@@ -36,11 +36,19 @@ cd CodingAutomationWebsite
 ### 2. Secrets (from team lead)
 
 ```bash
+<<<<<<< HEAD
+cp scripts/team-secrets.env.example scripts/team-secrets.env
+# Edit scripts/team-secrets.env — fill in the required values:
+#   OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_BUCKET_NAME,
+#   AWS_OBJECT_KEY_PREFIX
+=======
 cp .env.example .env.local
 # Edit .env.local — fill in the required values:
 #   OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL
 #   AWS S3 (optional): AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION,
 #                      AWS_BUCKET_NAME, AWS_OBJECT_KEY_PREFIX
+>>>>>>> main
 # (ADMIN_SECRET_KEY is optional — only for self-registering a new admin.)
 ```
 
@@ -125,7 +133,7 @@ users are the same for the whole team.
 | Database | **Shared cloud Postgres (Neon)** — via `DATABASE_URL` |
 | Python pipeline | venv at `~/.codingautomation-venv` |
 | Your login & problems | Shared cloud database (same for the whole team) |
-| Uploaded files | `.local-object-storage/` on your machine |
+| Uploaded files | **Shared AWS S3 bucket** when AWS creds are in `.env.local`; otherwise `.local-object-storage/` on your machine |
 
 ---
 
@@ -137,6 +145,30 @@ npm run dev          # development
 ```
 
 Nothing to start or stop for the database — it's always available in the cloud.
+
+---
+
+## Sharing dev via ngrok
+
+Teammates can reach your machine while you run `npm run dev`:
+
+```bash
+npm run dev
+ngrok http 5001
+```
+
+`next.config.ts` already allows `*.ngrok-free.dev`, `*.ngrok-free.app`, and related
+ngrok hostnames for HMR / dev assets.
+
+For correct redirects and links, set your tunnel URL in `.env.local` (or
+`scripts/team-secrets.env` before re-running setup):
+
+```bash
+APP_URL=https://your-subdomain.ngrok-free.dev
+NEXT_PUBLIC_APP_URL=https://your-subdomain.ngrok-free.dev
+```
+
+Restart the dev server after changing env vars or `next.config.ts`.
 
 ---
 
@@ -159,3 +191,10 @@ Wait 1–2 minutes on the **first** page load, or use production mode:
 ```bash
 npm run build && npm run start
 ```
+
+### ngrok: "Blocked cross-origin request to Next.js dev resource"
+
+Restart `npm run dev` after pulling — ngrok hostnames are allowlisted in
+`next.config.ts`. If you use a custom tunnel domain, add it via
+`ALLOWED_DEV_ORIGINS=your-host.example.com` in `.env.local` or set
+`NGROK_DOMAIN=your-host.example.com`.
