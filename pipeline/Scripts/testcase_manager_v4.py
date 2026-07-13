@@ -223,6 +223,178 @@ def _retry_fix_script(script_path: str, first_error: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Grounding: the generated suite is only valid if the REFERENCE SOLUTION can
+# actually read each `input` from stdin and print the stored `output`. That is
+# exactly how benchmark/harden run it, so we validate against the real solution
+# here and repair once — catching input-format drift before it fails downstream.
+# --------------------------------------------------------------------------- #
+def _grounding_timeout_sec() -> float:
+    raw = os.environ.get("TESTCASE_GROUNDING_TIMEOUT_SEC", "").strip()
+    if raw:
+        try:
+            return max(1.0, float(raw))
+        except ValueError:
+            pass
+    return 10.0
+
+
+def _normalize_output(text: str) -> str:
+    """Strip trailing whitespace per line, then trailing blank lines.
+
+    Must match benchmark_suite.normalize so a suite that passes grounding also
+    passes the benchmark's own comparison (and vice-versa)."""
+    if text is None:
+        return ""
+    return "\n".join(line.rstrip() for line in text.splitlines()).rstrip()
+
+
+def _run_reference_on_input(optimal_path: str, stdin_str: str, timeout: float):
+    """Pipe `stdin_str` to the reference solution. Returns (stdout, status).
+
+    status: ok | timeout | error — same contract benchmark_suite.run_solution uses."""
+    try:
+        proc = subprocess.run(
+            [_python_executable(), optimal_path],
+            input=stdin_str,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return "", "timeout"
+    if proc.returncode != 0:
+        return (proc.stdout or "") + (proc.stderr or ""), "error"
+    return proc.stdout or "", "ok"
+
+
+def _load_testcases_from(out_path: str) -> list[dict]:
+    with open(out_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        return data[0].get("test_cases", []) or []
+    if isinstance(data, dict):
+        return data.get("test_cases", []) or []
+    return []
+
+
+def _ground_against_reference(out_path: str, optimal_path: str) -> list[dict]:
+    """Run the reference solution on every case's `input` and return the cases it
+    fails to reproduce (crash/timeout, or stdout != stored `output`). An empty list
+    means the whole suite is executable by the real solution."""
+    cases = _load_testcases_from(out_path)
+    timeout = _grounding_timeout_sec()
+    failures: list[dict] = []
+    for tc in cases:
+        inp = tc.get("input", "") or ""
+        expected = _normalize_output(tc.get("output", ""))
+        got, status = _run_reference_on_input(optimal_path, inp, timeout)
+        if status != "ok":
+            failures.append({"order": tc.get("order"), "input": inp,
+                             "expected": expected, "got": f"<{status}>",
+                             "detail": _normalize_output(got)[:300]})
+        elif _normalize_output(got) != expected:
+            failures.append({"order": tc.get("order"), "input": inp,
+                             "expected": expected, "got": _normalize_output(got)[:300],
+                             "detail": ""})
+    return failures
+
+
+def _format_grounding_failures(failures: list[dict], limit: int = 12) -> str:
+    lines = []
+    for f in failures[:limit]:
+        lines.append(
+            f"- case order={f.get('order')}:\n"
+            f"    input   : {f.get('input')!r}\n"
+            f"    expected: {f.get('expected')!r}\n"
+            f"    got     : {f.get('got')!r}"
+            + (f"  ({f['detail']!r})" if f.get("detail") else "")
+        )
+    extra = len(failures) - limit
+    if extra > 0:
+        lines.append(f"- ... and {extra} more failing case(s).")
+    return "\n".join(lines)
+
+
+def _repair_from_grounding(script_path: str, out_path: str, optimal_solution: str,
+                           failures: list[dict]) -> bool:
+    """One LLM repair round: tell the model the reference solution could NOT read the
+    generated inputs, show the failing cases + the solution, and regenerate the script.
+    Returns True only if the regenerated script ran and produced a fresh testcases.json."""
+    import shutil
+
+    with open(script_path, "r", encoding="utf-8") as f:
+        current_script = f.read()
+
+    backup = out_path + ".groundbak"
+    had_backup = False
+    try:
+        shutil.copyfile(out_path, backup)
+        had_backup = True
+    except OSError:
+        backup = None
+
+    def _degrade(reason: str) -> bool:
+        print(f"Grounding repair: {reason} — keeping previous suite.")
+        if had_backup:
+            try:
+                shutil.copyfile(backup, out_path)
+            except OSError:
+                pass
+        _cleanup(backup)
+        return False
+
+    retry_system = (
+        "You are a Python expert fixing a test-case generator script. The generated `input` "
+        "strings are in the WRONG FORMAT: when piped to the reference solution on STANDARD INPUT, "
+        "the solution crashes or prints a different answer than the stored `output`. The reference "
+        "solution's stdin parser is the SOURCE OF TRUTH — study exactly how it reads sys.stdin and "
+        "regenerate every `input` in that EXACT raw stdin layout (size/count line, then space-separated "
+        "data line(s); a bracketed level-order line for tree/linked-list inputs). Do NOT use `name = value` "
+        "assignments or Python literals the solution does not parse. Set each `output` to what the reference "
+        "solution PRINTS to stdout for that input. Keep the same JSON shape, tags, weightage and scoring "
+        "behavior. "
+        "OUTPUT HYGIENE (CRITICAL): your entire response is written verbatim to a .py file and executed. "
+        "First character MUST be valid Python (import/#/from); no preamble, no sign-off, no markdown fences."
+    )
+    retry_user = (
+        "The REFERENCE SOLUTION (the source of truth for the input format) is:\n\n"
+        f"```python\n{optimal_solution}\n```\n\n"
+        "Feeding the generated inputs to this solution on stdin produced these failures:\n\n"
+        f"{_format_grounding_failures(failures)}\n\n"
+        "Here is the current generator script to fix:\n\n"
+        f"```python\n{current_script}\n```\n\n"
+        "Return ONLY the corrected generator script."
+    )
+    try:
+        content, usage = call_llm(retry_system, retry_user, purpose="testcases_grounding_fix")
+        content = _sanitize_generated_script(content)
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        update_usage(
+            usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
+            "testcase_generation_grounding_fix",
+            model=usage.get("model", "unknown"),
+            purpose="testcases",
+            step_id="generate_testcases",
+            cost=usage.get("cost", 0.0),
+        )
+    except Exception as e:
+        return _degrade(f"LLM call failed ({e})")
+
+    result = _run_generator(script_path)
+    if result.returncode != 0:
+        return _degrade(f"regenerated script crashed:\n{result.stderr.strip()[-600:]}")
+
+    _move_testcases_to_outputs()
+    if not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
+        return _degrade("regenerated script produced no testcases.json")
+
+    _cleanup(backup)
+    return True
+
+
+# --------------------------------------------------------------------------- #
 # Size-diversity feedback loop (re-prompt the LLM when the realized size mix
 # misses targets — e.g. an all-small suite that fails B3 / vacuous mutation)
 # --------------------------------------------------------------------------- #
@@ -494,7 +666,7 @@ def main():
         except Exception as exc:
             print(f"Warning: could not read {signature_path} ({exc}); "
                   "defaulting to STDIN/STDOUT I/O format.")
-    print(f"I/O format: {'function (named-variable-assignment input)' if is_function else 'STDIN/STDOUT'}"
+    print(f"I/O format: {'function (raw stdin the solution parses)' if is_function else 'STDIN/STDOUT'}"
           + (f"; params={signature_params}" if signature_params else ""))
 
     # 5. Prompt
@@ -577,6 +749,38 @@ def main():
                       "may stay weak — large/edge buckets need constraint-scaled inputs.")
         except Exception as e:
             print(f"Warning: could not reformat/audit testcases.json: {e}")
+
+        # 10. Grounding — the suite is only valid if the REFERENCE SOLUTION can read
+        #     every `input` on stdin and print the stored `output` (that is exactly how
+        #     benchmark_testcases / harden_testcases run it). Repair once on failure, then
+        #     fail loudly rather than shipping a suite the solution can't execute.
+        if os.environ.get("TESTCASE_SKIP_GROUNDING", "").strip() in ("1", "true", "yes"):
+            print("Grounding skipped (TESTCASE_SKIP_GROUNDING set).")
+        else:
+            failures = _ground_against_reference(out_path, optimal_path)
+            if failures:
+                print(
+                    f"Grounding: reference solution could not reproduce {len(failures)} "
+                    f"case(s) — input format drift. Attempting one repair:\n"
+                    f"{_format_grounding_failures(failures)}"
+                )
+                repaired = _repair_from_grounding(
+                    output_script_path, out_path, optimal_solution, failures
+                )
+                if repaired:
+                    _reformat_and_audit(out_path, description)
+                    failures = _ground_against_reference(out_path, optimal_path)
+                if failures:
+                    print(
+                        f"ERROR: {len(failures)} case(s) still fail against the reference "
+                        "solution after repair. The generated inputs do not match the "
+                        "solution's stdin format; refusing to ship a broken suite.\n"
+                        f"{_format_grounding_failures(failures)}"
+                    )
+                    sys.exit(1)
+                print("Grounding passed after repair: reference solution reproduces all cases.")
+            else:
+                print("Grounding passed: reference solution reproduces every case's output.")
 
     except Exception as e:
         print(f"An error occurred: {e}")

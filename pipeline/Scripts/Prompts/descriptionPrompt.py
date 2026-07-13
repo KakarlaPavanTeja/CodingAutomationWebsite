@@ -242,7 +242,8 @@ def _function_example_format_addon(question_type: str) -> str:
         return ""
     return """
 **FUNCTION-BASED EXAMPLE INPUT/OUTPUT (MANDATORY)**:
-- In each **Input:** block, write ONE NAMED VARIABLE ASSIGNMENT PER LINE using the function parameter names from **Your Task** (e.g. `n = 3`, `nums = [1, 2, 3]`).
+- In each **Input:** block, write ONE NAMED VARIABLE ASSIGNMENT PER LINE for EVERY variable the **Input Format** lists, in the SAME ORDER as the Input Format (e.g. `n = 4`, `m = 10`, `a = [1, 5, 2, 1, 1, 1, 2, 5, 7, 2]`).
+- Include size/count variables (such as `m`) even when they are NOT function parameters. The example must mirror the **Input Format** exactly, not just the function signature — never silently drop a variable the Input Format defines.
 - Do NOT use raw stdin layout or anonymous lines without variable names.
 - In each **Output:** block, write ONLY the function return value (scalar, array, or structured value) exactly as the reference code returns it — not full-program stdout unless the code prints as its final result.
 - **Input Format** and **Output Format** must describe the same variable-based representation shown in the examples.

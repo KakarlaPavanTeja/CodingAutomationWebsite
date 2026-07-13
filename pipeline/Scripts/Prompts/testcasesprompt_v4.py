@@ -205,11 +205,13 @@ def get_testcases_prompt(
     Output is always weighted (weightage + subtask tags) for a partial-credit judge.
 
     is_function / signature_params : whether this is a function-based problem and,
-        if so, the reference function's parameter names. Function-based problems use
-        the description's NAMED-VARIABLE-ASSIGNMENT input representation (e.g.
-        ``n = 2`` / ``values = [3, 3]``) with a return-value output; non-function
-        problems use the classic line-based STDIN/STDOUT representation. This keeps
-        the generated `input`/`output` strings consistent with the description.
+        if so, the reference function's parameter names. Both function-based and
+        non-function problems now use the RAW STDIN/STDOUT representation the reference
+        solution actually parses (the reference solution's stdin reader is the source of
+        truth); `signature_params` is passed only as context about what the solution
+        reads. This keeps the generated `input`/`output` in lock-step with the solution
+        and the description examples, and lets the generated suite be validated by
+        piping each `input` to the reference solution.
     """
     if distribution_preset not in DISTRIBUTION_BY_MODE:
         distribution_preset = DEFAULT_DISTRIBUTION_PRESET
@@ -292,27 +294,27 @@ Every case carries subtask structure and per-case weights.
         if signature_params:
             params_note = (
                 "\n  * For context, the reference function's parameters are: "
-                f"{', '.join(signature_params)}. The input lines assign the variables the "
-                "description's Input Format lists (which may ALSO include size variables such "
-                "as `n` that the solution reads but that are not function parameters) — follow "
-                "the description's Input Format, not just the parameter list."
+                f"{', '.join(signature_params)}. The stdin you produce must supply everything the "
+                "solution reads (this may ALSO include size variables such as `n` that the solution "
+                "reads but that are not function parameters) — follow what the SOLUTION reads, not "
+                "just the parameter list."
             )
-        io_format_block = f"""(I/O FORMAT — match the description's Input/Output Format and public Examples EXACTLY):
-  * This is a FUNCTION-based problem. Each `input` is NAMED VARIABLE ASSIGNMENTS, ONE PER LINE,
-    using the SAME variable names and the SAME ORDER as the description's Input Format / Examples.
-    Example shape (substitute the real names/values):
-        n = 2
-        values = [3, 3]
-        edges = [[1, 2]]
-    End the input string with a trailing newline. Do NOT emit a bare "size line then
-    space-separated data line" STDIN layout and do NOT use anonymous lines without variable names.
-  * Represent arrays / matrices / strings as PYTHON LITERALS exactly as the description's Examples
-    show them: `[3, 3]`, `[[1, 2]]`, `"abc"`. Do NOT space-join array values for these problems.
-  * `output` is ONLY the value the reference solution RETURNS for that input, formatted exactly as
-    the description's Output Format / Examples show it (e.g. `1`, or a bracketed list `[0, 2]`) —
-    never full-program stdout logging.
-  * The order-1 and order-2 public example cases MUST reproduce the description's Example 1 and
-    Example 2 `input`/`output` byte-for-byte.{params_note}"""
+        io_format_block = f"""(I/O FORMAT — the REFERENCE SOLUTION's stdin parser is the SOURCE OF TRUTH):
+  * This is a FUNCTION-based problem whose reference solution is embedded below and is run by
+    piping `input` to its STANDARD INPUT. Study how OPTIMAL_CODE reads stdin (e.g. the
+    `sys.stdin.read().split()` / `input()` / `readline()` logic in its `main`/driver) and produce
+    each `input` in the EXACT raw stdin layout that parser expects. The one hard rule: feeding your
+    `input` string to the reference solution on stdin MUST run cleanly and produce the right answer.
+  * Use that raw stdin layout (the usual convention: a size/count line, then space-separated data
+    line(s), one line per array/matrix row; a bracketed level-order line for tree/linked-list
+    inputs). Do NOT emit `name = value` named variable assignments and do NOT emit Python literals
+    like `[3, 3]` unless the solution literally parses that form. End the input with a trailing newline.
+  * `output` is EXACTLY what the reference solution PRINTS to stdout for that input (capture its
+    stdout — byte-for-byte, including line breaks), NOT a described return value.
+  * The order-1 and order-2 public example cases MUST cover the SAME SCENARIOS (same values, same
+    answer) as the description's Example 1 and Example 2 — but serialized as the raw stdin the
+    solution reads. The description may show those examples as readable `name = value` assignments
+    for humans; do NOT copy that display form, emit the equivalent raw stdin instead.{params_note}"""
     else:
         io_format_block = """(I/O FORMAT — match the description's Input/Output Format EXACTLY):
   * This is a STDIN/STDOUT problem. Produce `input`/`output` strings byte-exact to the spec
