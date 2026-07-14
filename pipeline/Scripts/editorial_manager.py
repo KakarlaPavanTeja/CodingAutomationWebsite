@@ -4,7 +4,7 @@ problems).
 
 Loads the problem statement, the per-language full solution code, and (when
 present) the per-language driver code, builds the per-problem user message, calls
-the editorial LLM (purpose="editorial", default anthropic/claude-sonnet-4.6, 100K output cap),
+the editorial LLM (purpose="editorial", default openai/gpt-5.4, 100K output cap),
 and writes the result to Outputs/editorial.md. Token usage + real USD cost are
 recorded like every other step. Follows the enrichment_manager.py pattern.
 """

@@ -3,16 +3,16 @@ LLM calls via OpenRouter (Chat Completions API).
 
 Quick reference
 ---------------
-Primary model (all purposes): anthropic/claude-sonnet-4.6
+Primary model (all purposes): openai/gpt-5.4
 
 Purpose routing (default reasoning → fallbacks on 429/5xx):
-  chat            high    → Gemini 3.1 Pro → GPT-5.4
+  chat            high    → Gemini 3.1 Pro → Sonnet 4.6
   code            medium  → Gemini 3.1 Pro → GPT-5.5   (translation, split)
-  enrichment      low     → Gemini 3.1 Pro → GPT-5.4
+  enrichment      low     → Gemini 3.1 Pro → Sonnet 4.6
   editorial       dynamic → Gemini 3.1 Pro → GPT-5.5 → Opus 4.8
   harden          medium  → Gemini 3.1 Pro → GPT-5.5
   wrong_solutions medium  → Gemini 3.1 Pro → GPT-5.5
-  testcases       tiered  → Opus 4.8 (easy:min, med:medium, hard:high) → GPT-5.5 → Gemini 3.5 Flash → Sonnet 4.6
+  testcases       tiered  → GPT-5.5 (easy:min, med:medium, hard:high) → Opus 4.8 → Gemini 3.5 Flash → GPT-5.4
 
 Configuration
 -------------
@@ -68,13 +68,13 @@ _OPUS_48 = "anthropic/claude-opus-4.8"
 
 # Primary model per purpose (override: OPENROUTER_MODEL_<SUFFIX>).
 _PURPOSE_DEFAULTS: dict[str, str] = {
-    "testcases": _SONNET_46,
-    "chat": _SONNET_46,
-    "code": _SONNET_46,
-    "enrichment": _SONNET_46,
-    "editorial": _SONNET_46,
-    "harden": _SONNET_46,
-    "wrong_solutions": _SONNET_46,
+    "testcases": _GPT_54,
+    "chat": _GPT_54,
+    "code": _GPT_54,
+    "enrichment": _GPT_54,
+    "editorial": _GPT_54,
+    "harden": _GPT_54,
+    "wrong_solutions": _GPT_54,
 }
 
 # Default reasoning + fallback ladder per purpose (429/5xx only).
@@ -85,7 +85,7 @@ _PURPOSE_CONFIG: dict[str, dict] = {
         "default_effort": "high",
         "fallbacks": [
             {"model": _GEMINI_PRO, "effort": "high"},
-            {"model": _GPT_54, "effort": "high"},
+            {"model": _SONNET_46, "effort": "high"},
         ],
     },
     "code": {
@@ -99,7 +99,7 @@ _PURPOSE_CONFIG: dict[str, dict] = {
         "default_effort": "low",
         "fallbacks": [
             {"model": _GEMINI_PRO, "effort": "low"},
-            {"model": _GPT_54, "effort": "low"},
+            {"model": _SONNET_46, "effort": "low"},
         ],
     },
     "editorial": {
@@ -131,19 +131,19 @@ _TESTCASES_TIER_DEFAULTS: dict[str, dict[str, str]] = {
     "easy": {
         "model": _GPT_55,
         "effort": "minimal",
-        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_SONNET_46}",
+        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_GPT_54}",
         "fallback_efforts": "minimal,minimal,minimal",
     },
     "medium": {
         "model": _GPT_55,
         "effort": "medium",
-        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_SONNET_46}",
+        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_GPT_54}",
         "fallback_efforts": "medium,medium,medium",
     },
     "hard": {
         "model": _GPT_55,
         "effort": "high",
-        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_SONNET_46}",
+        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_GPT_54}",
         "fallback_efforts": "high,high,high",
     },
 }
