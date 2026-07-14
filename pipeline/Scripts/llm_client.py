@@ -12,7 +12,7 @@ Purpose routing (default reasoning → fallbacks on 429/5xx):
   editorial       dynamic → Gemini 3.1 Pro → GPT-5.5 → Opus 4.8
   harden          medium  → Gemini 3.1 Pro → GPT-5.5
   wrong_solutions medium  → Gemini 3.1 Pro → GPT-5.5
-  testcases       tiered  → GPT-5.5 (easy:min, med:medium, hard:high) → Opus 4.8 → Gemini 3.5 Flash → GPT-5.4
+  testcases       tiered  → GPT-5.4 (easy/med:medium, hard:high) → Opus 4.8 → Gemini 3.5 Flash → GPT-5.5
 
 Configuration
 -------------
@@ -129,21 +129,21 @@ _PURPOSE_CONFIG: dict[str, dict] = {
 # Testcase tier defaults when OPENROUTER_MODEL_TESTCASES is not pinned.
 _TESTCASES_TIER_DEFAULTS: dict[str, dict[str, str]] = {
     "easy": {
-        "model": _GPT_55,
-        "effort": "minimal",
-        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_GPT_54}",
-        "fallback_efforts": "minimal,minimal,minimal",
+        "model": _GPT_54,
+        "effort": "medium",
+        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
+        "fallback_efforts": "medium,medium,medium",
     },
     "medium": {
-        "model": _GPT_55,
+        "model": _GPT_54,
         "effort": "medium",
-        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_GPT_54}",
+        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
         "fallback_efforts": "medium,medium,medium",
     },
     "hard": {
-        "model": _GPT_55,
+        "model": _GPT_54,
         "effort": "high",
-        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_GPT_54}",
+        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
         "fallback_efforts": "high,high,high",
     },
 }
