@@ -1,34 +1,25 @@
 #!/usr/bin/env bash
 # One-command local dev setup (Linux / macOS). The app connects to the shared
-# cloud (Neon) database via DATABASE_URL in .env.local — no local Postgres.
+# cloud Postgres (Aiven) via DATABASE_URL — no local database, no Docker.
 #
 # Usage:
 #   ./scripts/setup-local.sh                       # interactive (Enter = defaults)
-#   ./scripts/setup-local.sh --yes                 # non-interactive (needs .env.local)
+#   ./scripts/setup-local.sh --yes                 # non-interactive (needs team-secrets.env)
 #   ./scripts/setup-local.sh --install-system-deps # auto-install missing Node / Python
 #
 # Before running (one-time):
 #   1. git clone <repo> && cd CodingAutomationWebsite
-<<<<<<< HEAD
 #   2. cp scripts/team-secrets.env.example scripts/team-secrets.env
-#      then fill in OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL, and the
-#      AWS S3 credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-#      AWS_REGION, AWS_BUCKET_NAME, AWS_OBJECT_KEY_PREFIX) — ask your team lead.
-=======
-#   2. cp .env.example .env.local
-#      then fill in OPENROUTER_API_KEY, CRON_SECRET, the shared DATABASE_URL, and
+#      then fill in OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL, and
 #      the AWS S3 credentials (ask your team lead).
->>>>>>> main
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-SECRETS_FILE="$ROOT/.env.local"
+TEAM_SECRETS_FILE="$ROOT/scripts/team-secrets.env"
+ENV_FILE="$ROOT/.env.local"
 VENV_DIR="${HOME}/.codingautomation-venv"
-DB_NAME="codingautomation"
-DB_PORT="${DB_PORT:-5432}"
-DATABASE_URL_DEFAULT="postgresql://postgres:postgres@localhost:${DB_PORT}/${DB_NAME}"
 AUTO_YES=false
 INSTALL_SYSTEM=false
 
@@ -95,62 +86,6 @@ confirm_or_auto() {
 }
 
 # ---------------------------------------------------------------------------
-# Docker
-# ---------------------------------------------------------------------------
-DOCKER="docker"
-
-docker_daemon_ok() { $DOCKER info >/dev/null 2>&1; }
-
-resolve_docker() {
-  if ! has_cmd docker; then return 1; fi
-  if docker_daemon_ok; then DOCKER="docker"; return 0; fi
-  # Linux without docker group membership yet — try sudo.
-  if sudo -n true 2>/dev/null || [ "$AUTO_YES" = true ] || [ "$INSTALL_SYSTEM" = true ]; then
-    if sudo docker info >/dev/null 2>&1; then DOCKER="sudo docker"; return 0; fi
-  fi
-  return 1
-}
-
-has_compose() { $DOCKER compose version >/dev/null 2>&1; }
-
-install_ubuntu_docker() {
-  info "Installing Docker Engine + compose plugin (sudo required)..."
-  sudo apt-get update -qq
-  sudo apt-get install -y docker.io docker-compose-v2 2>/dev/null \
-    || sudo apt-get install -y docker.io docker-compose-plugin
-  sudo systemctl enable --now docker 2>/dev/null || true
-  sudo usermod -aG docker "$USER" 2>/dev/null || true
-  warn "Added $USER to the 'docker' group — a re-login is needed for password-less docker."
-  warn "This run will use 'sudo docker' so setup can continue now."
-}
-
-ensure_docker() {
-  if resolve_docker && has_compose; then
-    ok "Docker ready ($($DOCKER --version | awk '{print $3}' | tr -d ,))"
-    return
-  fi
-  if ! has_cmd docker; then
-    if is_ubuntu && { [ "$INSTALL_SYSTEM" = true ] || confirm_or_auto "Docker not found. Install it now (apt)?"; }; then
-      install_ubuntu_docker
-      resolve_docker && has_compose && { ok "Docker ready"; return; }
-    fi
-    if is_macos; then
-      fail "Docker Desktop is required. Install it: https://www.docker.com/products/docker-desktop/
-Then open Docker Desktop (wait for it to say 'running') and re-run this script."
-    fi
-    fail "Docker is required but not installed.
-Linux:  sudo apt-get install -y docker.io docker-compose-v2 && sudo systemctl enable --now docker
-macOS:  install Docker Desktop, then re-run.
-Then re-run: ./scripts/setup-local.sh --yes"
-  fi
-  # docker present but daemon not reachable
-  fail "Docker is installed but the daemon is not running.
-  • macOS: open Docker Desktop and wait until it reports 'running'.
-  • Linux: sudo systemctl start docker   (and re-login if you were just added to the docker group)
-Then re-run: ./scripts/setup-local.sh --yes"
-}
-
-# ---------------------------------------------------------------------------
 # Node / Python auto-install
 # ---------------------------------------------------------------------------
 install_ubuntu_node() {
@@ -196,7 +131,7 @@ install_system_deps() {
       install_macos_brew_pkg python@3.11 "Python 3.11" || true
     fi
   else
-    warn "Unknown OS — install Node 20+, Python 3.11+, Git, Docker manually."
+    warn "Unknown OS — install Node 20+, Python 3.11+, Git manually."
   fi
 }
 
@@ -247,14 +182,55 @@ check_prerequisites() {
 # Secrets
 # ---------------------------------------------------------------------------
 load_team_secrets() {
-  [ -f "$SECRETS_FILE" ] || fail "Missing .env.local — create it, then fill in the required values:
-  cp .env.example .env.local"
+  [ -f "$TEAM_SECRETS_FILE" ] || fail "Missing scripts/team-secrets.env — create it:
+  cp scripts/team-secrets.env.example scripts/team-secrets.env
+  then fill in OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL (ask your team lead)."
   set -a
   # shellcheck disable=SC1090
-  source "$SECRETS_FILE"
+  source "$TEAM_SECRETS_FILE"
   set +a
-  # DATABASE_URL comes from .env.local (the shared cloud DB). Required.
-  ok "Loaded .env.local"
+  ok "Loaded scripts/team-secrets.env"
+}
+
+# Upsert KEY=value into .env.local without disturbing the user's other lines
+# (optional tuning vars, comments) — portable across macOS/Linux.
+upsert_env() {
+  local key="$1" val="$2" tmp
+  tmp="$(mktemp)"
+  grep -vE "^[[:space:]]*${key}=" "$ENV_FILE" > "$tmp" 2>/dev/null || true
+  echo "${key}=${val}" >> "$tmp"
+  mv "$tmp" "$ENV_FILE"
+}
+
+ensure_env() {
+  grep -qE "^[[:space:]]*$1=" "$ENV_FILE" || echo "$1=$2" >> "$ENV_FILE"
+}
+
+write_env_local() {
+  if [ -f "$ENV_FILE" ]; then
+    cp "$ENV_FILE" "${ENV_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
+  else
+    touch "$ENV_FILE"
+  fi
+
+  upsert_env OPENROUTER_API_KEY "${OPENROUTER_API_KEY}"
+  upsert_env CRON_SECRET "${CRON_SECRET}"
+  upsert_env DATABASE_URL "${DATABASE_URL}"
+  [ -n "${ADMIN_SECRET_KEY:-}" ]    && upsert_env ADMIN_SECRET_KEY "${ADMIN_SECRET_KEY}"
+  [ -n "${RESEND_API_KEY:-}" ]      && upsert_env RESEND_API_KEY "${RESEND_API_KEY}"
+  [ -n "${OPENROUTER_BASE_URL:-}" ] && upsert_env OPENROUTER_BASE_URL "${OPENROUTER_BASE_URL}"
+  [ -n "${AWS_ACCESS_KEY_ID:-}" ]   && upsert_env AWS_ACCESS_KEY_ID "${AWS_ACCESS_KEY_ID}"
+  [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && upsert_env AWS_SECRET_ACCESS_KEY "${AWS_SECRET_ACCESS_KEY}"
+  [ -n "${AWS_REGION:-}" ]          && upsert_env AWS_REGION "${AWS_REGION}"
+  [ -n "${AWS_BUCKET_NAME:-}" ]     && upsert_env AWS_BUCKET_NAME "${AWS_BUCKET_NAME}"
+  [ -n "${AWS_OBJECT_KEY_PREFIX:-}" ] && upsert_env AWS_OBJECT_KEY_PREFIX "${AWS_OBJECT_KEY_PREFIX}"
+
+  upsert_env PIPELINE_ROOT "$ROOT/pipeline"
+  upsert_env PYTHON_PATH "$VENV_PYTHON"
+  ensure_env PORT "5001"
+  ensure_env INTERNAL_API_URL "http://127.0.0.1:5001"
+  upsert_env APP_URL "$APP_URL"
+  upsert_env NEXT_PUBLIC_APP_URL "$APP_URL"
 }
 
 # ---------------------------------------------------------------------------
@@ -275,31 +251,6 @@ fix_npm_for_local() {
 }
 
 # ---------------------------------------------------------------------------
-# Postgres via Docker
-# ---------------------------------------------------------------------------
-start_database() {
-  info "Starting Postgres in Docker (service 'db', port $DB_PORT)..."
-  DB_PORT="$DB_PORT" $DOCKER compose up -d db
-
-  info "Waiting for Postgres to become healthy..."
-  local tries=0
-  until $DOCKER compose exec -T db pg_isready -U postgres -d "$DB_NAME" >/dev/null 2>&1; do
-    tries=$((tries + 1))
-    if [ "$tries" -ge 60 ]; then
-      fail "Postgres did not become ready in time. Check: $DOCKER compose logs db"
-    fi
-    sleep 1
-  done
-  ok "Postgres is ready on localhost:$DB_PORT (db=$DB_NAME, user=postgres)"
-}
-
-schema_exists() {
-  $DOCKER compose exec -T db psql -U postgres -d "$DB_NAME" -tAc \
-    "select 1 from information_schema.tables where table_schema='public' and table_name='users' limit 1" \
-    2>/dev/null | grep -q 1
-}
-
-# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 echo ""
@@ -314,21 +265,11 @@ echo ""
 
 info "Step 2/5 — Loading secrets & configuring..."
 load_team_secrets
-[ -n "${OPENROUTER_API_KEY:-}" ] || fail "OPENROUTER_API_KEY missing in .env.local"
-[ -n "${CRON_SECRET:-}" ]         || fail "CRON_SECRET missing in .env.local"
-[ -n "${DATABASE_URL:-}" ]        || fail "DATABASE_URL missing in .env.local — set the shared cloud (Neon) connection string (see .env.example)."
+[ -n "${OPENROUTER_API_KEY:-}" ] || fail "OPENROUTER_API_KEY missing in scripts/team-secrets.env"
+[ -n "${CRON_SECRET:-}" ]         || fail "CRON_SECRET missing in scripts/team-secrets.env"
+[ -n "${DATABASE_URL:-}" ]        || fail "DATABASE_URL missing in scripts/team-secrets.env — set the shared cloud Postgres connection string."
 # ADMIN_SECRET_KEY is optional — only needed to self-register a NEW admin at signup.
 [ -n "${ADMIN_SECRET_KEY:-}" ]    || warn "ADMIN_SECRET_KEY not set — optional; existing accounts (including admins) work without it."
-<<<<<<< HEAD
-aws_s3_complete() {
-  [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && \
-  [ -n "${AWS_REGION:-}" ] && [ -n "${AWS_BUCKET_NAME:-}" ] && \
-  [ -n "${AWS_OBJECT_KEY_PREFIX:-}" ]
-}
-if aws_s3_complete; then
-  ok "AWS S3 storage configured (bucket: $AWS_BUCKET_NAME, prefix: $AWS_OBJECT_KEY_PREFIX)"
-elif [ -n "${AWS_ACCESS_KEY_ID:-}${AWS_SECRET_ACCESS_KEY:-}${AWS_REGION:-}${AWS_BUCKET_NAME:-}${AWS_OBJECT_KEY_PREFIX:-}" ]; then
-=======
 # AWS S3 file storage is optional — falls back to .local-object-storage/ on disk.
 aws_s3_complete() {
   [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && \
@@ -337,7 +278,6 @@ aws_s3_complete() {
 if aws_s3_complete; then
   ok "AWS S3 storage configured (bucket: $AWS_BUCKET_NAME, prefix: ${AWS_OBJECT_KEY_PREFIX:-<none>})"
 elif [ -n "${AWS_ACCESS_KEY_ID:-}${AWS_SECRET_ACCESS_KEY:-}${AWS_REGION:-}${AWS_BUCKET_NAME:-}" ]; then
->>>>>>> main
   warn "AWS S3 creds incomplete — file storage will fall back to .local-object-storage/"
 else
   warn "AWS S3 not configured — file storage will use .local-object-storage/ on disk"
@@ -349,7 +289,7 @@ if [ "$AUTO_YES" = false ]; then
 else
   APP_URL="$DEFAULT_APP_URL"
 fi
-ok "DATABASE_URL set from .env.local (shared cloud database)"
+ok "DATABASE_URL will be copied from scripts/team-secrets.env → .env.local"
 ok "Secrets loaded (OPENROUTER_API_KEY, CRON_SECRET, ADMIN_SECRET_KEY)"
 echo ""
 
@@ -367,63 +307,9 @@ VENV_PYTHON="$VENV_DIR/bin/python3"
 ok "Python packages installed"
 echo ""
 
-info "Step 4/5 — Updating .env.local & installing npm packages..."
-ENV_FILE="$ROOT/.env.local"
-<<<<<<< HEAD
-if [ -f "$ENV_FILE" ]; then
-  if [ "$AUTO_YES" = false ]; then
-    read -r -p ".env.local exists. Overwrite? (y/N): " OVERWRITE
-    [[ "$OVERWRITE" =~ ^[Yy]$ ]] || fail "Aborted."
-  fi
-  cp "$ENV_FILE" "${ENV_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
-fi
-{
-  echo "# Generated by scripts/setup-local.sh on $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  echo "PIPELINE_ROOT=$ROOT/pipeline"
-  echo "PYTHON_PATH=$VENV_PYTHON"
-  echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
-  [ -n "${ADMIN_SECRET_KEY:-}" ] && echo "ADMIN_SECRET_KEY=$ADMIN_SECRET_KEY"
-  echo "DATABASE_URL=$DATABASE_URL"
-  echo "CRON_SECRET=$CRON_SECRET"
-  [ -n "${RESEND_API_KEY:-}" ] && echo "RESEND_API_KEY=$RESEND_API_KEY"
-  [ -n "${OPENROUTER_BASE_URL:-}" ] && echo "OPENROUTER_BASE_URL=$OPENROUTER_BASE_URL"
-  [ -n "${AWS_ACCESS_KEY_ID:-}" ] && echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
-  [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
-  [ -n "${AWS_REGION:-}" ] && echo "AWS_REGION=$AWS_REGION"
-  [ -n "${AWS_BUCKET_NAME:-}" ] && echo "AWS_BUCKET_NAME=$AWS_BUCKET_NAME"
-  [ -n "${AWS_OBJECT_KEY_PREFIX:-}" ] && echo "AWS_OBJECT_KEY_PREFIX=$AWS_OBJECT_KEY_PREFIX"
-  echo "PORT=5001"
-  echo "INTERNAL_API_URL=http://127.0.0.1:5001"
-  echo "APP_URL=$APP_URL"
-  echo "NEXT_PUBLIC_APP_URL=$APP_URL"
-} > "$ENV_FILE"
-ok "Wrote .env.local"
-=======
-cp "$ENV_FILE" "${ENV_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
-
-# Upsert KEY=value into .env.local without disturbing the user's other lines
-# (AWS creds, optional tuning vars, comments) — portable across macOS/Linux.
-upsert_env() {
-  local key="$1" val="$2" tmp
-  tmp="$(mktemp)"
-  grep -vE "^[[:space:]]*${key}=" "$ENV_FILE" > "$tmp" 2>/dev/null || true
-  echo "${key}=${val}" >> "$tmp"
-  mv "$tmp" "$ENV_FILE"
-}
-ensure_env() {  # add KEY=value only if not already present (uncommented)
-  grep -qE "^[[:space:]]*$1=" "$ENV_FILE" || echo "$1=$2" >> "$ENV_FILE"
-}
-
-# Machine-specific paths computed during setup — always override.
-upsert_env PIPELINE_ROOT "$ROOT/pipeline"
-upsert_env PYTHON_PATH "$VENV_PYTHON"
-# Sane local defaults — only if the user left them unset.
-ensure_env PORT "5001"
-ensure_env INTERNAL_API_URL "http://127.0.0.1:5001"
-ensure_env APP_URL "$APP_URL"
-ensure_env NEXT_PUBLIC_APP_URL "$APP_URL"
-ok "Updated .env.local (PIPELINE_ROOT, PYTHON_PATH; preserved your other values)"
->>>>>>> main
+info "Step 4/5 — Writing .env.local & installing npm packages..."
+write_env_local
+ok "Wrote .env.local (DATABASE_URL + team secrets from scripts/team-secrets.env)"
 
 fix_npm_for_local
 if ! npm install --no-audit --no-fund; then
@@ -444,5 +330,5 @@ echo "  npm run build && npm run start    # recommended (fast, stable)"
 echo "  npm run dev                       # development (slow first load)"
 echo "  → http://localhost:5001/signup    (admin secret in .env.local)"
 echo ""
-echo "  Database: shared cloud (Neon) — configured via DATABASE_URL in .env.local."
+echo "  Database: shared cloud Postgres (Aiven) — DATABASE_URL copied to .env.local."
 echo ""
