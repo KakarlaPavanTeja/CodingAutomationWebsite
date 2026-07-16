@@ -1,25 +1,22 @@
 #!/usr/bin/env bash
-# One-command local dev setup (Linux / macOS). The app connects to the shared
-# cloud Postgres (Aiven) via DATABASE_URL — no local database, no Docker.
+# Check local dev prerequisites (Git, Node 20+, npm, Python 3.11+).
+# All credentials and config live in .env.local — copy .env.example and fill it in.
 #
 # Usage:
-#   ./scripts/setup-local.sh                       # interactive (Enter = defaults)
-#   ./scripts/setup-local.sh --yes                 # non-interactive (needs team-secrets.env)
-#   ./scripts/setup-local.sh --install-system-deps # auto-install missing Node / Python
+#   ./scripts/setup-local.sh
+#   ./scripts/setup-local.sh --yes
+#   ./scripts/setup-local.sh --install-system-deps --yes
 #
-# Before running (one-time):
-#   1. git clone <repo> && cd CodingAutomationWebsite
-#   2. cp scripts/team-secrets.env.example scripts/team-secrets.env
-#      then fill in OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL, and
-#      the AWS S3 credentials (ask your team lead).
+# Before running the app:
+#   1. cp .env.example .env.local  (fill in DATABASE_URL, API keys, etc.)
+#   2. npm install
+#   3. python3 -m venv ~/.codingautomation-venv && pip install -r pipeline/requirements.txt
+#   4. npm run dev
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-TEAM_SECRETS_FILE="$ROOT/scripts/team-secrets.env"
-ENV_FILE="$ROOT/.env.local"
-VENV_DIR="${HOME}/.codingautomation-venv"
 AUTO_YES=false
 INSTALL_SYSTEM=false
 
@@ -28,7 +25,7 @@ for arg in "$@"; do
     --yes|-y) AUTO_YES=true ;;
     --install-system-deps) INSTALL_SYSTEM=true ;;
     --help|-h)
-      sed -n '2,13p' "$0"
+      sed -n '2,14p' "$0"
       exit 0
       ;;
     *) echo "Unknown option: $arg (try --help)" >&2; exit 1 ;;
@@ -85,9 +82,6 @@ confirm_or_auto() {
   [[ "${answer:-Y}" =~ ^[Yy]$ ]]
 }
 
-# ---------------------------------------------------------------------------
-# Node / Python auto-install
-# ---------------------------------------------------------------------------
 install_ubuntu_node() {
   info "Installing Node.js 20 (NodeSource)..."
   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
@@ -178,157 +172,32 @@ check_prerequisites() {
   ok "python $(python_version "$PYTHON_CMD") ($PYTHON_CMD)"
 }
 
-# ---------------------------------------------------------------------------
-# Secrets
-# ---------------------------------------------------------------------------
-load_team_secrets() {
-  [ -f "$TEAM_SECRETS_FILE" ] || fail "Missing scripts/team-secrets.env — create it:
-  cp scripts/team-secrets.env.example scripts/team-secrets.env
-  then fill in OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL (ask your team lead)."
-  set -a
-  # shellcheck disable=SC1090
-  source "$TEAM_SECRETS_FILE"
-  set +a
-  ok "Loaded scripts/team-secrets.env"
-}
-
-# Upsert KEY=value into .env.local without disturbing the user's other lines
-# (optional tuning vars, comments) — portable across macOS/Linux.
-upsert_env() {
-  local key="$1" val="$2" tmp
-  tmp="$(mktemp)"
-  grep -vE "^[[:space:]]*${key}=" "$ENV_FILE" > "$tmp" 2>/dev/null || true
-  echo "${key}=${val}" >> "$tmp"
-  mv "$tmp" "$ENV_FILE"
-}
-
-ensure_env() {
-  grep -qE "^[[:space:]]*$1=" "$ENV_FILE" || echo "$1=$2" >> "$ENV_FILE"
-}
-
-write_env_local() {
-  if [ -f "$ENV_FILE" ]; then
-    cp "$ENV_FILE" "${ENV_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
-  else
-    touch "$ENV_FILE"
-  fi
-
-  upsert_env OPENROUTER_API_KEY "${OPENROUTER_API_KEY}"
-  upsert_env CRON_SECRET "${CRON_SECRET}"
-  upsert_env DATABASE_URL "${DATABASE_URL}"
-  [ -n "${ADMIN_SECRET_KEY:-}" ]    && upsert_env ADMIN_SECRET_KEY "${ADMIN_SECRET_KEY}"
-  [ -n "${RESEND_API_KEY:-}" ]      && upsert_env RESEND_API_KEY "${RESEND_API_KEY}"
-  [ -n "${OPENROUTER_BASE_URL:-}" ] && upsert_env OPENROUTER_BASE_URL "${OPENROUTER_BASE_URL}"
-  [ -n "${AWS_ACCESS_KEY_ID:-}" ]   && upsert_env AWS_ACCESS_KEY_ID "${AWS_ACCESS_KEY_ID}"
-  [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && upsert_env AWS_SECRET_ACCESS_KEY "${AWS_SECRET_ACCESS_KEY}"
-  [ -n "${AWS_REGION:-}" ]          && upsert_env AWS_REGION "${AWS_REGION}"
-  [ -n "${AWS_BUCKET_NAME:-}" ]     && upsert_env AWS_BUCKET_NAME "${AWS_BUCKET_NAME}"
-  [ -n "${AWS_OBJECT_KEY_PREFIX:-}" ] && upsert_env AWS_OBJECT_KEY_PREFIX "${AWS_OBJECT_KEY_PREFIX}"
-
-  upsert_env PIPELINE_ROOT "$ROOT/pipeline"
-  upsert_env PYTHON_PATH "$VENV_PYTHON"
-  ensure_env PORT "5001"
-  ensure_env INTERNAL_API_URL "http://127.0.0.1:5001"
-  upsert_env APP_URL "$APP_URL"
-  upsert_env NEXT_PUBLIC_APP_URL "$APP_URL"
-}
-
-# ---------------------------------------------------------------------------
-# npm registry (strip Replit-only URLs)
-# ---------------------------------------------------------------------------
-fix_npm_for_local() {
-  if [ -f package-lock.json ] && grep -q 'package-firewall.replit.local' package-lock.json 2>/dev/null; then
-    info "Fixing Replit-only npm URLs in package-lock.json..."
-    if is_macos; then
-      sed -i '' 's|http://package-firewall.replit.local/npm/|https://registry.npmjs.org/|g' package-lock.json
-    else
-      sed -i 's|http://package-firewall.replit.local/npm/|https://registry.npmjs.org/|g' package-lock.json
-    fi
-    ok "Patched package-lock.json for local npm registry"
-  fi
-  echo "registry=https://registry.npmjs.org/" > .npmrc.local
-  export NPM_CONFIG_USERCONFIG="$ROOT/.npmrc.local"
-}
-
-# ---------------------------------------------------------------------------
-# Run
-# ---------------------------------------------------------------------------
 echo ""
 echo "========================================"
-echo "  Coding Automation — Local Setup (Shared Cloud DB)"
+echo "  Coding Automation — Dependency Check"
 echo "========================================"
 echo ""
 
-info "Step 1/5 — Checking prerequisites..."
+info "Checking prerequisites..."
 check_prerequisites
 echo ""
 
-info "Step 2/5 — Loading secrets & configuring..."
-load_team_secrets
-[ -n "${OPENROUTER_API_KEY:-}" ] || fail "OPENROUTER_API_KEY missing in scripts/team-secrets.env"
-[ -n "${CRON_SECRET:-}" ]         || fail "CRON_SECRET missing in scripts/team-secrets.env"
-[ -n "${DATABASE_URL:-}" ]        || fail "DATABASE_URL missing in scripts/team-secrets.env — set the shared cloud Postgres connection string."
-# ADMIN_SECRET_KEY is optional — only needed to self-register a NEW admin at signup.
-[ -n "${ADMIN_SECRET_KEY:-}" ]    || warn "ADMIN_SECRET_KEY not set — optional; existing accounts (including admins) work without it."
-# AWS S3 file storage is optional — falls back to .local-object-storage/ on disk.
-aws_s3_complete() {
-  [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && \
-  [ -n "${AWS_REGION:-}" ] && [ -n "${AWS_BUCKET_NAME:-}" ]
-}
-if aws_s3_complete; then
-  ok "AWS S3 storage configured (bucket: $AWS_BUCKET_NAME, prefix: ${AWS_OBJECT_KEY_PREFIX:-<none>})"
-elif [ -n "${AWS_ACCESS_KEY_ID:-}${AWS_SECRET_ACCESS_KEY:-}${AWS_REGION:-}${AWS_BUCKET_NAME:-}" ]; then
-  warn "AWS S3 creds incomplete — file storage will fall back to .local-object-storage/"
+if [ ! -f "$ROOT/.env.local" ]; then
+  warn ".env.local not found — copy .env.example and fill in your credentials before starting the app:"
+  echo "  cp .env.example .env.local"
 else
-  warn "AWS S3 not configured — file storage will use .local-object-storage/ on disk"
+  ok ".env.local present"
 fi
-DEFAULT_APP_URL="${APP_URL:-http://localhost:5001}"
-if [ "$AUTO_YES" = false ]; then
-  read -r -p "APP_URL [$DEFAULT_APP_URL]: " APP_URL_INPUT
-  APP_URL="${APP_URL_INPUT:-$DEFAULT_APP_URL}"
-else
-  APP_URL="$DEFAULT_APP_URL"
-fi
-ok "DATABASE_URL will be copied from scripts/team-secrets.env → .env.local"
-ok "Secrets loaded (OPENROUTER_API_KEY, CRON_SECRET, ADMIN_SECRET_KEY)"
+
 echo ""
-
-info "Step 3/5 — Python virtual environment..."
-info "Location: $VENV_DIR (outside repo — avoids Turbopack build issues)"
-if [ ! -d "$VENV_DIR" ]; then
-  "$PYTHON_CMD" -m venv "$VENV_DIR"; ok "Created venv"
-else
-  warn "Reusing existing venv"
-fi
-VENV_PYTHON="$VENV_DIR/bin/python3"
-[ -x "$VENV_PYTHON" ] || fail "venv python not found at $VENV_PYTHON"
-"$VENV_PYTHON" -m pip install --upgrade pip --quiet
-"$VENV_PYTHON" -m pip install -r pipeline/requirements.txt --quiet
-ok "Python packages installed"
-echo ""
-
-info "Step 4/5 — Writing .env.local & installing npm packages..."
-write_env_local
-ok "Wrote .env.local (DATABASE_URL + team secrets from scripts/team-secrets.env)"
-
-fix_npm_for_local
-if ! npm install --no-audit --no-fund; then
-  fail "npm install failed. Try: rm -rf node_modules && npm install"
-fi
-ok "npm packages installed"
-echo ""
-
-info "Step 5/5 — Database..."
-ok "Using shared cloud database — schema is managed centrally (no local DB, no db:push)."
-echo ""
-
 echo "========================================"
-echo -e "${GREEN}Setup complete!${NC}"
+echo -e "${GREEN}Prerequisites OK${NC}"
 echo "========================================"
 echo ""
-echo "  npm run build && npm run start    # recommended (fast, stable)"
-echo "  npm run dev                       # development (slow first load)"
-echo "  → http://localhost:5001/signup    (admin secret in .env.local)"
-echo ""
-echo "  Database: shared cloud Postgres (Aiven) — DATABASE_URL copied to .env.local."
+echo "  Next steps (if you haven't already):"
+echo "    cp .env.example .env.local   # fill in DATABASE_URL, API keys, AWS creds"
+echo "    npm install"
+echo "    python3 -m venv ~/.codingautomation-venv"
+echo "    ~/.codingautomation-venv/bin/pip install -r pipeline/requirements.txt"
+echo "    npm run dev                  # http://localhost:5001"
 echo ""
