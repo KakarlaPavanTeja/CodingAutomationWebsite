@@ -296,9 +296,9 @@
 cd CodingAutomationWebsite</pre></div>
       </li>
       <li>
-        <div class="step-label">Add the secrets <span>— paste the 4 values from your team lead</span></div>
-        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>cp scripts/team-secrets.env.example scripts/team-secrets.env
-nano scripts/team-secrets.env   <span class="c"># OPENROUTER_API_KEY, ADMIN_SECRET_KEY, CRON_SECRET, DATABASE_URL</span></pre></div>
+        <div class="step-label">Add credentials to <code>.env.local</code> <span>— paste values from your team lead</span></div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>cp .env.example .env.local
+nano .env.local   <span class="c"># OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL, AWS creds (optional)</span></pre></div>
       </li>
       <li>
         <div class="step-label">Run setup</div>
@@ -325,9 +325,9 @@ nano scripts/team-secrets.env   <span class="c"># OPENROUTER_API_KEY, ADMIN_SECR
 cd CodingAutomationWebsite</pre></div>
       </li>
       <li>
-        <div class="step-label">Add the secrets <span>— paste the 4 values from your team lead</span></div>
-        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>copy scripts\team-secrets.env.example scripts\team-secrets.env
-notepad scripts\team-secrets.env   <span class="c"># OPENROUTER_API_KEY, ADMIN_SECRET_KEY, CRON_SECRET, DATABASE_URL</span></pre></div>
+        <div class="step-label">Add credentials to <code>.env.local</code> <span>— paste values from your team lead</span></div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>copy .env.example .env.local
+notepad .env.local   <span class="c"># OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL, AWS creds (optional)</span></pre></div>
       </li>
       <li>
         <div class="step-label">Run setup</div>
@@ -353,9 +353,9 @@ notepad scripts\team-secrets.env   <span class="c"># OPENROUTER_API_KEY, ADMIN_S
 cd CodingAutomationWebsite</pre></div>
       </li>
       <li>
-        <div class="step-label">Add the secrets <span>— paste the 4 values from your team lead</span></div>
-        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>cp scripts/team-secrets.env.example scripts/team-secrets.env
-open -e scripts/team-secrets.env   <span class="c"># OPENROUTER_API_KEY, ADMIN_SECRET_KEY, CRON_SECRET, DATABASE_URL</span></pre></div>
+        <div class="step-label">Add credentials to <code>.env.local</code> <span>— paste values from your team lead</span></div>
+        <div class="cmd"><button class="copy" onclick="cp(this)">Copy</button><pre>cp .env.example .env.local
+open -e .env.local   <span class="c"># OPENROUTER_API_KEY, CRON_SECRET, DATABASE_URL, AWS creds (optional)</span></pre></div>
       </li>
       <li>
         <div class="step-label">Run setup</div>
@@ -386,8 +386,8 @@ open -e scripts/team-secrets.env   <span class="c"># OPENROUTER_API_KEY, ADMIN_S
     <h3>If something goes wrong</h3>
     <dl>
       <div>
-        <dt>“DATABASE_URL missing in team-secrets.env”</dt>
-        <dd>You didn't fill in the shared database URL. Open <code>scripts/team-secrets.env</code> and paste the <code>DATABASE_URL</code> your team lead gave you, then re-run setup.</dd>
+        <dt>“DATABASE_URL missing in .env.local”</dt>
+        <dd>You didn't fill in the shared database URL. Open <code>.env.local</code> and paste the <code>DATABASE_URL</code> your team lead gave you, then restart the app.</dd>
       </div>
       <div>
         <dt>Can't connect to the database</dt>
