@@ -1,11 +1,12 @@
 import type { NextConfig } from "next";
 
-/** ngrok tunnel hostnames change per session; wildcards cover free + paid tiers. */
-const NGROK_DEV_ORIGINS = [
+/** Tunnel hostnames change per session; wildcards cover free + paid tiers. */
+const TUNNEL_DEV_ORIGINS = [
   "*.ngrok-free.dev",
   "*.ngrok-free.app",
   "*.ngrok.io",
   "*.ngrok.app",
+  "*.trycloudflare.com",
 ];
 
 const nextConfig: NextConfig = {
@@ -14,7 +15,7 @@ const nextConfig: NextConfig = {
     ...(process.env.REPLIT_DOMAINS?.split(",") ?? []),
     process.env.NGROK_DOMAIN,
     ...(process.env.ALLOWED_DEV_ORIGINS?.split(",") ?? []),
-    ...NGROK_DEV_ORIGINS,
+    ...TUNNEL_DEV_ORIGINS,
     // Allow LAN access so teammates can reach the dev server over the local network.
     "172.16.*.*",
   ]
