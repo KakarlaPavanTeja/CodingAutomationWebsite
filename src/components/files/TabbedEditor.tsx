@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { copyToClipboard } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -56,19 +57,18 @@ export function TabbedEditor({
     return () => window.removeEventListener("keydown", handler);
   }, [activeTabPath, activeTab, handleSave]);
 
-  const handleCopy = useCallback((path: string) => {
+  const handleCopy = useCallback(async (path: string) => {
     const tab = tabs.find((t) => t.path === path);
-    if (tab) {
-      navigator.clipboard.writeText(tab.content);
-      setSaveStatus((prev) => ({ ...prev, [path]: "copied" }));
-      setTimeout(() => {
-        setSaveStatus((prev) => {
-          const next = { ...prev };
-          delete next[path];
-          return next;
-        });
-      }, 2000);
-    }
+    if (!tab) return;
+    const ok = await copyToClipboard(tab.content);
+    setSaveStatus((prev) => ({ ...prev, [path]: ok ? "copied" : "error" }));
+    setTimeout(() => {
+      setSaveStatus((prev) => {
+        const next = { ...prev };
+        delete next[path];
+        return next;
+      });
+    }, 2000);
   }, [tabs]);
 
   // Empty state

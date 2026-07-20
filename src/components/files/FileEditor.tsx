@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { copyToClipboard } from "@/lib/clipboard";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 
@@ -77,9 +78,9 @@ export function FileEditor({ filePath }: FileEditorProps) {
     }
   };
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(content);
-    setSaveMessage("Copied to clipboard");
+  const handleCopy = async () => {
+    const ok = await copyToClipboard(content);
+    setSaveMessage(ok ? "Copied to clipboard" : "Copy failed");
     setTimeout(() => setSaveMessage(null), 2000);
   };
 
