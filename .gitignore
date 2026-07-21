@@ -68,3 +68,11 @@ LOCAL_SETUP.md
 scripts/export-replit-db.mts
 scripts/export-replit-storage.mts
 scripts/import-db.mts
+
+# local freelancer prompt kit and export artifacts
+/dist/
+/pipeline/freelancer_kit/
+/scripts/export-freelancer-kit.py
+/pipeline/Scripts/tests/test_freelancer_kit.py
+/freelancer-function-practice/
+/freelancer-function-practice.zip
