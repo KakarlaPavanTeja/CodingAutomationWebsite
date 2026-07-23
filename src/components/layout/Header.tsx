@@ -15,6 +15,7 @@ const BASE_NAV = [
 ];
 const ADMIN_NAV_INSERT = { href: "/admin", label: "Admin" };
 const PROBLEMS_NAV = { href: "/problems", label: "Problems" };
+const PREPARE_EXAM_NAV = { href: "/prepare-exam-json", label: "Prepare Exam JSON" };
 const WHATS_NEW_NAV = { href: "/whats-new", label: "What's New" };
 const GUIDE_NAV = { href: "/guide", label: "Guide" };
 
@@ -63,7 +64,7 @@ export function Header() {
           // Build nav: Dashboard, [Admin], Problems, Guide
           const navItems = [...BASE_NAV];
           if (profile?.role === "admin") navItems.push(ADMIN_NAV_INSERT);
-          navItems.push(PROBLEMS_NAV, WHATS_NEW_NAV, GUIDE_NAV);
+          navItems.push(PROBLEMS_NAV, PREPARE_EXAM_NAV, WHATS_NEW_NAV, GUIDE_NAV);
           return (
             <nav className="flex items-center gap-1">
               {navItems.map((item) => (
