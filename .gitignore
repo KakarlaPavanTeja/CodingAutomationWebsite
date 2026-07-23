@@ -57,7 +57,6 @@ pipeline/temp_compiler_sandbox/
 
 # stray working notes
 /clear picture.md
-scripts/team-secrets.env
 /backups/
 .npmrc.local
 
