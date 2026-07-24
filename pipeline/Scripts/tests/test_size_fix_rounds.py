@@ -1,8 +1,8 @@
 """Regression tests for _size_fix_rounds — the bound on size-diversity re-prompts.
 
 Each round is an extra LLM call + script run, so the loop must be cheap to cap and to
-turn off entirely. _size_fix_rounds reads TESTCASE_SIZE_FIX_ROUNDS: default 1, clamp
-negatives to 0, ignore garbage. testcase_manager_v4 imports heavyweight LLM clients at
+turn off entirely. _size_fix_rounds reads TESTCASE_SIZE_FIX_ROUNDS: default 0 (disabled),
+clamp negatives to 0, ignore garbage. testcase_manager_v4 imports heavyweight LLM clients at
 module load (httpx/openai/...), which are prod deps not present in every test env, so we
 stub them with auto-attribute modules and skip cleanly if the import still fails.
 """
@@ -57,8 +57,8 @@ class SizeFixRoundsTest(unittest.TestCase):
             os.environ[_ENV] = value
         return _m._size_fix_rounds()
 
-    def test_default_is_one_when_unset(self):
-        self.assertEqual(self._with(None), 1)
+    def test_default_is_zero_when_unset(self):
+        self.assertEqual(self._with(None), 0)
 
     def test_explicit_value_is_used(self):
         self.assertEqual(self._with("3"), 3)
@@ -70,10 +70,10 @@ class SizeFixRoundsTest(unittest.TestCase):
         self.assertEqual(self._with("-5"), 0)
 
     def test_non_integer_falls_back_to_default(self):
-        self.assertEqual(self._with("abc"), 1)
+        self.assertEqual(self._with("abc"), 0)
 
     def test_blank_falls_back_to_default(self):
-        self.assertEqual(self._with("   "), 1)
+        self.assertEqual(self._with("   "), 0)
 
 
 if __name__ == "__main__":

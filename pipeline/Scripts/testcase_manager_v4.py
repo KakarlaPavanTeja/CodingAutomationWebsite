@@ -419,10 +419,11 @@ def _cleanup(path: str | None) -> None:
 
 
 def _size_fix_rounds() -> int:
-    """Max LLM-regeneration rounds for size diversity (default 1, 0 disables).
+    """Max LLM-regeneration rounds for size diversity (default 0 = disabled).
 
-    Each round is one extra LLM call + script run, so it is bounded and cheap to
-    turn off. Override with TESTCASE_SIZE_FIX_ROUNDS.
+    Each round is one extra LLM call + script run (`testcase_generation_size_fix`),
+    which fired on nearly every suite and dominated testcase cost, so it is OFF by
+    default. Re-enable per-run with TESTCASE_SIZE_FIX_ROUNDS=1 (or higher).
     """
     raw = os.environ.get("TESTCASE_SIZE_FIX_ROUNDS", "").strip()
     if raw:
@@ -430,7 +431,7 @@ def _size_fix_rounds() -> int:
             return max(0, int(raw))
         except ValueError:
             pass
-    return 1
+    return 0
 
 
 def _print_size_audit(audit: dict, prefix: str = "Size distribution") -> None:

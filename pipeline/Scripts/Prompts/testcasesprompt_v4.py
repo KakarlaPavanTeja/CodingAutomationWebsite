@@ -365,8 +365,23 @@ MANDATORY SIZE-LADDER RECIPE (do this explicitly IN CODE — do NOT hand-wave):
   3. size_large cases MUST use n at/near MAX_N. This is the #1 failure we see: a suite
      that is 100% small is REJECTED by the coverage-shape gate (B3) AND makes mutation
      testing vacuous — small inputs cannot kill off-by-one / comparison / boundary mutants.
-Self-check: assert realized size_* tag counts match targets ({size_targets_inline}) within
-+/-{tol:g}pp; if a bucket is short, ADD constraint-scaled cases for it before writing JSON.
+
+HOW THE SIZE AUDIT ACTUALLY BUCKETS YOUR CASES (match it EXACTLY — it IGNORES your tags):
+  The audit does NOT trust your size_* tag. It DERIVES each case's bucket from the raw
+  input: n = the FIRST integer token of the input's FIRST line, then:
+     n >= 0.8*MAX_N            -> large
+     n <= 1                    -> edge
+     n <= 20                   -> small
+     n >= 0.5*MAX_N            -> large    else -> medium
+     (first token NOT an integer -> the case can ONLY be edge/small, never large/medium)
+  CONSEQUENCE: when the problem has a size dimension, the FIRST LINE's FIRST TOKEN must BE
+  that primary size n (array length / count / etc.), and every size_large case must make
+  that token >= 0.8*MAX_N. If you lead the input with a non-size value, or never scale n
+  up, the audit records 0% large and REGENERATES you — no matter how you tagged the cases.
+Self-check (MUST mirror the audit, not your own tags): for each case, parse the first int
+token of its first input line as n, compute the DERIVED bucket with the rule above, and
+assert the derived bucket counts match targets ({size_targets_inline}) within +/-{tol:g}pp.
+If a bucket is short, ADD constraint-scaled cases for it before writing JSON.
 
 (PER-PROBLEM-TYPE REQUIRED SCENARIOS):
 Detect the problem family from the statement + solution and include its mandatory cases.
