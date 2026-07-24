@@ -29,6 +29,14 @@ function parseSocketUrl(url: string): { host: string; database: string; username
   return null;
 }
 
+// Pool size defaults to 10. Override with PG_POOL_MAX to run a second app
+// instance (e.g. a worktree dev server) against the same DB without exhausting
+// its connection slots.
+function poolMax(): number {
+  const n = Number(process.env.PG_POOL_MAX);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10;
+}
+
 export function createPostgresClient(connectionString: string) {
   const socket = parseSocketUrl(connectionString);
   if (socket) {
@@ -36,14 +44,14 @@ export function createPostgresClient(connectionString: string) {
       host: socket.host,
       database: socket.database,
       username: socket.username,
-      max: 10,
+      max: poolMax(),
       idle_timeout: 20,
       connect_timeout: 10,
       prepare: false,
     });
   }
   return postgres(connectionString, {
-    max: 10,
+    max: poolMax(),
     idle_timeout: 20,
     connect_timeout: 10,
     prepare: false,
