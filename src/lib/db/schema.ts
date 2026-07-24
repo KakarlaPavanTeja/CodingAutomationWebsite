@@ -123,7 +123,7 @@ export const problems = pgTable(
     ),
     statusCheck: check(
       "problems_status_check",
-      sql`${t.status} IN ('draft','processing','completed','failed','deletion_pending','deleted')`,
+      sql`${t.status} IN ('draft','partial','processing','completed','failed','deletion_pending','deleted')`,
     ),
   }),
 );

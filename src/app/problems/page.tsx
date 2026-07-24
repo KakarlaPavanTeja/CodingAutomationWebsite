@@ -10,6 +10,7 @@ import {
   XCircle,
   Loader2,
   AlertTriangle,
+  CircleDashed,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth-context";
@@ -29,6 +30,11 @@ const STATUS_CONFIG: Record<
     icon: Loader2,
     label: "Processing",
     className: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400",
+  },
+  partial: {
+    icon: CircleDashed,
+    label: "Partial",
+    className: "bg-blue-500/10 text-blue-700 dark:text-blue-400",
   },
   completed: {
     icon: CheckCircle2,

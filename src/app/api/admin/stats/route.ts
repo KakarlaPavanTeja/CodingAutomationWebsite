@@ -19,6 +19,7 @@ export async function GET() {
     problemsTotal,
     problemsDraft,
     problemsProcessing,
+    problemsPartial,
     problemsCompleted,
     problemsFailed,
     problemsFunction,
@@ -36,6 +37,7 @@ export async function GET() {
     countQuery(problems).where(ne(problems.status, "deleted")),
     countQuery(problems).where(eq(problems.status, "draft")),
     countQuery(problems).where(eq(problems.status, "processing")),
+    countQuery(problems).where(eq(problems.status, "partial")),
     countQuery(problems).where(eq(problems.status, "completed")),
     countQuery(problems).where(eq(problems.status, "failed")),
     countQuery(problems).where(and(eq(problems.questionType, "function"), ne(problems.status, "deleted"))),
@@ -67,6 +69,7 @@ export async function GET() {
       byStatus: {
         draft: problemsDraft[0]?.count ?? 0,
         processing: problemsProcessing[0]?.count ?? 0,
+        partial: problemsPartial[0]?.count ?? 0,
         completed: problemsCompleted[0]?.count ?? 0,
         failed: problemsFailed[0]?.count ?? 0,
       },

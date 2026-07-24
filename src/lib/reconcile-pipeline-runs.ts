@@ -62,9 +62,11 @@ const lastReconcileAt = new Map<string, number>();
  *    no CONTENT step was re-run after it finished -> completed
  *      (trailing informational steps — execute_editorial, execute_tests,
  *       harden, benchmark — and the concurrent editorial do NOT undo this;
- *       a genuine content re-run after packaging DOES, dropping to draft)
+ *       a genuine content re-run after packaging DOES, dropping to partial)
  *  - else, from the latest run overall:
- *      stopped (exit -1) -> draft · failed -> failed · otherwise -> draft
+ *      stopped/orphaned (exit -1) -> failed · failed -> failed · otherwise -> partial
+ * `draft` is NEVER derived here — it means "no step ever ran" (the creation
+ * default), so a problem with zero pipeline_runs is left untouched above.
  * Only writes when the derived status differs, to avoid churn.
  */
 export async function recomputeProblemStatus(problemId: string): Promise<void> {
@@ -102,7 +104,11 @@ export async function recomputeProblemStatus(problemId: string): Promise<void> {
 
     const startMs = (r: { startedAt: Date | null }) => r.startedAt?.getTime() ?? 0;
 
-    let next: "processing" | "completed" | "failed" | "draft";
+    // `draft` is NEVER derived here: per policy it means "no step executed at
+    // all", which is the creation default left untouched by the `rows.length===0`
+    // early-return above. Anything that has run steps but isn't completed/failed/
+    // processing is `partial` (ran, but no packaged artifact yet).
+    let next: "processing" | "completed" | "failed" | "partial";
     if (rows.some((r) => r.status === "running" || (r.status === "failed" && r.exitCode === ORPHAN_EXIT_CODE))) {
       next = "processing";
     } else {
@@ -129,17 +135,19 @@ export async function recomputeProblemStatus(problemId: string): Promise<void> {
           const parent = parsePipelineRunStepKey(r.stepId).parentStepId as StepId;
           return CONTENT_RERUN_STEPS.has(parent) && startMs(r) > ppjFinish;
         });
-        next = contentRerunAfter ? "draft" : "completed";
+        // A content re-run makes the packaged artifact stale, but steps HAVE run,
+        // so it drops to `partial` (not `draft`, which is reserved for untouched).
+        next = contentRerunAfter ? "partial" : "completed";
       } else {
         // Never packaged (or the latest packaging attempt failed). Classify from
         // the most recent run overall.
         const latest = rows.reduce((a, b) => (startMs(a) >= startMs(b) ? a : b));
         if (latest.exitCode != null && latest.exitCode < 0) {
-          next = "draft"; // stopped / aborted / orphaned (-1 or -2)
+          next = "failed"; // stopped / aborted / orphaned (hard -1; -2 is handled above as processing)
         } else if (latest.status === "failed") {
           next = "failed";
         } else {
-          next = "draft"; // partial / non-final success with nothing running
+          next = "partial"; // ran steps, latest succeeded but never packaged
         }
       }
     }

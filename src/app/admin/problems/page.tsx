@@ -8,6 +8,7 @@ const STATUS_STYLES: Record<string, string> = {
   completed: "bg-green-500/10 text-green-700 dark:text-green-400",
   failed: "bg-red-500/10 text-red-700 dark:text-red-400",
   processing: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400",
+  partial: "bg-blue-500/10 text-blue-700 dark:text-blue-400",
   draft: "bg-gray-500/10 text-gray-700 dark:text-gray-400",
   deletion_pending: "bg-orange-500/10 text-orange-700 dark:text-orange-400",
   deleted: "bg-red-500/10 text-red-700 dark:text-red-400 line-through",

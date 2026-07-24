@@ -22,6 +22,7 @@ import {
   BookOpen,
   ListChecks,
   Users,
+  CircleDashed,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -86,6 +87,7 @@ type OptimalWarning = {
 const STATUS_CONFIG: Record<string, { icon: React.ElementType; label: string; className: string }> = {
   draft: { icon: Clock, label: "Draft", className: "bg-gray-500/10 text-gray-600 dark:text-gray-400" },
   processing: { icon: Loader2, label: "Processing", className: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400" },
+  partial: { icon: CircleDashed, label: "Partial", className: "bg-blue-500/10 text-blue-700 dark:text-blue-400" },
   completed: { icon: CheckCircle2, label: "Completed", className: "bg-green-500/10 text-green-700 dark:text-green-400" },
   failed: { icon: XCircle, label: "Failed", className: "bg-red-500/10 text-red-700 dark:text-red-400" },
   running: { icon: Loader2, label: "Running", className: "bg-blue-500/10 text-blue-700 dark:text-blue-400" },

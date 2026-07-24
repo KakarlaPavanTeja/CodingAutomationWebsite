@@ -16,6 +16,7 @@ import {
   ArrowRight,
   BarChart3,
   Sparkles,
+  CircleDashed,
 } from "lucide-react";
 import GuidePage from "@/app/guide/page";
 import { WhatsNewTeaser } from "@/components/whats-new/WhatsNewList";
@@ -24,6 +25,7 @@ import { getRecentFeatures } from "@/lib/whats-new";
 const STATUS_ICON: Record<string, React.ElementType> = {
   draft: Clock,
   processing: Loader2,
+  partial: CircleDashed,
   completed: CheckCircle2,
   failed: XCircle,
 };
@@ -31,6 +33,7 @@ const STATUS_ICON: Record<string, React.ElementType> = {
 const STATUS_COLOR: Record<string, string> = {
   draft: "text-gray-500",
   processing: "text-yellow-500",
+  partial: "text-blue-500",
   completed: "text-green-500",
   failed: "text-red-500",
 };
@@ -43,7 +46,9 @@ export default function Home() {
     total: problems.length,
     completed: problems.filter((x) => x.status === "completed").length,
     processing: problems.filter((x) => x.status === "processing").length,
+    partial: problems.filter((x) => x.status === "partial").length,
     failed: problems.filter((x) => x.status === "failed").length,
+    draft: problems.filter((x) => x.status === "draft").length,
   }), [problems]);
 
   const recentUpdates = useMemo(() => getRecentFeatures(4), []);
@@ -63,7 +68,7 @@ export default function Home() {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
         <Card>
           <CardContent className="pt-5 pb-4">
             <div className="flex items-center gap-3">
@@ -106,12 +111,38 @@ export default function Home() {
         <Card>
           <CardContent className="pt-5 pb-4">
             <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-blue-500/10">
+                <CircleDashed className="h-5 w-5 text-blue-500" />
+              </div>
+              <div>
+                <p className={`text-2xl font-bold transition-opacity duration-200 ${loading ? "opacity-40" : ""}`}>{stats.partial}</p>
+                <p className="text-xs text-muted-foreground">Partial</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5 pb-4">
+            <div className="flex items-center gap-3">
               <div className="p-2 rounded-lg bg-red-500/10">
                 <XCircle className="h-5 w-5 text-red-500" />
               </div>
               <div>
                 <p className={`text-2xl font-bold transition-opacity duration-200 ${loading ? "opacity-40" : ""}`}>{stats.failed}</p>
                 <p className="text-xs text-muted-foreground">Failed</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-gray-500/10">
+                <Clock className="h-5 w-5 text-gray-500" />
+              </div>
+              <div>
+                <p className={`text-2xl font-bold transition-opacity duration-200 ${loading ? "opacity-40" : ""}`}>{stats.draft}</p>
+                <p className="text-xs text-muted-foreground">Draft</p>
               </div>
             </div>
           </CardContent>
