@@ -122,6 +122,7 @@ export default function AdminCostsPage() {
   const [includeImported, setIncludeImported] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [truncated, setTruncated] = useState(false);
   const inFlight = useRef(false);
 
   const fetchUsage = useCallback(async () => {
@@ -132,6 +133,7 @@ export default function AdminCostsPage() {
       const res = await fetch("/api/admin/usage", { cache: "no-store" });
       const data = await res.json();
       setUsage((data.usage as UsageEntry[]) || []);
+      setTruncated(Boolean(data.truncated));
       setLastUpdated(new Date());
     } catch {
       // keep whatever we already have on a transient failure
@@ -481,6 +483,13 @@ export default function AdminCostsPage() {
           </button>
         </div>
       </div>
+
+      {truncated && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+          Showing the most recent 100,000 usage rows — older history is not
+          included in these totals. Aggregation should move server-side.
+        </div>
+      )}
 
       {/* Summary Cards — reflect the selected time range + active filters */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
