@@ -12,6 +12,8 @@ export interface LlmUsageInsert {
   problemId?: string | null;
   problemName?: string | null;
   stepId?: string | null;
+  /** Which OpenRouter account key produced this call. Defaults to "new". */
+  account?: "new" | "old";
 }
 
 /** Insert one LLM usage row (shared by CP prep and other server-side callers). */
@@ -28,6 +30,7 @@ export async function recordLlmUsage(row: LlmUsageInsert): Promise<void> {
       problemId: row.problemId ?? null,
       problemName: row.problemName?.slice(0, 200) ?? null,
       stepId: row.stepId?.slice(0, 100) ?? null,
+      account: row.account ?? "new",
     });
   } catch (err) {
     console.error("[record-llm-usage] insert failed:", err);

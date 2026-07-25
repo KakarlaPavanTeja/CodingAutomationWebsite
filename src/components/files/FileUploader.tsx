@@ -105,9 +105,9 @@ const ACCENT_STYLES: Record<string, { card: string; icon: string; ring: string }
 };
 
 const REFERENCE_LANGUAGES = [
+  { id: "py", label: "Python" },
   { id: "cpp", label: "C++" },
   { id: "java", label: "Java" },
-  { id: "py", label: "Python" },
   { id: "js", label: "JavaScript" },
 ];
 
@@ -148,12 +148,19 @@ function Chip({
   );
 }
 
-function WizardSteps({ current }: { current: Phase }) {
+function WizardSteps({
+  current,
+  prepareMode,
+}: {
+  current: Phase;
+  prepareMode: "ai" | "asis";
+}) {
+  // "Use as-is" has no LLM output to review, so its flow skips the Review step.
   const steps = [
     { id: "pick" as const, label: "Workflow" },
     { id: "prepare" as const, label: "Prepare" },
-    { id: "review" as const, label: "Review" },
-    { id: "advanced" as const, label: "Advanced" },
+    ...(prepareMode === "ai" ? [{ id: "review" as const, label: "Review" }] : []),
+    { id: "advanced" as const, label: "Problem config" },
   ];
   const currentIndex = steps.findIndex((s) => s.id === current);
 
@@ -281,7 +288,7 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
   const [rawInputMode, setRawInputMode] = useState<RawInputMode>("separate");
   const [rawProblemStatement, setRawProblemStatement] = useState("");
   const [rawReferenceSolution, setRawReferenceSolution] = useState("");
-  const [referenceLanguage, setReferenceLanguage] = useState("cpp");
+  const [referenceLanguage, setReferenceLanguage] = useState("py");
   const [combinedFile, setCombinedFile] = useState<File | null>(null);
   const [combinedFileText, setCombinedFileText] = useState("");
 
@@ -507,6 +514,30 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
     await submitProblem(problemStatement, referenceSolution, `solution.${ext}`);
   };
 
+  // As-is flow: validate the raw inputs, then advance to the required Problem
+  // config step (creation happens there, same as the LLM flow).
+  const goToConfigAsIs = () => {
+    if (!problemName.trim()) {
+      setError("Enter a problem title before continuing");
+      return;
+    }
+    const { problemStatement, referenceSolution } = resolveRawInput();
+    if (!problemStatement) {
+      setError("Add a problem statement");
+      return;
+    }
+    if (!referenceSolution?.trim()) {
+      setError("Add a reference solution to create the problem as-is");
+      return;
+    }
+    setError(null);
+    setPhase("advanced");
+  };
+
+  // The Problem config step is the single create point for both flows.
+  const handleCreateFromConfig = () =>
+    prepareMode === "asis" ? handleUploadAsIs() : handleUpload();
+
   // ── Phase 1: Pick workflow ──────────────────────────────────────────
   if (phase === "pick") {
     return (
@@ -610,7 +641,7 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
             <ArrowLeft className="h-4 w-4" />
             Change workflow
           </button>
-          <WizardSteps current="prepare" />
+          <WizardSteps current="prepare" prepareMode={prepareMode} />
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -836,18 +867,9 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
               )}
             </Button>
           ) : (
-            <Button onClick={handleUploadAsIs} disabled={uploading || !canCreateAsIs()}>
-              {uploading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Creating…
-                </>
-              ) : (
-                <>
-                  Use inputs as-is & create
-                  <ArrowRight className="ml-2 h-4 w-4" />
-                </>
-              )}
+            <Button onClick={goToConfigAsIs} disabled={uploading || !canCreateAsIs()}>
+              Continue to problem config
+              <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           )}
         </div>
@@ -868,7 +890,7 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
             <ArrowLeft className="h-4 w-4" />
             Back to prepare
           </button>
-          <WizardSteps current="review" />
+          <WizardSteps current="review" prepareMode={prepareMode} />
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -1020,21 +1042,11 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
               <p className="text-sm text-destructive">{error || prepError}</p>
             )}
             <Button
-              variant="outline"
               onClick={() => setPhase("advanced")}
-              disabled={!hasReviewedContent || isRunning}
+              disabled={!canSubmit || isRunning || createdRef.current}
             >
-              Advanced settings
-            </Button>
-            <Button onClick={handleUpload} disabled={uploading || isRunning || !canSubmit || createdRef.current}>
-              {uploading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Creating…
-                </>
-              ) : (
-                "Create Problem"
-              )}
+              Continue to problem config
+              <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -1048,13 +1060,13 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
       <div className="flex items-center justify-between gap-4">
         <button
           type="button"
-          onClick={() => setPhase("review")}
+          onClick={() => setPhase(prepareMode === "asis" ? "prepare" : "review")}
           className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back to review
+          {prepareMode === "asis" ? "Back to prepare" : "Back to review"}
         </button>
-        <WizardSteps current="advanced" />
+        <WizardSteps current="advanced" prepareMode={prepareMode} />
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -1084,13 +1096,20 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
       />
 
       <div className="flex items-center justify-between gap-4 border-t pt-4">
-        <Button variant="outline" onClick={() => setPhase("review")}>
+        <Button variant="outline" onClick={() => setPhase(prepareMode === "asis" ? "prepare" : "review")}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
         <div className="flex items-center gap-2">
           {error && <p className="text-sm text-destructive">{error}</p>}
-          <Button onClick={handleUpload} disabled={uploading || !canSubmit || createdRef.current}>
+          <Button
+            onClick={handleCreateFromConfig}
+            disabled={
+              uploading ||
+              createdRef.current ||
+              (prepareMode === "asis" ? !canCreateAsIs() : !canSubmit)
+            }
+          >
             {uploading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

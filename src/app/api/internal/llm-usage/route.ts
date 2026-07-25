@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { llmUsage } from "@/lib/db/schema";
+import { getOpenRouterKeyChoice } from "@/lib/openrouter-key";
 import { timingSafeEqual } from "crypto";
 
 function safeEqualStr(a: string, b: string): boolean {
@@ -69,8 +70,13 @@ export async function POST(request: NextRequest) {
   const totalTokens =
     explicitTotal === undefined ? promptTokens + completionTokens : safeInt(explicitTotal);
 
+  // ponytail: stamp the account from the CURRENT key choice. A key switch
+  // mid-run mislabels in-flight rows; acceptable given switches are rare.
+  const account = await getOpenRouterKeyChoice();
+
   try {
     await db.insert(llmUsage).values({
+      account,
       model: safeStr(get("model"), "unknown", 100),
       purpose: safeStr(get("purpose"), "unknown", 100),
       promptTokens,

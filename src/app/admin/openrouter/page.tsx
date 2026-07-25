@@ -26,6 +26,7 @@ type UsageEntry = {
   completion_tokens: number;
   total_tokens: number;
   cost_usd: string;
+  account: string | null;
   problem_name: string | null;
   created_at: string;
   profiles: { email: string; display_name: string | null } | null;
@@ -70,6 +71,16 @@ function matchesFilter(
   return value === filterKey;
 }
 
+// The new OpenRouter API key went live 2026-07-24 15:31 IST. Usage recorded
+// before this instant is billed to the OLD key's account; on/after, the NEW key.
+// Adjust the offset here if the cutoff is in a different timezone.
+const NEW_KEY_START = new Date("2026-07-24T15:31:00+05:30");
+
+// Which OpenRouter account (key) a usage row belongs to, by when it ran.
+function accountForRow(u: UsageEntry): "new" | "old" {
+  return new Date(u.created_at) >= NEW_KEY_START ? "new" : "old";
+}
+
 type TimeRange = "1d" | "7d" | "1m" | "3m" | "6m" | "1y" | "all";
 const TIME_RANGES: { key: TimeRange; label: string; days: number }[] = [
   { key: "1d", label: "24h", days: 1 },
@@ -109,6 +120,32 @@ function formatYAxis(val: number, mode: "cost" | "tokens" | "calls"): string {
   return String(Math.round(val));
 }
 
+// Top-of-dashboard control: scopes the whole cost view to New / Old / All (by
+// the key start date). Picking a specific key also switches which OpenRouter
+// key the app uses for new calls; "All" only affects the view.
+function OpenRouterKeySelector({
+  value,
+  onChange,
+}: {
+  value: string; // "" = All, "new", or "old"
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="inline-flex items-center gap-1.5 text-xs font-medium">
+      <span className="text-muted-foreground">API key</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="bg-card border border-border rounded-md px-2 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+      >
+        <option value="new">New</option>
+        <option value="old">Old</option>
+        <option value="">All</option>
+      </select>
+    </label>
+  );
+}
+
 export default function AdminCostsPage() {
   const [usage, setUsage] = useState<UsageEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -117,6 +154,7 @@ export default function AdminCostsPage() {
   const [filterModel, setFilterModel] = useState("");
   const [filterPurpose, setFilterPurpose] = useState("");
   const [filterStep, setFilterStep] = useState("");
+  const [filterAccount, setFilterAccount] = useState("");
   const [barMode, setBarMode] = useState<"cost" | "tokens" | "calls">("cost");
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
   const [includeImported, setIncludeImported] = useState(false);
@@ -144,12 +182,25 @@ export default function AdminCostsPage() {
     }
   }, []);
 
+  // Top API-key dropdown: "" (All) / "new" / "old" scopes the cost view. Picking
+  // a specific key also switches which key the app uses for new calls.
+  const onSelectAccount = useCallback((v: string) => {
+    setFilterAccount(v);
+    if (v === "new" || v === "old") {
+      fetch("/api/admin/openrouter-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ choice: v }),
+      }).catch(() => {});
+    }
+  }, []);
+
   // Initial load + auto-refresh so new pipeline runs show up without a reload.
   useEffect(() => {
     fetchUsage();
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") fetchUsage();
-    }, 15000);
+    }, 5000);
     const onVisible = () => {
       if (document.visibilityState === "visible") fetchUsage();
     };
@@ -172,7 +223,7 @@ export default function AdminCostsPage() {
 
   // Helper: apply all active filters except one (for cross-filtering dropdowns)
   const applyFilters = useCallback(
-    (data: UsageEntry[], exclude?: "user" | "problem" | "model" | "purpose" | "step") => {
+    (data: UsageEntry[], exclude?: "user" | "problem" | "model" | "purpose" | "step" | "account") => {
       let result = data;
       if (filterUser && exclude !== "user")
         result = result.filter((u) => matchesFilter(u.user_id, filterUser));
@@ -184,9 +235,11 @@ export default function AdminCostsPage() {
         result = result.filter((u) => u.purpose === filterPurpose);
       if (filterStep && exclude !== "step")
         result = result.filter((u) => matchesFilter(u.step_id, filterStep));
+      if (filterAccount && exclude !== "account")
+        result = result.filter((u) => accountForRow(u) === filterAccount);
       return result;
     },
-    [filterUser, filterProblem, filterModel, filterPurpose, filterStep]
+    [filterUser, filterProblem, filterModel, filterPurpose, filterStep, filterAccount]
   );
 
   // Base set: within the selected time range, and (unless opted in) excluding the
@@ -402,14 +455,17 @@ export default function AdminCostsPage() {
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-lg font-semibold">OpenRouter Dashboard</h2>
-          <button
-            onClick={() => fetchUsage()}
-            disabled={refreshing}
-            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border bg-card hover:bg-muted/50 transition-colors disabled:opacity-60"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
-            Refresh
-          </button>
+          <div className="flex items-center gap-3">
+            <OpenRouterKeySelector value={filterAccount} onChange={onSelectAccount} />
+            <button
+              onClick={() => fetchUsage()}
+              disabled={refreshing}
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border bg-card hover:bg-muted/50 transition-colors disabled:opacity-60"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              Refresh
+            </button>
+          </div>
         </div>
         <div className="rounded-lg border bg-card p-8 text-center">
           <p className="text-muted-foreground">
@@ -457,6 +513,7 @@ export default function AdminCostsPage() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h2 className="text-lg font-semibold">OpenRouter Dashboard</h2>
         <div className="flex items-center gap-3">
+          <OpenRouterKeySelector value={filterAccount} onChange={onSelectAccount} />
           {lastUpdated && (
             <span className="text-xs text-muted-foreground tabular-nums">
               Updated {lastUpdated.toLocaleTimeString()}
@@ -929,9 +986,9 @@ export default function AdminCostsPage() {
                   <option key={s.key} value={s.key}>{s.label}</option>
                 ))}
               </select>
-              {(filterUser || filterProblem || filterModel || filterPurpose || filterStep) && (
+              {(filterUser || filterProblem || filterModel || filterPurpose || filterStep || filterAccount) && (
                 <button
-                  onClick={() => { setFilterUser(""); setFilterProblem(""); setFilterModel(""); setFilterPurpose(""); setFilterStep(""); }}
+                  onClick={() => { setFilterUser(""); setFilterProblem(""); setFilterModel(""); setFilterPurpose(""); setFilterStep(""); setFilterAccount(""); }}
                   className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
                 >
                   Clear
@@ -939,7 +996,7 @@ export default function AdminCostsPage() {
               )}
             </div>
             {/* Totals summary on the right when filters are active */}
-            {(filterUser || filterProblem || filterModel || filterPurpose || filterStep) && (
+            {(filterUser || filterProblem || filterModel || filterPurpose || filterStep || filterAccount) && (
               <div className="flex items-center gap-4 text-xs">
                 <span className="text-muted-foreground">
                   Prompt: <span className="font-semibold text-foreground tabular-nums">{filteredUsage.reduce((s, u) => s + u.prompt_tokens, 0).toLocaleString()}</span>

@@ -194,6 +194,14 @@ export const pipelineStates = pgTable("pipeline_states", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
+// Tiny global key/value store for app-wide settings (e.g. which OpenRouter
+// account key is active). One row per setting.
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
 export const pipelineLogs = pgTable("pipeline_logs", {
   id: uuid("id").primaryKey().defaultRandom(),
   problemId: uuid("problem_id").references(() => problems.id, { onDelete: "cascade" }),
@@ -223,6 +231,9 @@ export const llmUsage = pgTable(
     // Exact pipeline run this usage belongs to (P1-M1). Nullable: legacy rows and
     // non-pipeline calls have none, and those fall back to time-window matching.
     runId: uuid("run_id"),
+    // Which OpenRouter account key produced this call ("new" | "old"). Legacy
+    // rows predate the key switch and were all on the single (new) key.
+    account: text("account").notNull().default("new"),
   },
   (t) => ({
     createdAtIdx: index("idx_llm_usage_created_at").on(sql`${t.createdAt} DESC`),

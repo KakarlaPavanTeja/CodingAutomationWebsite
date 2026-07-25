@@ -51,6 +51,7 @@ export async function GET() {
     completion_tokens: r.usage.completionTokens,
     total_tokens: r.usage.totalTokens,
     cost_usd: r.usage.costUsd,
+    account: r.usage.account,
     problem_name: r.usage.problemName,
     created_at: r.usage.createdAt,
     profiles: r.user_email

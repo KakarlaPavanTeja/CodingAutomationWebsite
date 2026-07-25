@@ -9,6 +9,7 @@ import { requireProblemAccess } from "@/lib/auth/ownership";
 import { db } from "@/lib/db";
 import { problems, pipelineRuns, pipelineStates } from "@/lib/db/schema";
 import { assertSafeProblemId } from "@/lib/storage-path";
+import { getActiveOpenRouterKey } from "@/lib/openrouter-key";
 import {
   createTempWorkspace,
   uploadOutputsFromDir,
@@ -103,10 +104,6 @@ function resolveInternalApiUrl(): string {
 function stepMayCallLlm(stepId: StepId): boolean {
   const usage = getStepConfig(stepId).llmUsage;
   return usage === "llm" || usage === "conditional";
-}
-
-function resolveOpenRouterApiKey(): string | undefined {
-  return process.env.OPENROUTER_API_KEY?.trim() || undefined;
 }
 
 /** Env for spawned Python — OpenRouter only; strip direct provider keys. */
@@ -239,7 +236,8 @@ export async function POST(request: NextRequest) {
   }
   const effectiveMode: PipelineMode = storedMode;
 
-  if (stepMayCallLlm(stepId as StepId) && !resolveOpenRouterApiKey()) {
+  const openRouterKey = await getActiveOpenRouterKey();
+  if (stepMayCallLlm(stepId as StepId) && !openRouterKey) {
     return NextResponse.json(
       {
         error:
@@ -390,7 +388,7 @@ export async function POST(request: NextRequest) {
       // "local only" (the row never reaches the database).
       INTERNAL_API_URL: internalApiUrl,
       INTERNAL_API_SECRET: process.env.CRON_SECRET || "",
-      OPENROUTER_API_KEY: resolveOpenRouterApiKey() ?? "",
+      OPENROUTER_API_KEY: openRouterKey ?? "",
       OPENROUTER_BASE_URL: resolveOpenRouterBaseUrl(),
     }),
     detached: true,

@@ -8,6 +8,7 @@ import {
   parseCombinedInput,
 } from "@/lib/cp-prep";
 import type { Example, PrepInput, PrepProgressEvent } from "@/lib/cp-prep/types";
+import { getActiveOpenRouterKey, getOpenRouterKeyChoice } from "@/lib/openrouter-key";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -86,7 +87,9 @@ export async function POST(req: NextRequest) {
   if (auth.error) return auth.error;
   const session = auth.session;
 
-  if (!process.env.OPENROUTER_API_KEY?.trim()) {
+  const openRouterKey = await getActiveOpenRouterKey();
+  const openRouterAccount = await getOpenRouterKeyChoice();
+  if (!openRouterKey) {
     return new Response(JSON.stringify({ error: "OPENROUTER_API_KEY is not configured" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
@@ -214,6 +217,7 @@ export async function POST(req: NextRequest) {
         const problemTitle = prepInput.title;
 
         const result = await prepProblem(prepInput, {
+          apiKey: openRouterKey,
           signal: req.signal,
           onProgress,
           onUsage: (usage) => {
@@ -227,6 +231,7 @@ export async function POST(req: NextRequest) {
               userId: session.userId,
               problemName: problemTitle,
               stepId: "cp_prep",
+              account: openRouterAccount,
             });
           },
         });
