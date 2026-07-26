@@ -116,7 +116,9 @@ function parseProgress(
 
   if (stepId === "select_testcases") {
     const steps = [
-      { key: "select", label: "Selecting Suite", patterns: [/generated \d+/i], done: [/selected \d+/i] },
+      { key: "load", label: "Loading Candidates", patterns: [/\[1\/4\] Loaded/i], done: [/\[2\/4\]/i] },
+      { key: "annotate", label: "Scoring Kills & TLE", patterns: [/\[2\/4\]/i], done: [/\[4\/4\] Selected/i] },
+      { key: "select", label: "Selecting Suite", patterns: [/\[4\/4\] Selected|generated \d+/i], done: [/Wrote \d+ case/i] },
     ];
     return extractSteps(steps, logs, isRunning);
   }

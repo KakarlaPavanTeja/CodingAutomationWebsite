@@ -641,12 +641,15 @@ def main():
     )
 
     # 4. Count + type
+    from Prompts.testcasesprompt_v4 import POOL_TARGET_MIN, POOL_TARGET_MAX, CASE_CAP
     num_testcases = args.count
     if num_testcases is not None:
         num_testcases = max(num_testcases, MIN_TESTCASES)
         print(f"Target test case count: {num_testcases} (minimum {MIN_TESTCASES})")
     else:
         print(f"No explicit count; target scales by difficulty x type (minimum {MIN_TESTCASES}).")
+    print(f"Over-generate mode: aiming for a ~{POOL_TARGET_MIN}-{POOL_TARGET_MAX} candidate "
+          f"POOL — the select_testcases step later dedups and trims to {CASE_CAP}.")
 
     problem_type = (args.type or detect_problem_type(description)).strip().lower()
     print(f"Problem type (for count scaling): {problem_type}")

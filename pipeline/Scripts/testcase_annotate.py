@@ -260,10 +260,20 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
     brute = brute or _read(os.path.join(outputs_dir, "generated_brute_force.py"))
     wrong = _discover_wrong_solutions(os.path.join(outputs_dir, "wrong_solutions"))
 
+    def log(msg):
+        print(msg, flush=True)
+
+    log("=== SELECT TEST CASES (dedup → annotate → select ≤" f"{cap or 150}) ===")
+
     cases, max_n = load_cases(tc_path, desc)
     if not cases:
         raise SystemExit("annotation: testcases.json has no cases")
     size_kind, space_mode = determine_size_model(cases, max_n)
+    log(f"[1/4] Loaded {len(cases)} candidate case(s)  ·  "
+        f"size_model={size_kind} (max_n={max_n})  ·  space={space_mode}")
+    log(f"      oracles: reference={'present' if reference else 'MISSING'}  ·  "
+        f"brute-force={'present' if brute else 'absent'}  ·  "
+        f"wrong-solutions={len(wrong)}")
 
     def batch_runner(code, inputs):
         return run_solutions_batch(code, inputs, BENCHMARK_RUN_TIMEOUT)
@@ -273,7 +283,19 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
         # stands in for it — a timeout at that bound is the verified TLE.
         return run_solution(code, stdin, DEFAULT_RUN_TIMEOUT)
 
+    if wrong:
+        log(f"[2/4] Scoring kills: running {len(wrong)} wrong solution(s) over "
+            f"{len(cases)} case(s)…")
+    else:
+        log("[2/4] Scoring kills: SKIPPED (no wrong_solutions/*.py found)")
     wrong_ids = annotate_kills(cases, wrong, batch_runner)
+
+    if brute and size_kind != "none":
+        log(f"[3/4] Verifying brute-force TLE on large-regime case(s) "
+            f"(limit {DEFAULT_RUN_TIMEOUT:g}s; a timeout = verified TLE)…")
+    else:
+        why = "no brute force" if not brute else "no size dimension"
+        log(f"[3/4] Brute-force TLE: N/A ({why})")
     tle_n = annotate_tle(cases, brute, one_runner, max_n, size_kind)
 
     kwargs = {"size_kind": size_kind, "space_mode": space_mode}
@@ -286,7 +308,25 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
     report["reference_present"] = bool(reference)
 
     write_selected(tc_path, selected)
-    print(format_funnel(report))
+
+    dropped = report["generated"] - report["unique"]
+    log(f"[4/4] Selected {report['selected']} of {report['unique']} unique "
+        f"({dropped} exact-input duplicate(s) removed):")
+    log("      " + format_funnel(report))
+    # Human-readable verdict lines so the log states plainly what was achieved.
+    log(f"      · edges kept          {report['edges']}")
+    log(f"      · verified brute TLE  {tle_n}"
+        + ("" if (brute and size_kind != "none") else "  (N/A)"))
+    log(f"      · slot coverage       {report['slots_filled']}/{report['slots_total']}")
+    log(f"      · wrong sols caught   {report['kills_covered']}/{report['kills_total']}"
+        + (f"  ⚠ uncatchable: {', '.join(report['uncatchable'])}" if report.get("uncatchable") else ""))
+    if report.get("exhaustive_complete"):
+        log(f"      ✓ exhaustive: shipped the complete input space "
+            f"({report['selected']} case(s))")
+    elif report.get("below_floor"):
+        log(f"      ⚠ BELOW FLOOR: only {report['selected']} case(s) — the generator "
+            f"pool was too small; consider raising the candidate count.")
+    log(f"Wrote {report['selected']} case(s) → {tc_path}")
     return report
 
 
