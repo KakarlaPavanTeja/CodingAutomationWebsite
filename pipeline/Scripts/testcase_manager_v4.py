@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import subprocess
 import argparse
@@ -163,8 +164,19 @@ def _script_timeout_sec() -> int:
     return 600
 
 
+def _ensure_harness(script_path: str) -> None:
+    """Copy the known-good IO harness next to the generated script so its
+    `from tc_harness import run_solution` import resolves (python puts the
+    script's own directory on sys.path)."""
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tc_harness.py")
+    dst = os.path.join(os.path.dirname(os.path.abspath(script_path)), "tc_harness.py")
+    if os.path.exists(src) and src != dst:
+        shutil.copyfile(src, dst)
+
+
 def _run_generator(script_path: str):
     timeout_sec = _script_timeout_sec()
+    _ensure_harness(script_path)
     try:
         return subprocess.run(
             [_python_executable(), script_path],
@@ -189,11 +201,12 @@ def _retry_fix_script(script_path: str, first_error: str) -> None:
         "'AssertionError: Duplicate input generated for scenario ...'), REMOVE that fatal check: "
         "skip duplicates and continue, accept fewer cases for a scenario, and still write "
         "testcases.json — only an optimal-vs-brute oracle mismatch may abort the script. "
-        "If the failure is \"'_io.StringIO' object has no attribute 'buffer'\" (or similar), the "
-        "solution reads bytes via sys.stdin.buffer: replace the StringIO stdin with a byte-backed "
-        "text stream that has a .buffer, i.e. "
-        "sys.stdin = io.TextIOWrapper(io.BytesIO(input_str.encode('utf-8')), encoding='utf-8') "
-        "(and do the same for sys.stdout if it writes via sys.stdout.buffer); restore both in a finally. "
+        "If the failure involves stdin/stdout capture in ANY form (readonly .buffer, StringIO "
+        "without .buffer, unrestored streams), DELETE the script's hand-rolled IO capture entirely "
+        "and use the provided harness instead: `from tc_harness import run_solution` — "
+        "`run_solution(input_str, SOLUTION_CODE_STRING)` execs the solution source with stdin fed "
+        "from input_str and returns its stdout as a str (tc_harness.py sits next to the script). "
+        "Never assign to sys.stdin/sys.stdout or their .buffer attributes yourself. "
         "OUTPUT HYGIENE (CRITICAL): your entire response is written verbatim to a .py file and executed. "
         "First character MUST be valid Python (import/#/from); no preamble, no sign-off, no markdown fences. "
         "IMPORT CORRECTNESS: only import names that exist; round/abs/min/max/sum/pow are built-ins, not in math."

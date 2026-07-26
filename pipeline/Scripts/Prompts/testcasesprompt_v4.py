@@ -527,27 +527,21 @@ If the statement says "exactly one solution" / "guaranteed unique":
 
 (SOLUTION EMBED + EXEC — avoid the classic NameError):
   * Embed OPTIMAL_CODE {"and BRUTE_CODE " if has_brute else ""}VERBATIM. Do not refactor.
-  * Use a SINGLE namespace per solution so its `import sys` and `main()` share scope:
-        opt_env = {{ "__name__": "optimal_ns" }}
-        exec(OPTIMAL_CODE, opt_env)
-    then call opt_env['main']() (or the named function) inside run_optimal.
-  * Do NOT use `exec(CODE, globals_dict, locals_dict)` with two dicts — that splits the
-    solution's imports from where you look up `main`, causing NameError for `sys`.
-  * `run_optimal` (and `run_brute`) feed `input` on sys.stdin and capture stdout;
-    `normalize` strips trailing whitespace per line before comparison.
-  * STDIN SHIM — CRITICAL (the #1 in-process crash): the solution may read BYTES via
-    `sys.stdin.buffer` (e.g. `data = sys.stdin.buffer.read()` — very common in fast-IO
-    DP/graph solutions). A plain `io.StringIO` has NO `.buffer` and raises
-    `AttributeError: '_io.StringIO' object has no attribute 'buffer'`. So build stdin as a
-    REAL text stream over a byte buffer, which supports BOTH `sys.stdin.read()` and
-    `sys.stdin.buffer`:
-        sys.stdin = io.TextIOWrapper(io.BytesIO(input_str.encode("utf-8")), encoding="utf-8")
-    Do the same for stdout so a solution that writes via `sys.stdout.buffer` still works:
-        buf = io.BytesIO(); sys.stdout = io.TextIOWrapper(buf, encoding="utf-8",
-                                                          write_through=True)
-        # ...run the solution...; sys.stdout.flush(); captured = buf.getvalue().decode("utf-8")
-    ALWAYS restore the real sys.stdin/sys.stdout in a finally block. NEVER feed stdin with a
-    bare StringIO.
+  * Do NOT exec the solutions yourself — the harness below runs the source string for
+    you (fresh single namespace per call, so imports and functions share scope).
+  * IO HARNESS — MANDATORY, do NOT write your own stdin/stdout capture. A file
+    `tc_harness.py` is placed NEXT TO your script before it runs. Use it for every
+    solution execution:
+        from tc_harness import run_solution
+        out = run_solution(input_str, OPTIMAL_CODE)   # -> captured stdout (str)
+    It execs the solution SOURCE STRING fresh in its own namespace with
+    __name__ == "__main__", feeding stdin from input_str, and supports input(),
+    sys.stdin.read(), sys.stdin.buffer, print(), sys.stdout.write() and
+    sys.stdout.buffer. So `run_optimal = lambda s: run_solution(s, OPTIMAL_CODE)`{"; run_brute likewise with BRUTE_CODE" if has_brute else ""}.
+    NEVER assign to sys.stdin, sys.stdout, or their `.buffer` attributes anywhere in the
+    script — hand-rolled shims are the #1 in-process crash (readonly `.buffer`, StringIO
+    without `.buffer`, unrestored streams) and are FORBIDDEN.
+  * `normalize` strips trailing whitespace per line before comparison.
 
 (OUTPUT HYGIENE — YOUR RESPONSE IS EXECUTED DIRECTLY AS .py — ABSOLUTELY CRITICAL):
 Your ENTIRE response is written verbatim to a .py file and run with python. No
@@ -565,7 +559,7 @@ post-processing strips extra text.
   * From `math` only real members (floor, ceil, sqrt, gcd, log, factorial, inf, pi), or
     `import math` and qualify. Prefer `import math/random/json` + qualified calls.
   * Typically you need only `import json`, `import random`, `import sys`, `import io`
-    (for `io.BytesIO`/`io.TextIOWrapper` — the stdin/stdout shim above), and maybe `import math`.
+    `from tc_harness import run_solution` (the IO harness above), and maybe `import math`.
 
 {overgenerate_block}
 {declared_metadata_block}
@@ -621,7 +615,7 @@ intentional: large cases are few in count but must gate roughly half the score.
 
 (Script structure):
 1. imports, constants, `random.seed(42)`
-2. OPTIMAL_CODE {"+ BRUTE_CODE " if has_brute else ""}as triple-quoted strings; exec each into its own single-namespace env
+2. OPTIMAL_CODE {"+ BRUTE_CODE " if has_brute else ""}as triple-quoted strings; run via `from tc_harness import run_solution`
 3. serialize_input / serialize_output helpers, run_optimal{"/run_brute" if has_brute else ""}, normalize
 4. comment: intended algorithm + naive pitfalls for THIS problem
 5. plan structures (SUBTASK_PLAN + SCENARIO_PLAN) — every case named before any input is built
