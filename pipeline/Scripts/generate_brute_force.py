@@ -113,6 +113,68 @@ def _write_crosscheck_marker(status: str, reason: str = "", mismatches: list | N
         print(f"(could not write cross-check marker: {e})")
 
 
+def _merge_slm_into_marker(slm_block: dict) -> None:
+    """Add the advisory SLM validation block to Outputs/optimal_brute_check.json,
+    preserving the existing cross-check keys."""
+    marker_path = os.path.join("Outputs", "optimal_brute_check.json")
+    payload = {"status": "ok", "reason": "", "mismatches": []}
+    if os.path.exists(marker_path):
+        try:
+            with open(marker_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, ValueError):
+            pass
+    payload["slm"] = slm_block
+    try:
+        os.makedirs("Outputs", exist_ok=True)
+        with open(marker_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        print(f"(could not merge SLM validation into marker: {e})")
+
+
+def _run_solution_validation(description: str, optimal_solution: str, brute_content: str) -> None:
+    """Advisory: one SLM call extracts small examples + judges quality; run the
+    examples against the optimal/brute; merge into the marker and print a report.
+    NEVER raises to the caller — validation must not fail the step."""
+    try:
+        from validate_solutions import validate_solutions_llm, validate_examples
+        print("\n=== SOLUTION VALIDATION (advisory) ===")
+        slm = validate_solutions_llm(description, optimal_solution, brute_content)
+        if not slm:
+            print("⚠ SLM validation skipped (no/invalid response) — existing checks stand.")
+            return
+        examples = [
+            e for e in (slm.get("examples") or [])
+            if isinstance(e, dict) and e.get("input")
+        ]
+        exec_res = validate_examples(examples, optimal_solution, brute_content, description)
+        optimal_v = slm.get("optimal") or {}
+        brute_v = slm.get("brute") or {}
+        _merge_slm_into_marker({
+            "examples_count": len(examples),
+            "optimal": optimal_v,
+            "brute": brute_v,
+            "example_results": exec_res["example_results"],
+        })
+        rows = exec_res["example_results"]
+        fmt_fail = [r for r in rows if not r["input_format_ok"]]
+        gt_fail = [r for r in rows if not r["matches_expected"]]
+        print(f"· examples run       {len(examples)}")
+        print("· input-format       " + ("✓ all parsed by optimal"
+              if not fmt_fail else f"⚠ {len(fmt_fail)} input(s) the optimal could not parse"))
+        print("· ground-truth       " + ("✓ optimal matches expected"
+              if not gt_fail else f"⚠ {len(gt_fail)} case(s) optimal disagrees with expected"))
+        if optimal_v.get("issues"):
+            print(f"· optimal quality    ⚠ {'; '.join(optimal_v['issues'])}")
+        if brute_v.get("issues"):
+            print(f"· brute quality      ⚠ {'; '.join(brute_v['issues'])}")
+        if not optimal_v.get("issues") and not brute_v.get("issues"):
+            print("· code quality       ✓ no issues flagged")
+    except Exception as e:
+        print(f"⚠ solution validation (advisory) skipped — {type(e).__name__}: {e}")
+
+
 def _crosscheck_optimal_vs_brute(description: str, optimal_solution: str, brute_content: str) -> None:
     """Run the just-generated brute against the optimal on the example inputs plus a
     structure-aware small-input sweep. Always writes a fresh verdict to
@@ -312,6 +374,10 @@ def main():
         #    reference/optimal solution is BUGGY — and every test case generated from
         #    it would carry the wrong expected output. Surface this loudly now.
         _crosscheck_optimal_vs_brute(description, optimal_solution, content)
+
+        # 6. Advisory SLM validation: small in-format examples + optimal/brute
+        #    quality. Never blocks — enriches optimal_brute_check.json + logs.
+        _run_solution_validation(description, optimal_solution, content)
 
     except SystemExit:
         raise

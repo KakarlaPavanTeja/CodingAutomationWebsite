@@ -113,5 +113,25 @@ class TestValidateExamples(unittest.TestCase):
         self.assertTrue(res["optimal_ok"] and res["brute_ok"])
 
 
+class TestMergeMarker(unittest.TestCase):
+    def test_merge_preserves_existing_keys_and_adds_slm(self):
+        import json, tempfile
+        import generate_brute_force as gbf
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as d:
+            os.chdir(d)
+            try:
+                os.makedirs("Outputs", exist_ok=True)
+                with open("Outputs/optimal_brute_check.json", "w", encoding="utf-8") as f:
+                    json.dump({"status": "ok", "reason": "r", "mismatches": []}, f)
+                gbf._merge_slm_into_marker({"examples_count": 2, "optimal": {"ok": True}})
+                with open("Outputs/optimal_brute_check.json", encoding="utf-8") as f:
+                    data = json.load(f)
+                self.assertEqual(data["status"], "ok")          # preserved
+                self.assertEqual(data["slm"]["examples_count"], 2)  # added
+            finally:
+                os.chdir(cwd)
+
+
 if __name__ == "__main__":
     unittest.main()
