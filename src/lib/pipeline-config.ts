@@ -229,8 +229,25 @@ export function getAllTrackedStepIds(questionType: QuestionType, mode: PipelineM
   return [...workflow, ...extra];
 }
 
+/**
+ * Historical pipeline_runs rows can reference steps that no longer exist
+ * (e.g. removed harden_testcases). Rather than crash every caller fed a
+ * DB-sourced id, unknown ids get a benign placeholder config.
+ */
 export function getStepConfig(stepId: StepId): PipelineStepConfig {
-  return STEP_CONFIGS.find((s) => s.id === stepId)!;
+  return (
+    STEP_CONFIGS.find((s) => s.id === stepId) ?? {
+      id: stepId,
+      label: stepId,
+      description: "Removed pipeline step (historical run)",
+      script: "",
+      subSteps: [],
+      hasLanguageSelector: false,
+      hasTestcaseCount: false,
+      needsMode: false,
+      llmUsage: "none",
+    }
+  );
 }
 
 export function getEnabledQuestionSubSteps(questionType: QuestionType, enabled: string[]): string[] {
