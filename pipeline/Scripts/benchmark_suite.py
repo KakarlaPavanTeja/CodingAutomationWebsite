@@ -1536,7 +1536,7 @@ def run_benchmark(
     return report
 
 
-def print_report(report: BenchmarkReport, min_kill: float) -> None:
+def print_report(report: BenchmarkReport, min_kill: float, report_only: bool = False) -> None:
     _log_banner("Final report")
 
     print(f"[B1] Mutation kill rate: {report.kill_rate:.1%} "
@@ -1589,12 +1589,28 @@ def print_report(report: BenchmarkReport, min_kill: float) -> None:
         for w in report.warnings[:8]:
             _log_detail(w)
 
+    # Report-only mode (redesign): the deterministic selector owns the final suite,
+    # and there is no longer a Strengthen/regeneration step to act on distribution
+    # gaps — so B1/B2/B4 are the real signals and coverage-shape items are advisory
+    # notes, never a pipeline failure.
+    if report_only:
+        real_pass = report.b1.get("kill_rate", 0.0) >= min_kill and not report.b2.get("hard_fail")
+        print(f"\nBenchmark report (informational — not a gate). "
+              f"Quality: {'STRONG' if real_pass else 'REVIEW'}", flush=True)
+        if report.hard_failures:
+            _log_warn(f"{len(report.hard_failures)} coverage-shape note(s) "
+                      f"(distribution is owned by Select Test Cases; not blocking):")
+            for hf in report.hard_failures:
+                _log_detail(str(hf))
+        return
+
     gate = "PASS" if report.passes_gate(min_kill) else "FAIL"
     print(f"\nGate (min_kill={min_kill:.0%}): {gate}", flush=True)
     if gate == "PASS":
         _log_ok("Benchmark gate passed — test suite is strong enough to continue")
     else:
-        _log_fail("Benchmark gate failed — review survivors/issues above or run Strengthen Test Cases")
+        _log_fail("Benchmark gate failed — review survivors/issues above; "
+                  "re-run Generate → Select Test Cases to rebuild the suite")
     if report.hard_failures:
         _log_fail(f"{len(report.hard_failures)} hard failure(s):")
         for hf in report.hard_failures:
@@ -1616,9 +1632,18 @@ def main():
     )
     os.chdir(root_dir)
 
+    # Quiet the compiler's per-poll chatter ("poll N/480 -> PROCESSING"); the
+    # benchmark's own phase lines (filter/test/killed-by) carry the progress.
+    if _use_compiler():
+        try:
+            import execution_manager_v3 as _emv3
+            _emv3.QUIET = True
+        except Exception:
+            pass
+
     report = run_benchmark(min_kill=args.min_kill, advisory_size=args.advisory_size,
                            timeout=args.timeout)
-    print_report(report, args.min_kill)
+    print_report(report, args.min_kill, report_only=args.no_gate)
 
     if args.no_gate:
         sys.exit(0)
