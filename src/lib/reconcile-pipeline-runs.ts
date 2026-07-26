@@ -187,13 +187,17 @@ function logShowsRecentActivity(content: string, maxAgeMs = 90_000): boolean {
   const isoMatches = [...trimmed.matchAll(/\[(\d{4}-\d{2}-\d{2}T[^\]]+)\]/g)];
   if (isoMatches.length > 0) {
     const lastTs = new Date(isoMatches[isoMatches.length - 1][1]).getTime();
-    if (!Number.isNaN(lastTs) && Date.now() - lastTs < maxAgeMs) {
-      return true;
+    if (!Number.isNaN(lastTs)) {
+      // Timestamps are authoritative. Do NOT fall through to the heartbeat
+      // regex on a stale timestamp: LLM steps always have heartbeat lines in
+      // the tail, so an unbounded fallback kept dead runs "running" forever
+      // (it even defeated the 50-min MAX_RUNNING_MS ceiling).
+      return Date.now() - lastTs < maxAgeMs;
     }
   }
 
-  // Fallback: streaming heartbeats without a parseable timestamp still mean the
-  // Python process is alive and talking to the LLM.
+  // Fallback (timestamp-less logs only): streaming heartbeats mean the Python
+  // process is alive and talking to the LLM.
   return /\[LLM\] streaming heartbeat elapsed=/.test(trimmed.slice(-4000));
 }
 
