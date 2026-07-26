@@ -32,8 +32,8 @@ export interface PipelineWaveItem {
 export const TESTCASE_CHAIN_STEPS: StepId[] = [
   "generate_testcases",
   "generate_wrong_solutions",
+  "select_testcases",
   "benchmark_testcases",
-  "harden_testcases",
 ];
 
 
@@ -42,13 +42,6 @@ function requiresLabelAfterStep(
   downstream: StepId[],
   index: number
 ): { label: string; subtitleSuffix?: string } {
-  const hardenIdx = downstream.indexOf("harden_testcases");
-  if (hardenIdx >= 0 && index > hardenIdx) {
-    return {
-      label: getStepConfig("benchmark_testcases").label,
-      subtitleSuffix: " — Strengthen may still be running in parallel (optional)",
-    };
-  }
   const prevId = index === 0 ? ("generate_question" as StepId) : downstream[index - 1];
   const label = prevId === "generate_question" ? "Generate Question" : getStepConfig(prevId).label;
   return { label };
@@ -221,7 +214,7 @@ export function buildMainPipelineSection(
       waves.push({
         id: "main-testcase-chain",
         title: `Step ${waves.length + 1}`,
-        subtitle: "Testcase pipeline — sequential after Generate Question (Strengthen is optional / non-blocking)",
+        subtitle: "Testcase pipeline — sequential after Generate Question",
         parallel: false,
         horizontal: true,
         items: chainIds.map((stepId, idx) => {
@@ -233,11 +226,8 @@ export function buildMainPipelineSection(
           return {
             kind: "step" as const,
             id: stepId,
-            label: stepId === "harden_testcases" ? `${config.label} (optional)` : config.label,
-            description:
-              stepId === "harden_testcases"
-                ? `${config.description ?? ""} Does not block Split Code or packaging; Execute waits while this step is running.`.trim()
-                : config.description,
+            label: config.label,
+            description: config.description,
             requiresLabel,
           };
         }),
@@ -252,10 +242,7 @@ export function buildMainPipelineSection(
 
     if (PARALLEL_LANG_STEPS.includes(id)) {
       const langs = getLangsForStep(id, enabledLanguages);
-      const executeNote =
-        id === "execute_tests_function" || id === "execute_tests_nonfunction"
-          ? " — waits for Strengthen if it is still running"
-          : "";
+      const executeNote = "";
       waves.push({
         id: `main-${id}`,
         title: `Step ${waves.length + 1}`,

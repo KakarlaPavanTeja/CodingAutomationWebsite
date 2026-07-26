@@ -388,8 +388,8 @@ export function PipelineSidePanel({
                 locked &&
                 entry.status === "pending" &&
                 (entry.key.kind === "step" || entry.key.kind === "lang");
-              // Non-blocking steps (e.g. Strengthen Test Cases) show a failure as
-              // a warning, since they don't block the pipeline.
+              // Non-blocking steps (if any) show a failure as a warning, since
+              // they don't block the pipeline.
               const nonBlockingFail =
                 entry.status === "failed" &&
                 entry.key.kind === "step" &&

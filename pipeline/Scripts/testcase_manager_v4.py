@@ -189,6 +189,11 @@ def _retry_fix_script(script_path: str, first_error: str) -> None:
         "'AssertionError: Duplicate input generated for scenario ...'), REMOVE that fatal check: "
         "skip duplicates and continue, accept fewer cases for a scenario, and still write "
         "testcases.json — only an optimal-vs-brute oracle mismatch may abort the script. "
+        "If the failure is \"'_io.StringIO' object has no attribute 'buffer'\" (or similar), the "
+        "solution reads bytes via sys.stdin.buffer: replace the StringIO stdin with a byte-backed "
+        "text stream that has a .buffer, i.e. "
+        "sys.stdin = io.TextIOWrapper(io.BytesIO(input_str.encode('utf-8')), encoding='utf-8') "
+        "(and do the same for sys.stdout if it writes via sys.stdout.buffer); restore both in a finally. "
         "OUTPUT HYGIENE (CRITICAL): your entire response is written verbatim to a .py file and executed. "
         "First character MUST be valid Python (import/#/from); no preamble, no sign-off, no markdown fences. "
         "IMPORT CORRECTNESS: only import names that exist; round/abs/min/max/sum/pow are built-ins, not in math."
@@ -641,12 +646,15 @@ def main():
     )
 
     # 4. Count + type
+    from Prompts.testcasesprompt_v4 import POOL_TARGET_MIN, POOL_TARGET_MAX, CASE_CAP
     num_testcases = args.count
     if num_testcases is not None:
         num_testcases = max(num_testcases, MIN_TESTCASES)
         print(f"Target test case count: {num_testcases} (minimum {MIN_TESTCASES})")
     else:
         print(f"No explicit count; target scales by difficulty x type (minimum {MIN_TESTCASES}).")
+    print(f"Over-generate mode: aiming for a ~{POOL_TARGET_MIN}-{POOL_TARGET_MAX} candidate "
+          f"POOL — the select_testcases step later dedups and trims to {CASE_CAP}.")
 
     problem_type = (args.type or detect_problem_type(description)).strip().lower()
     print(f"Problem type (for count scaling): {problem_type}")

@@ -85,8 +85,8 @@ function WaveStepButton({
     !disabled &&
     !!onRunItem &&
     (item.kind === "step" || item.kind === "lang");
-  // Non-blocking steps (e.g. Strengthen Test Cases) surface a failure as a
-  // warning rather than a hard error, since they don't block the pipeline.
+  // Non-blocking steps (if any) surface a failure as a warning rather than a
+  // hard error, since they don't block the pipeline.
   const nonBlocking =
     item.kind === "step" && getStepConfig(item.id as StepId).nonBlocking === true;
   const warn = status === "failed" && nonBlocking;
@@ -102,8 +102,8 @@ function WaveStepButton({
     sub = parts.join(" · ");
   } else if (status === "running") {
     sub =
-      nonBlocking && item.kind === "step" && item.id === "harden_testcases"
-        ? "Running… · non-blocking"
+      item.kind === "step" && item.id === "select_testcases"
+        ? "Selecting suite…"
         : costUsd != null && costUsd > 0
           ? `Running… · ${formatPipelineCost(costUsd)}`
           : "Running…";
@@ -112,7 +112,7 @@ function WaveStepButton({
   } else if (status === "stopped") {
     sub = "Stopped";
   } else if (status === "failed") {
-    const parts: string[] = [warn ? "Warning · not strengthened" : "Failed"];
+    const parts: string[] = [warn ? "Warning" : "Failed"];
     if (durationSec != null) parts.push(`${durationSec}s`);
     if (costUsd != null && costUsd > 0) parts.push(formatPipelineCost(costUsd));
     sub = parts.join(" · ");

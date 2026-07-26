@@ -29,6 +29,14 @@ MAX_SUBTASKS = 8
 MAX_CASES_PER_SUBTASK = 12
 MIN_TESTCASES = 25                          # raised from 20 — LeetCode Easy floor
 
+# Over-generation targets (redesign): the LLM emits a generator SCRIPT, so volume
+# is nearly free. A downstream deterministic selector dedups, verifies TLE, scores
+# wrong-solution kills, and trims to CASE_CAP — so the generator should aim HIGH and
+# leave the final count/size%/weights to the selector. These bound the candidate POOL.
+POOL_TARGET_MIN = 150
+POOL_TARGET_MAX = 250
+CASE_CAP = 150                              # mirrors testcase_selection.CASE_CAP
+
 # Size-category distribution targets (count %, enforced by B3 in benchmark_suite).
 # Philosophy (matches real judges like LeetCode): the suite is dominated by cheap
 # small/edge CORRECTNESS cases; large/stress cases are FEW but high-value. You don't
@@ -53,10 +61,11 @@ def size_tag(bucket: str) -> str:
 
 # Difficulty x problem-type target band. Used only as a hint to the model; the
 # manager passes difficulty + (optional) detected type. Strings/DP skew high.
+# Over-generate: the selector dedups + trims to CASE_CAP, so aim for a large POOL.
 COUNT_BAND_BY_DIFFICULTY = {
-    "easy":   (25, 45),
-    "medium": (50, 90),
-    "hard":   (90, 160),
+    "easy":   (60, 150),
+    "medium": (120, 220),
+    "hard":   (150, 280),
 }
 # Multipliers nudging the band by problem family (applied to the upper end).
 TYPE_COUNT_HINT = {
@@ -169,18 +178,20 @@ def _count_hint(difficulty, problem_type, num_testcases):
     band = COUNT_BAND_BY_DIFFICULTY.get(diff)
     type_note = TYPE_COUNT_HINT.get((problem_type or "generic").strip().lower(),
                                     TYPE_COUNT_HINT["generic"])
+    overflow = (f"OVER-GENERATE toward a pool of ~{POOL_TARGET_MIN}-{POOL_TARGET_MAX} DISTINCT "
+                f"cases — the downstream selector dedups and trims to {CASE_CAP}, so more is "
+                f"better and there is NO tight per-subtask cap.")
     if num_testcases is not None:
         floor = max(num_testcases, MIN_TESTCASES)
-        return (f"at least {floor} (hard minimum {MIN_TESTCASES}; "
-                f"max {MAX_CASES_PER_SUBTASK} per subtask). Type guidance: {type_note}.")
+        return (f"at least {floor} (hard minimum {MIN_TESTCASES}). {overflow} "
+                f"Type guidance: {type_note}.")
     if band:
         lo, hi = band
         lo = max(lo, MIN_TESTCASES)
-        return (f"target {lo}-{hi} for '{diff}' difficulty "
-                f"(hard minimum {MIN_TESTCASES}; max {MAX_CASES_PER_SUBTASK} per subtask). "
-                f"Type guidance: {type_note}.")
-    return (f"at least {MIN_TESTCASES} (no difficulty given; "
-            f"max {MAX_CASES_PER_SUBTASK} per subtask). Type guidance: {type_note}.")
+        return (f"target {lo}-{hi} for '{diff}' difficulty (hard minimum {MIN_TESTCASES}). "
+                f"{overflow} Type guidance: {type_note}.")
+    return (f"at least {MIN_TESTCASES} (no difficulty given). {overflow} "
+            f"Type guidance: {type_note}.")
 
 
 def get_testcases_prompt(
@@ -278,10 +289,12 @@ Every case carries subtask structure and per-case weights.
 - Each case carries `weightage` (> 0), exactly one `subtask_<n>` tag, and exactly one `size_<edge|small|medium|large>` tag.
 - Subtask weight split comes from DISTRIBUTION_BY_COUNT[preset][SUBTASK_COUNT].
 - Within a subtask, skew weight toward stress/adversarial scenarios (see multiplier fn).
-- Output case keys IN ORDER: `input`, `output`, `weightage`, `tags`, `order`.
+- Output case keys IN ORDER: `input`, `output`, `weightage`, `tags`, `order`, `size_metric`, `scenario`, `is_edge`.
 - Invariants: weights sum to TOTAL_WEIGHTAGE (±0.01); top subtask holds >= 35% of weight;
-  stress/large cases carry ~50% of weight (target 50%, assert >= 45%) — they are FEW in
-  COUNT but high-value, so passing them gates most of the score; all weights > 0.
+  stress/large cases carry ~50% of weight (target 50%) — they are FEW in COUNT but
+  high-value, so passing them gates most of the score; all weights > 0. ADJUST weights to
+  reach these shares; do NOT `assert` a share and crash if it is off — only the exact
+  weight-SUM (which you fully control) may be asserted.
 """
 
     # I/O representation depends on the problem kind. Function-based problems use
@@ -322,6 +335,48 @@ Every case carries subtask structure and per-case weights.
   * Space-separated values via `' '.join(map(str, values))`. Do NOT use Python's default
     `str([1,2,3])` (gives "[1, 2, 3]") unless the spec literally uses that bracket form.
   * Handle newlines and trailing spaces per spec. Both fields are STDIN/STDOUT strings."""
+
+    overgenerate_block = f"""
+(OVER-GENERATE — a downstream SELECTOR dedups, verifies TLE, scores kills, and trims to {CASE_CAP}):
+This suite is NO LONGER the final suite. A deterministic selector runs AFTER you: it removes
+exact-input duplicates, buckets by size, times the brute force for TLE, scores which cases catch
+wrong solutions, and keeps the strongest ~{CASE_CAP}. So:
+  * Aim HIGH: emit a LARGE pool of DISTINCT cases (target ~{POOL_TARGET_MIN}-{POOL_TARGET_MAX}). More
+    distinct, well-labeled cases is strictly better. Do NOT minimize the count or stop early.
+  * You are NOT responsible for the final count, the exact size %, or the final weights — the
+    selector owns those. You ARE responsible for: correct outputs, DISTINCT inputs, explicit edge
+    cases, real at-MAX_N stress cases, and accurate per-case labels (below).
+  * Keep emitting distinct cases per scenario/size until the scenario runs dry (respect `seen_inputs`
+    and the attempt caps); never pad with duplicates.
+"""
+
+    declared_metadata_block = """
+(DECLARED PER-CASE METADATA — REQUIRED on EVERY case, consumed by the selector):
+In ADDITION to input/output/weightage/tags/order, every case MUST also carry:
+  * `size_metric` (int): the REAL numeric size THIS case scales by — array length / string length /
+    rows*cols / nodes+edges / the value of n. This is what the selector buckets on, so it must be the
+    true size (NOT blindly the first token if that token is not the size). Use 0 ONLY when the problem
+    has no size dimension at all.
+  * `scenario` (str, snake_case): the named scenario, e.g. "answer_at_end", "all_equal", "max_stress",
+    "duplicates". Mirror the scenario tag; one token.
+  * `is_edge` (bool): true for degenerate / boundary / min literals (empty, n=min, all-same, overflow
+    boundary, singleton). The selector FORCE-KEEPS every is_edge case, so mark them accurately.
+"""
+
+    size_model_block = """
+(PROBLEM SIZE MODEL — REQUIRED at the ROOT dict, alongside `test_cases`):
+Declare how THIS problem scales so the selector buckets correctly:
+  * `size_model`: {"kind": "count"|"value"|"grid"|"multi"|"none", "max_n": <int>}
+      - count : size is a count/length (array n, string length, #nodes). max_n = that maximum.
+      - value : size is the magnitude of a single value (e.g. an integer up to 1e9). max_n = that max.
+      - grid  : size is rows*cols. max_n = max rows*cols.
+      - multi : several independent sizes (n and m and q...). max_n = the dominant one.
+      - none  : NO size dimension (fixed/tiny input). max_n = 0.
+  * `space_mode`: "sampled" | "exhaustive"
+      - exhaustive : ONLY when you enumerate the ENTIRE legal input space (a small finite domain). A
+        below-cap count is then COMPLETE, not a shortfall.
+      - sampled : the normal case — the space is huge, you sample it.
+"""
 
     system_prompt = f"""
 (Role): You are an Expert Content Developer for Competitive Programming and technical
@@ -380,8 +435,9 @@ HOW THE SIZE AUDIT ACTUALLY BUCKETS YOUR CASES (match it EXACTLY — it IGNORES 
   up, the audit records 0% large and REGENERATES you — no matter how you tagged the cases.
 Self-check (MUST mirror the audit, not your own tags): for each case, parse the first int
 token of its first input line as n, compute the DERIVED bucket with the rule above, and
-assert the derived bucket counts match targets ({size_targets_inline}) within +/-{tol:g}pp.
-If a bucket is short, ADD constraint-scaled cases for it before writing JSON.
+COUNT the derived buckets against targets ({size_targets_inline}). If a bucket is SHORT,
+ADD constraint-scaled cases for it before writing JSON. Do NOT assert or exit on the
+counts — over-supplying a bucket is fine; the downstream selector trims to a balanced suite.
 
 (PER-PROBLEM-TYPE REQUIRED SCENARIOS):
 Detect the problem family from the statement + solution and include its mandatory cases.
@@ -432,8 +488,14 @@ If the statement says "exactly one solution" / "guaranteed unique":
     loop has a hard attempt cap (e.g. `if attempts > 20000: break`) and unique fallbacks (add
     the attempt counter or a random filler so repeated fallbacks don't collide and re-trigger
     the loop).
-  * NEVER `raise`, `assert`, or `sys.exit` because a scenario produced a duplicate input or
-    could not reach its target case count. On a duplicate: SKIP it and continue (or perturb a
+  * NEVER `raise`, `assert`, or `sys.exit` because a scenario produced a duplicate input,
+    could not reach its target case count, OR because the realized size/scenario/weight
+    DISTRIBUTION missed a target percentage. The ONLY assertions permitted in the whole
+    script are CORRECTNESS asserts (optimal == brute on the same input). Distribution is a
+    goal you OVER-GENERATE toward, never a gate you crash on: if a bucket is short, ADD more
+    cases for it; if a bucket is over, that is FINE — the downstream selector trims the pool
+    to a balanced suite. A script that asserts `edge_pct ~= 0.20` and exits is a BUG.
+    On a duplicate: SKIP it and continue (or perturb a
     filler within constraints and retry up to the cap, then move on). A scenario that yields
     fewer cases than planned is ACCEPTABLE — emit ONLY the distinct cases you actually have
     and move on; NEVER pad the count with duplicate or near-identical inputs. If a small
@@ -454,8 +516,21 @@ If the statement says "exactly one solution" / "guaranteed unique":
     then call opt_env['main']() (or the named function) inside run_optimal.
   * Do NOT use `exec(CODE, globals_dict, locals_dict)` with two dicts — that splits the
     solution's imports from where you look up `main`, causing NameError for `sys`.
-  * `run_optimal` (and `run_brute`) feed `input` via StringIO on sys.stdin and capture
-    stdout; `normalize` strips trailing whitespace per line before comparison.
+  * `run_optimal` (and `run_brute`) feed `input` on sys.stdin and capture stdout;
+    `normalize` strips trailing whitespace per line before comparison.
+  * STDIN SHIM — CRITICAL (the #1 in-process crash): the solution may read BYTES via
+    `sys.stdin.buffer` (e.g. `data = sys.stdin.buffer.read()` — very common in fast-IO
+    DP/graph solutions). A plain `io.StringIO` has NO `.buffer` and raises
+    `AttributeError: '_io.StringIO' object has no attribute 'buffer'`. So build stdin as a
+    REAL text stream over a byte buffer, which supports BOTH `sys.stdin.read()` and
+    `sys.stdin.buffer`:
+        sys.stdin = io.TextIOWrapper(io.BytesIO(input_str.encode("utf-8")), encoding="utf-8")
+    Do the same for stdout so a solution that writes via `sys.stdout.buffer` still works:
+        buf = io.BytesIO(); sys.stdout = io.TextIOWrapper(buf, encoding="utf-8",
+                                                          write_through=True)
+        # ...run the solution...; sys.stdout.flush(); captured = buf.getvalue().decode("utf-8")
+    ALWAYS restore the real sys.stdin/sys.stdout in a finally block. NEVER feed stdin with a
+    bare StringIO.
 
 (OUTPUT HYGIENE — YOUR RESPONSE IS EXECUTED DIRECTLY AS .py — ABSOLUTELY CRITICAL):
 Your ENTIRE response is written verbatim to a .py file and run with python. No
@@ -472,13 +547,17 @@ post-processing strips extra text.
     BUILT-INS — never `from math import round`; use directly.
   * From `math` only real members (floor, ceil, sqrt, gcd, log, factorial, inf, pi), or
     `import math` and qualify. Prefer `import math/random/json` + qualified calls.
-  * Typically you need only `import json`, `import random`, `import sys`, `from io import StringIO`,
-    and maybe `import math`.
+  * Typically you need only `import json`, `import random`, `import sys`, `import io`
+    (for `io.BytesIO`/`io.TextIOWrapper` — the stdin/stdout shim above), and maybe `import math`.
 
+{overgenerate_block}
+{declared_metadata_block}
+{size_model_block}
 (OUTPUT JSON SHAPE):
-Root: a LIST containing EXACTLY ONE dict whose only key is `"test_cases"`.
-  CORRECT:   [ {{"test_cases": [...]}} ]
-  INCORRECT: {{"test_cases": [...]}}   (dict at root is invalid)
+Root: a LIST containing EXACTLY ONE dict with keys `"test_cases"`, `"size_model"`, `"space_mode"`.
+  CORRECT:   [ {{"test_cases": [...], "size_model": {{"kind": "count", "max_n": 100000}}, "space_mode": "sampled"}} ]
+  INCORRECT: {{"test_cases": [...]}}   (dict at root is invalid; missing size_model/space_mode)
+Each case dict carries: `input`, `output`, `weightage`, `tags`, `order`, `size_metric`, `scenario`, `is_edge`.
 Write with `json.dump(result, f, indent=4, ensure_ascii=False)`.
 `order` is global 1..N, sequential (+1 each), smallest/example first, max stress last.
 
@@ -515,11 +594,13 @@ intentional: large cases are few in count but must gate roughly half the score.
 (SELF-CHECK BEFORE WRITE):
   * Every case validated by the optimal{" and cross-checked by brute (where size permits)" if has_brute else ""}.
   * `seen_inputs` dedup; all inputs constraint-legal.
-  * Bimodal size check: assert there exist cases with small n AND cases at/near max n.
-  * Size distribution: assert each size_* bucket within +/-{tol:g}pp of targets ({size_targets_inline}).
+  * Bimodal size check: ENSURE there exist cases with small n AND cases at/near max n (ADD one if missing — do not assert).
+  * Size distribution: aim each size_* bucket toward targets ({size_targets_inline}); ADD cases for SHORT buckets. Never assert/exit on the distribution.
   * Scenario diversity: distinct scenario tags >= max(2, non_example_count // 3).
+  * Declared metadata present: EVERY case has int `size_metric`, str `scenario`, bool `is_edge`;
+    the root dict has `size_model` (kind+max_n) and `space_mode`.
   * `order` == 1..N sequential.
-  * Weight asserts: weight-sum, top-tier-share, stress-share (see scoring block).
+  * Weight self-check: assert ONLY the exact weight-SUM; reach top-tier-share/stress-share by adjusting weights, not by asserting them (see scoring block).
 
 (Script structure):
 1. imports, constants, `random.seed(42)`
@@ -529,8 +610,9 @@ intentional: large cases are few in count but must gate roughly half the score.
 5. plan structures (SUBTASK_PLAN + SCENARIO_PLAN) — every case named before any input is built
 6. weight computation
 7. iterate SCENARIO_PLAN: deterministic construct per scenario → run optimal{" + brute cross-check" if has_brute else ""} → append case
-8. self-checks + diversity + bimodal asserts
-9. json.dump([{{"test_cases": test_cases}}], open("testcases.json","w"), indent=4, ensure_ascii=False)
+8. self-checks (CORRECTNESS asserts only) + size/diversity TOP-UP (add short buckets; never assert/exit on distribution or weight shares)
+9. json.dump([{{"test_cases": test_cases, "size_model": {{"kind": SIZE_KIND, "max_n": MAX_N}}, "space_mode": SPACE_MODE}}], open("testcases.json","w"), indent=4, ensure_ascii=False)
+   (every case dict must include size_metric/scenario/is_edge; SIZE_KIND/SPACE_MODE are the declared problem size model)
 
 Return ONLY the Python script. No markdown fences, no prose outside comments.
 """
@@ -619,8 +701,8 @@ HOW TO FIX (do ALL of these):
    generate inputs with n near MAX_N (fill with constraint-legal values; keep the
    brute-force cross-check guarded by its own size cap so large cases are validated by the
    optimal alone).
-4. Re-tag each case with the correct size_<bucket> from its ACTUAL n, and keep the
-   self-check assert that realized bucket counts are within tolerance of the targets.
+4. Re-tag each case with the correct size_<bucket> from its ACTUAL n. COUNT the buckets and
+   ADD cases for short ones; never assert/exit on the distribution — over-supply is fine.
 
 Do not reduce the total below the current count. Return ONLY the corrected Python script.
 

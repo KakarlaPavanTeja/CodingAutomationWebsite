@@ -69,6 +69,18 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     llmUsage: "llm",
   },
   {
+    id: "select_testcases",
+    label: "Select Test Cases",
+    description:
+      "Dedups exact-input duplicates, verifies brute-force TLE, scores wrong-solution kills, and selects the strongest suite (up to 150 cases).",
+    script: "Scripts/testcase_annotate.py",
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+    llmUsage: "none",
+  },
+  {
     id: "benchmark_testcases",
     label: "Benchmark Test Cases",
     description:
@@ -79,21 +91,6 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     hasTestcaseCount: false,
     needsMode: false,
     llmUsage: "none",
-  },
-  {
-    id: "harden_testcases",
-    label: "Strengthen Test Cases",
-    description:
-      "Strengthens a weak suite: finds bugs your current tests miss and automatically adds new test cases that catch them, until the kill-rate target is reached.",
-    script: "Scripts/harden_suite.py",
-    subSteps: [],
-    hasLanguageSelector: false,
-    hasTestcaseCount: false,
-    needsMode: false,
-    llmUsage: "conditional",
-    // Best-effort enhancement: never blocks downstream steps, and a failure is
-    // shown as a warning so the pipeline can continue.
-    nonBlocking: true,
   },
   {
     id: "split_code",
@@ -201,8 +198,8 @@ export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode)
     "generate_question",
     "generate_testcases",
     "generate_wrong_solutions",
+    "select_testcases",
     "benchmark_testcases",
-    "harden_testcases",
   ];
 
   if (questionType === "nonfunction") {
@@ -337,11 +334,11 @@ export function buildCommand(
     args.push("--no-gate");
   }
 
-  if (stepId === "harden_testcases") {
-    const minKill = process.env.SUITE_MIN_KILL;
-    const maxRounds = process.env.SUITE_MAX_ROUNDS;
-    if (minKill) args.push("--min-kill", minKill);
-    if (maxRounds) args.push("--max-rounds", maxRounds);
+  if (stepId === "select_testcases") {
+    const cap = process.env.TESTCASE_CASE_CAP;
+    const floor = process.env.TESTCASE_CASE_FLOOR;
+    if (cap) args.push("--cap", cap);
+    if (floor) args.push("--floor", floor);
   }
 
   let script = config.script;

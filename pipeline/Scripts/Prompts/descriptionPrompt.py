@@ -3,6 +3,28 @@ _CONSTRAINTS_NO_META = """
 """
 
 
+# Applied to EVERY scenario-wrapped description (light/moderate/heavy). A themed
+# story must never make the task harder to understand than the plain version —
+# the failure mode is a riddle where the actual operation is buried in metaphor.
+_SCENARIO_CLARITY_MANDATE = """
+**CLARITY OVER DISGUISE (NON-NEGOTIABLE — HIGHEST PRIORITY, OVERRIDES THE IMMERSION GOAL):**
+The scenario adds flavor; it must NEVER make the problem harder to understand than the plain, un-themed version. A solver who has never seen the original algorithm must be able to work out EXACTLY what to compute from your text alone — with no reverse-engineering of the story. Enforce ALL of the following:
+- **Define every object concretely, in literal terms, the first time it appears.** Say what each story object actually IS, e.g. "a ribbon is a lowercase string; its even strand is the characters at indices `0, 2, 4, ...`". Do not leave the mapping to be guessed from the metaphor.
+- **Define every operation mechanically and unambiguously.** Any transformation the solver must implement (rotation, reindexing, pairing, sorting, merging, …) must be spelled out precisely, including edge cases — e.g. what "rotate right by `k`" does, that it is cyclic, and that `k = 0` is allowed. Never rely on the reader to infer an operation from the narrative.
+- **Illustrate any non-obvious operation inline with a tiny concrete instance**, right after you define it and separate from the Examples section, e.g. "rotating `ac` right by 1 gives `ca`".
+- **State the exact question in one crisp, literal sentence** using the concrete terms — not only the poetic framing.
+- **No riddles.** If a sentence must be decoded before it can be acted on, rewrite it literally. Flavor decorates the specification; it never encodes it.
+"""
+
+
+# Applied to the Input Format of EVERY builder (none → heavy). The failure mode
+# is hedged layout prose like "may appear on separate lines or on the same line,
+# because the input is read token by token" — which never tells the solver the
+# actual layout.
+_INPUT_LAYOUT_RULE = """
+- **STATE ONE EXACT LAYOUT — NO HEDGING (APPLIES AT EVERY SCENARIO LEVEL).** Commit to a SINGLE concrete input layout and describe it precisely. NEVER write vague either-or phrasing such as "may appear on separate lines or on the same line", "in any whitespace-separated form", or "because the input is read token by token". Even when the `USER CODE` reads token-by-token (`cin >>`, `scanf`, `input().split()`) and would technically accept any whitespace, pick the ONE layout shown in your Examples and describe THAT. Be explicit about what sits on each line and the separator between items — e.g. "The first line contains the integer `n`." then "The second line contains the `n` strings separated by single spaces.", OR "Each of the next `n` lines contains one string." when that is what the Examples show. The layout you describe MUST match the Input blocks of your Examples exactly (same lines, same separators)."""
+
+
 def get_structure_only_prompt(problem_name, question_type, user_code):
     """
     Prompt for scenario_level == "none".
@@ -122,7 +144,7 @@ Your response MUST END immediately after the **Output Format** section.
 - Title: **Input Format** followed by a blank line.
 - Describe the input structure consistent with the ORIGINAL examples and the `USER CODE` logic.
 - **BULLET POINTS**: Use bullet points to describe inputs line-by-line or item-by-item.
-- Keep the original variable names.
+- Keep the original variable names.{_INPUT_LAYOUT_RULE}
 
 **Output Format**
 - Title: **Output Format** followed by a blank line.
@@ -517,6 +539,7 @@ You MUST use the `USER CODE` provided below as the absolute SOURCE OF TRUTH for 
 Generate a comprehensive **Coding Question Description** that is REPHRASED and uses NEW variable/function names.
 
 {rephrasing_mode}
+{_SCENARIO_CLARITY_MANDATE}
 
 **NAMING REQUIREMENTS (ALWAYS APPLY):**
 
@@ -648,7 +671,7 @@ Your response MUST END immediately after the **Output Format** section.
 - Examples of good phrasing:
   - "- The first string represents `text`, the string to be matched."
   - "- The second string represents `regex`, the pattern to match against."
-- Your description MUST be consistent with the Examples you generated earlier.
+- Your description MUST be consistent with the Examples you generated earlier.{_INPUT_LAYOUT_RULE}
 
 **Output Format**
 - Title: **Output Format** followed by a blank line.
@@ -725,7 +748,7 @@ The rendered page does NOT support LaTeX/MathJax. Convert all math notation to c
 - Start immediately with the rebuilt description text (no title line). Break into short lines per rule/objective.
 
 **Input Format**
-- Title: **Input Format** then a blank line. Bullet points describing stdin line-by-line, consistent with the ORIGINAL examples and the `USER CODE`. Keep original variable names.
+- Title: **Input Format** then a blank line. Bullet points describing stdin line-by-line, consistent with the ORIGINAL examples and the `USER CODE`. Keep original variable names.{_INPUT_LAYOUT_RULE}
 
 **Output Format**
 - Title: **Output Format** then a blank line. Bullet points describing stdout, consistent with the ORIGINAL examples and `USER CODE`.
@@ -787,6 +810,7 @@ Use the `USER CODE` below as the absolute source of truth for **Input Format** a
 ```
 
 {rephrasing}
+{_SCENARIO_CLARITY_MANDATE}
 
 **CRITICAL: DO NOT COPY EXAMPLES** from the input problem. Invent exactly 2 new valid examples.
 
@@ -811,7 +835,7 @@ Use the `USER CODE` below as the absolute source of truth for **Input Format** a
 - Code fences in examples: bare ``` with no language tag
 
 **Input Format / Output Format:**
-- Describe stdin/stdout line-by-line based on USER CODE
+- Describe stdin/stdout line-by-line based on USER CODE{_INPUT_LAYOUT_RULE}
 - State explicitly whether output is printed or returned (usually printed for full programs)
 - **DETERMINISTIC ANSWER (CRITICAL):** if the task could admit MORE THAN ONE valid output
   (e.g. indices of a pair summing to k when several pairs qualify, "any valid arrangement",

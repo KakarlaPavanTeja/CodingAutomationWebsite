@@ -60,6 +60,15 @@ _GEMINI_FLASH = "google/gemini-3.5-flash"
 _GPT_55 = "openai/gpt-5.5"
 _GPT_54 = "openai/gpt-5.4"
 _OPUS_48 = "anthropic/claude-opus-4.8"
+_KIMI_K2_THINKING = "moonshotai/kimi-k2-thinking"
+
+# Per-model output-token override. Overrides the shared purpose default so a
+# model can use its own provider ceiling. k2-thinking's provider (Novita) hard-
+# caps max_tokens at 98,304 — sending more is a 400 (not a capacity fallback),
+# so pin at the ceiling rather than above it.
+_MODEL_MAX_TOKENS: dict[str, int] = {
+    _KIMI_K2_THINKING: 98304,
+}
 
 
 # =============================================================================
@@ -127,24 +136,25 @@ _PURPOSE_CONFIG: dict[str, dict] = {
 }
 
 # Testcase tier defaults when OPENROUTER_MODEL_TESTCASES is not pinned.
+# Trial: kimi-k2-thinking primary → gpt-5.4 first fallback → existing ladder.
 _TESTCASES_TIER_DEFAULTS: dict[str, dict[str, str]] = {
     "easy": {
-        "model": _GPT_54,
+        "model": _KIMI_K2_THINKING,
         "effort": "medium",
-        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
-        "fallback_efforts": "medium,medium,medium",
+        "fallbacks": f"{_GPT_54},{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
+        "fallback_efforts": "medium,medium,medium,medium",
     },
     "medium": {
-        "model": _GPT_54,
+        "model": _KIMI_K2_THINKING,
         "effort": "medium",
-        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
-        "fallback_efforts": "medium,medium,medium",
+        "fallbacks": f"{_GPT_54},{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
+        "fallback_efforts": "medium,medium,medium,medium",
     },
     "hard": {
-        "model": _GPT_54,
+        "model": _KIMI_K2_THINKING,
         "effort": "high",
-        "fallbacks": f"{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
-        "fallback_efforts": "high,high,high",
+        "fallbacks": f"{_GPT_54},{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
+        "fallback_efforts": "high,high,high,high",
     },
 }
 
@@ -831,6 +841,11 @@ def _is_capacity_error(exc: Exception) -> bool:
         "overloaded", "high demand", "no instances", "temporarily unavailable",
         "capacity", "service unavailable", "internal server error",
         " 502", " 503", " 529",
+        # OpenAI's generic mid-stream 500 body, which arrives as a bare APIError
+        # (no status_code) so the isinstance/status checks above miss it. It is
+        # retryable per OpenAI, so rotate to the next model instead of crashing.
+        "an error occurred while processing your request",
+        "help.openai.com",
     )
     return any(s in low for s in signals)
 
@@ -1055,6 +1070,10 @@ def call_llm(
         if max_tokens is _USE_ENV
         else max(1, int(max_tokens))
     )
+    # Give a model its own output ceiling when it differs from the shared default.
+    model_max = _MODEL_MAX_TOKENS.get(model)
+    if model_max is not None:
+        max_tokens = model_max
 
     messages = _build_messages(system_prompt, user_prompt)
     sys_tokens, user_tokens, prompt_tokens_est = _estimate_prompt_tokens(messages)

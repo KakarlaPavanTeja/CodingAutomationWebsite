@@ -24,15 +24,25 @@ timing, kill scoring, and selection.
 A generated suite must satisfy:
 
 1. **Count is high** — fill up to a **hard cap of 150** cases (floor = platform minimum,
-   currently 25). More is better; do not minimize.
+   currently 25). More is better; do not minimize. **Feasibility is guaranteed by
+   `space_mode`:** for a huge input space we sample + fill to 150; for a small input space
+   we enumerate it **exhaustively** — a below-cap count is then *complete*, the strongest
+   possible suite, not a shortfall.
 2. **No exact-input duplicates** — two cases may share a *scenario type* but never the
    *identical normalized input*.
 3. **All edge cases present** — as explicit literals (empty, n=min, all-same, negatives,
    overflow boundary, …), not left to randomness.
-4. **Brute force provably TLEs** — the suite contains constraint-scaled large cases where
-   a naive/brute solution exceeds the time limit (the suite *enforces* intended complexity).
-5. Every `subtask × size-bucket` covered · every wrong solution killed · every stored
-   output reproduced by the reference solution.
+4. **Brute force provably TLEs — when a large regime exists.** For problems with a real
+   size dimension whose `MAX_N` is large enough, the suite contains constraint-scaled cases
+   where a naive/brute solution exceeds the time limit. For problems with no size dimension
+   or small constraints, this is **N/A** (reported, never flagged).
+5. Every coverage slot covered · every wrong solution killed · every stored output
+   reproduced by the reference solution.
+
+**Not every problem has a scalar `n`.** The generator declares a per-problem
+**`size_model.kind`** = `count | value | grid | multi | none` (with `max_n` when not
+`none`) and a **`space_mode`** = `sampled | exhaustive`. Bucketing, the TLE requirement, and
+the floor semantics are all conditional on these — see §1, §4, §5.
 
 ## Flow
 
@@ -67,9 +77,16 @@ enforced by *structure*, not by trusting the model to hit a distribution:
   random sizes) so brute force is actually stressed.
 
 Every emitted case carries metadata: `size_metric` (numeric — n / string length /
-rows×cols / nodes+edges), `scenario`, `subtask`, `is_edge`. The script also declares the
-problem-level `MAX_N`. Target output volume ≈ **250** candidates (env `TESTCASE_POOL_SIZE`,
-headroom ≈ cap × 1.6 so dedup + grounding still leave ~150 good uniques).
+rows×cols / nodes+edges; omitted when `size_model.kind == none`), `scenario`, `subtask`,
+`is_edge`. The script declares the problem-level `size_model` (`kind`, `max_n`) and
+`space_mode`.
+
+- **`space_mode == sampled`** (huge input space): target output ≈ **250** candidates
+  (env `TESTCASE_POOL_SIZE`, headroom ≈ cap × 1.6 so dedup + grounding still leave ~150).
+- **`space_mode == exhaustive`** (input space enumerable within the cap): the script emits
+  an `EXHAUSTIVE` generator covering **every** input; volume = the space size. Because the
+  scenario generators are seeded, a `sampled` shortfall after attrition is topped up by
+  **re-running the script with a new seed** (free, no LLM), up to 2× before flagging.
 
 ### 2. Exact-input dedup (early, free)
 
@@ -89,6 +106,10 @@ thresholds. Reads the **declared** `size_metric`; never parses raw input. This r
 current first-integer-of-first-line parser and fixes string/grid/graph problems that today
 bucket as 0% `large`.
 
+**When `size_model.kind == none`** (no size dimension — fixed/tiny input), size bucketing is
+skipped: every case goes in a single **`flat`** bucket and coverage slots collapse to
+`subtask × scenario`. Implemented in `select_suite(..., size_kind="none")`.
+
 ### 5. Brute-force TLE verification (new — outcome criterion #4)
 
 For the large-bucket cases, **run `BRUTE_FORCE.py` under a timeout** equal to the problem's
@@ -96,9 +117,11 @@ time limit. **Timing out is the pass** — the suite must contain ≥ a few veri
 - Outputs for large cases come from the **reference** solution only (brute is expected to
   time out there). Dual-oracle cross-checking applies only where brute finishes
   (small/medium).
-- If brute *finishes fast* on every large case, or no `BRUTE_FORCE.py` exists and a
-  slow-threshold is never exceeded → the constraints aren't stressed → **loud report flag**
-  (fix is the generation prompt / `TLE_BUILDERS`, not a loop).
+- **Conditional on `size_model`.** TLE is only *required* when a real large regime exists
+  (`kind != none` and `max_n` big enough that a naive approach would exceed the limit).
+  Three outcomes: large regime + brute times out → ✅; large regime + brute finishes fast →
+  ❌ **flag** (TLE_BUILDERS didn't scale); no large regime (`kind == none` or small
+  constraints) → **N/A**, reported, never flagged.
 
 ### 6. Wrong-solution kills (running code, no LLM)
 
@@ -127,8 +150,11 @@ remain, add the best remaining case ranked by:
 3. **Size spread** — `size_metric` farthest from those already selected in the slot.
 4. Deterministic id order (reproducible).
 
-Stop at 150 or when uniques run out. If below the floor (25), **re-run the generator script
-with a new seed** (free, no LLM) up to 2× before flagging.
+Stop at 150 or when uniques run out. If `space_mode == sampled` and below the floor (25),
+**re-run the generator script with a new seed** (free, no LLM) up to 2× before flagging. If
+`space_mode == exhaustive`, a below-cap/below-floor count is **complete, not a shortfall**
+(`report.exhaustive_complete = True`, `below_floor` stays False). Implemented in
+`select_suite(..., space_mode=...)`.
 
 ### 8. Weightage
 

@@ -125,6 +125,9 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
   );
   const titleMissing =
     packagingStepsPending &&
+    // Opting into AI title generation resolves the title on the next Generate
+    // Question run, so don't nag to set one manually while that's enabled.
+    !generateTitleWithAi &&
     !hasTitleForPackaging({ ownerTitle, generateTitleWithAi, titlesSubStepStatus });
   const configOpen = configToggle ?? (!stateLoading && titleMissing);
 

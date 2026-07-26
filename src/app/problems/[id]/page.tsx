@@ -100,7 +100,7 @@ const STEP_LABELS: Record<string, string> = {
   generate_testcases: "Generate Test Cases",
   generate_wrong_solutions: "Generate Wrong Solutions",
   benchmark_testcases: "Benchmark Test Cases",
-  harden_testcases: "Strengthen Test Cases",
+  select_testcases: "Select Test Cases",
   split_code: "Split Code",
   execute_tests_function: "Execute Tests (Function)",
   execute_tests_nonfunction: "Execute Tests (Non-function)",
