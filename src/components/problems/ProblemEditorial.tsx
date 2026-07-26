@@ -826,13 +826,15 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
   const handleStopExecute = () => stopStep("execute_editorial");
 
   const pipelineBusy = stateLoading || isAnyRunning;
+  // Generate Editorial only conflicts with its own runs — it reads the
+  // description/solutions outputs and runs in an isolated workspace, so other
+  // steps (e.g. generate_testcases) running concurrently must not disable it.
+  const generateBlocked = stateLoading || !canGenerate;
   const generateDisabledReason = genRunning
     ? undefined
-    : pipelineBusy
-      ? "Another pipeline step is running — wait for it to finish or stop it on the Pipeline tab."
-      : !prereqsReady
-        ? "Required outputs are missing — see the checklist below."
-        : undefined;
+    : !prereqsReady
+      ? "Required outputs are missing — see the checklist below."
+      : undefined;
 
   if (loading) {
     return (
@@ -871,7 +873,7 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
               <Button
                 size="sm"
                 className="h-8"
-                disabled={!canGenerate || pipelineBusy}
+                disabled={generateBlocked}
                 title={generateDisabledReason}
                 onClick={handleGenerateEditorial}
               >
@@ -973,7 +975,7 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
               size="sm"
               variant="outline"
               className="h-8"
-              disabled={!canGenerate || pipelineBusy}
+              disabled={generateBlocked}
               title={generateDisabledReason}
               onClick={handleGenerateEditorial}
             >
