@@ -291,8 +291,10 @@ Every case carries subtask structure and per-case weights.
 - Within a subtask, skew weight toward stress/adversarial scenarios (see multiplier fn).
 - Output case keys IN ORDER: `input`, `output`, `weightage`, `tags`, `order`, `size_metric`, `scenario`, `is_edge`.
 - Invariants: weights sum to TOTAL_WEIGHTAGE (±0.01); top subtask holds >= 35% of weight;
-  stress/large cases carry ~50% of weight (target 50%, assert >= 45%) — they are FEW in
-  COUNT but high-value, so passing them gates most of the score; all weights > 0.
+  stress/large cases carry ~50% of weight (target 50%) — they are FEW in COUNT but
+  high-value, so passing them gates most of the score; all weights > 0. ADJUST weights to
+  reach these shares; do NOT `assert` a share and crash if it is off — only the exact
+  weight-SUM (which you fully control) may be asserted.
 """
 
     # I/O representation depends on the problem kind. Function-based problems use
@@ -433,8 +435,9 @@ HOW THE SIZE AUDIT ACTUALLY BUCKETS YOUR CASES (match it EXACTLY — it IGNORES 
   up, the audit records 0% large and REGENERATES you — no matter how you tagged the cases.
 Self-check (MUST mirror the audit, not your own tags): for each case, parse the first int
 token of its first input line as n, compute the DERIVED bucket with the rule above, and
-assert the derived bucket counts match targets ({size_targets_inline}) within +/-{tol:g}pp.
-If a bucket is short, ADD constraint-scaled cases for it before writing JSON.
+COUNT the derived buckets against targets ({size_targets_inline}). If a bucket is SHORT,
+ADD constraint-scaled cases for it before writing JSON. Do NOT assert or exit on the
+counts — over-supplying a bucket is fine; the downstream selector trims to a balanced suite.
 
 (PER-PROBLEM-TYPE REQUIRED SCENARIOS):
 Detect the problem family from the statement + solution and include its mandatory cases.
@@ -485,8 +488,14 @@ If the statement says "exactly one solution" / "guaranteed unique":
     loop has a hard attempt cap (e.g. `if attempts > 20000: break`) and unique fallbacks (add
     the attempt counter or a random filler so repeated fallbacks don't collide and re-trigger
     the loop).
-  * NEVER `raise`, `assert`, or `sys.exit` because a scenario produced a duplicate input or
-    could not reach its target case count. On a duplicate: SKIP it and continue (or perturb a
+  * NEVER `raise`, `assert`, or `sys.exit` because a scenario produced a duplicate input,
+    could not reach its target case count, OR because the realized size/scenario/weight
+    DISTRIBUTION missed a target percentage. The ONLY assertions permitted in the whole
+    script are CORRECTNESS asserts (optimal == brute on the same input). Distribution is a
+    goal you OVER-GENERATE toward, never a gate you crash on: if a bucket is short, ADD more
+    cases for it; if a bucket is over, that is FINE — the downstream selector trims the pool
+    to a balanced suite. A script that asserts `edge_pct ~= 0.20` and exits is a BUG.
+    On a duplicate: SKIP it and continue (or perturb a
     filler within constraints and retry up to the cap, then move on). A scenario that yields
     fewer cases than planned is ACCEPTABLE — emit ONLY the distinct cases you actually have
     and move on; NEVER pad the count with duplicate or near-identical inputs. If a small
@@ -585,13 +594,13 @@ intentional: large cases are few in count but must gate roughly half the score.
 (SELF-CHECK BEFORE WRITE):
   * Every case validated by the optimal{" and cross-checked by brute (where size permits)" if has_brute else ""}.
   * `seen_inputs` dedup; all inputs constraint-legal.
-  * Bimodal size check: assert there exist cases with small n AND cases at/near max n.
-  * Size distribution: assert each size_* bucket within +/-{tol:g}pp of targets ({size_targets_inline}).
+  * Bimodal size check: ENSURE there exist cases with small n AND cases at/near max n (ADD one if missing — do not assert).
+  * Size distribution: aim each size_* bucket toward targets ({size_targets_inline}); ADD cases for SHORT buckets. Never assert/exit on the distribution.
   * Scenario diversity: distinct scenario tags >= max(2, non_example_count // 3).
   * Declared metadata present: EVERY case has int `size_metric`, str `scenario`, bool `is_edge`;
     the root dict has `size_model` (kind+max_n) and `space_mode`.
   * `order` == 1..N sequential.
-  * Weight asserts: weight-sum, top-tier-share, stress-share (see scoring block).
+  * Weight self-check: assert ONLY the exact weight-SUM; reach top-tier-share/stress-share by adjusting weights, not by asserting them (see scoring block).
 
 (Script structure):
 1. imports, constants, `random.seed(42)`
@@ -601,7 +610,7 @@ intentional: large cases are few in count but must gate roughly half the score.
 5. plan structures (SUBTASK_PLAN + SCENARIO_PLAN) — every case named before any input is built
 6. weight computation
 7. iterate SCENARIO_PLAN: deterministic construct per scenario → run optimal{" + brute cross-check" if has_brute else ""} → append case
-8. self-checks + diversity + bimodal asserts
+8. self-checks (CORRECTNESS asserts only) + size/diversity TOP-UP (add short buckets; never assert/exit on distribution or weight shares)
 9. json.dump([{{"test_cases": test_cases, "size_model": {{"kind": SIZE_KIND, "max_n": MAX_N}}, "space_mode": SPACE_MODE}}], open("testcases.json","w"), indent=4, ensure_ascii=False)
    (every case dict must include size_metric/scenario/is_edge; SIZE_KIND/SPACE_MODE are the declared problem size model)
 
@@ -692,8 +701,8 @@ HOW TO FIX (do ALL of these):
    generate inputs with n near MAX_N (fill with constraint-legal values; keep the
    brute-force cross-check guarded by its own size cap so large cases are validated by the
    optimal alone).
-4. Re-tag each case with the correct size_<bucket> from its ACTUAL n, and keep the
-   self-check assert that realized bucket counts are within tolerance of the targets.
+4. Re-tag each case with the correct size_<bucket> from its ACTUAL n. COUNT the buckets and
+   ADD cases for short ones; never assert/exit on the distribution — over-supply is fine.
 
 Do not reduce the total below the current count. Return ONLY the corrected Python script.
 
