@@ -19,15 +19,18 @@ export { ORPHAN_EXIT_CODE };
 //    completion" signal — counting it would false-demote a clean full run. It is
 //    also re-run frequently via the Refine feature; re-folding it into the JSON
 //    goes through prepare_platform_json, which IS in this set.
-//  - execute_tests_*, execute_editorial, harden_testcases, benchmark_testcases:
-//    informational / non-blocking steps that legitimately run LAST and must not
-//    undo completion. (execute_editorial being the last-started run is exactly
-//    what used to wrongly leave a finished pipeline stuck on "draft".)
+//  - execute_tests_*, execute_editorial, benchmark_testcases: informational
+//    steps that legitimately run LAST and must not undo completion.
+//    (execute_editorial being the last-started run is exactly what used to
+//    wrongly leave a finished pipeline stuck on "draft".)
+// select_testcases IS included: it rewrites testcases.json (like
+// generate_testcases), so re-running it after packaging makes the artifact stale.
 const CONTENT_RERUN_STEPS = new Set<StepId>([
   "generate_question",
   "generate_brute_force",
   "generate_testcases",
   "generate_wrong_solutions",
+  "select_testcases",
   "split_code",
   "generate_enrichment",
   "package_platform",
@@ -61,7 +64,7 @@ const lastReconcileAt = new Map<string, number>();
  *  - latest prepare_platform_json succeeded, and
  *    no CONTENT step was re-run after it finished -> completed
  *      (trailing informational steps — execute_editorial, execute_tests,
- *       harden, benchmark — and the concurrent editorial do NOT undo this;
+ *       benchmark — and the concurrent editorial do NOT undo this;
  *       a genuine content re-run after packaging DOES, dropping to partial)
  *  - else, from the latest run overall:
  *      stopped/orphaned (exit -1) -> failed · failed -> failed · otherwise -> partial
@@ -114,7 +117,7 @@ export async function recomputeProblemStatus(problemId: string): Promise<void> {
     } else {
       // Completion is anchored to prepare_platform_json — the terminal packaging
       // step — NOT to "whatever ran last". Trailing informational steps
-      // (execute_editorial, execute_tests, harden, benchmark) legitimately run
+      // (execute_editorial, execute_tests, benchmark) legitimately run
       // AFTER packaging and must not undo completion.
       const ppjRuns = rows.filter(
         (r) => parsePipelineRunStepKey(r.stepId).parentStepId === "prepare_platform_json"

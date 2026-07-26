@@ -114,9 +114,9 @@ function parseProgress(
     return extractSteps(steps, logs, isRunning);
   }
 
-  if (stepId === "harden_testcases") {
+  if (stepId === "select_testcases") {
     const steps = [
-      { key: "harden", label: "Hardening Suite", patterns: [/Harden round/i], done: [/Target kill rate|Appended.*case/i, /Gate \(min_kill/i] },
+      { key: "select", label: "Selecting Suite", patterns: [/generated \d+/i], done: [/selected \d+/i] },
     ];
     return extractSteps(steps, logs, isRunning);
   }
