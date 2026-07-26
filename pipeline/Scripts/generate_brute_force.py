@@ -165,6 +165,11 @@ def _run_solution_validation(description: str, optimal_solution: str, brute_cont
               if not fmt_fail else f"⚠ {len(fmt_fail)} input(s) the optimal could not parse"))
         print("· ground-truth       " + ("✓ optimal matches expected"
               if not gt_fail else f"⚠ {len(gt_fail)} case(s) optimal disagrees with expected"))
+        brute_rows = [r for r in rows if "brute_agrees" in r]
+        if brute_rows:
+            brute_fail = [r for r in brute_rows if not r["brute_agrees"]]
+            print("· optimal-vs-brute   " + ("✓ brute agrees with optimal"
+                  if not brute_fail else f"⚠ {len(brute_fail)} case(s) brute disagrees with optimal"))
         if optimal_v.get("issues"):
             print(f"· optimal quality    ⚠ {'; '.join(optimal_v['issues'])}")
         if brute_v.get("issues"):
