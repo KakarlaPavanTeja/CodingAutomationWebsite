@@ -148,23 +148,33 @@ def determine_size_model(cases: list, max_n: int) -> tuple[str, str]:
 # --------------------------------------------------------------------------- #
 # 2. Kill annotation — inject batch_runner(code, inputs) -> [(out, status), ...]
 # --------------------------------------------------------------------------- #
-def annotate_kills(cases: list, wrong_solutions, batch_runner) -> set:
+def annotate_kills(cases: list, wrong_solutions, batch_runner, log=None) -> set:
     """Run each wrong solution over the pool; record which cases catch it.
 
     wrong_solutions: iterable of (name, code). A case kills `name` when the
     wrong solution's output differs from the grounded stored output (or it
-    errors/times out). Mutates c["kills"]; returns the set of wrong ids."""
+    errors/times out). Mutates c["kills"]; returns the set of wrong ids.
+    `log` (optional callable) emits a per-solution progress line so the compiler
+    poll output is attributable to a specific wrong solution."""
+    wrong_solutions = list(wrong_solutions)
     inputs = [c["input"] for c in cases]
     expected = [_norm_out(c["output"]) for c in cases]
     wrong_ids = set()
-    for name, code in wrong_solutions:
+    for i, (name, code) in enumerate(wrong_solutions, 1):
         wrong_ids.add(name)
+        if log:
+            log(f"  → wrong {i}/{len(wrong_solutions)}: {name} — running on {len(cases)} case(s)…")
         results = batch_runner(code, inputs)
+        caught = 0
         for c, exp, res in zip(cases, expected, results):
             out, status = res
             got = _norm_out(out)
             if status != "ok" or got != exp:
                 c["kills"].add(name)
+                caught += 1
+        if log:
+            verdict = "caught" if caught else "NOT CAUGHT (no case discriminates it)"
+            log(f"     {name}: {verdict} by {caught}/{len(cases)} case(s)")
     return wrong_ids
 
 
@@ -172,22 +182,30 @@ def annotate_kills(cases: list, wrong_solutions, batch_runner) -> set:
 # 3. TLE annotation — inject one_runner(code, stdin) -> (out, status)
 # --------------------------------------------------------------------------- #
 def annotate_tle(cases: list, brute_code, one_runner, max_n: int,
-                 size_kind: str = "count") -> int:
+                 size_kind: str = "count", log=None) -> int:
     """Time the brute force on large-bucket cases; a timeout is a verified TLE.
 
     Conditional (spec §5): only meaningful when a large regime exists. Returns
     the number of verified-TLE cases (0 when there is no brute or no large
-    regime — reported as N/A upstream, never a failure)."""
+    regime — reported as N/A upstream, never a failure). `log` (optional) emits
+    a per-case line so the compiler poll output is attributable to a case."""
     if not brute_code or size_kind == "none":
         return 0
+    large = [c for c in cases if bucket_size(c["size_metric"], max_n) == "large"]
+    if log:
+        log(f"  → {len(large)} large-regime case(s) to time against the limit")
     n = 0
-    for c in cases:
-        if bucket_size(c["size_metric"], max_n) != "large":
-            continue
+    for i, c in enumerate(large, 1):
+        if log:
+            log(f"  → [{i}/{len(large)}] timing brute on {c['id']} (size_metric={c['size_metric']})…")
         _out, status = one_runner(brute_code, c["input"])
         if status == "timeout":
             c["is_tle"] = True
             n += 1
+            if log:
+                log(f"     {c['id']}: TIMED OUT → verified TLE ✓")
+        elif log:
+            log(f"     {c['id']}: finished within limit (not a TLE case)")
     return n
 
 
@@ -208,12 +226,16 @@ def write_selected(testcases_json_path: str, selected: list) -> None:
         raw["order"] = i
         new_cases.append(raw)
 
+    # Stamp `selected` so a re-run of select can tell this file is a trimmed suite
+    # (and should reload the raw pool) rather than a fresh generator pool.
     if isinstance(data, list) and data and isinstance(data[0], dict):
         data[0]["test_cases"] = new_cases
+        data[0]["selected"] = True
     elif isinstance(data, dict):
         data["test_cases"] = new_cases
+        data["selected"] = True
     else:
-        data = {"test_cases": new_cases}
+        data = {"test_cases": new_cases, "selected": True}
 
     with open(testcases_json_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
@@ -264,11 +286,32 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
 
     log("=== SELECT TEST CASES (dedup → annotate → select ≤" f"{cap or 150}) ===")
 
-    cases, max_n = load_cases(tc_path, desc)
+    # Raw-pool preservation: select overwrites testcases.json with the trimmed suite,
+    # so snapshot the generator's FULL pool once (testcases_pool.json) and always select
+    # from it. A re-run then reconsiders every generated case, not a prior selection.
+    import shutil
+    pool_path = os.path.join(outputs_dir, "testcases_pool.json")
+    already_selected = False
+    try:
+        with open(tc_path, "r", encoding="utf-8") as f:
+            _root = json.load(f)
+        _r = _root[0] if isinstance(_root, list) and _root else _root
+        already_selected = bool(isinstance(_r, dict) and _r.get("selected"))
+    except Exception:
+        already_selected = False
+    if already_selected and os.path.exists(pool_path):
+        load_path = pool_path                       # re-run → select from the full pool
+    else:
+        if os.path.exists(tc_path):
+            shutil.copyfile(tc_path, pool_path)      # first select → snapshot the raw pool
+        load_path = tc_path
+
+    cases, max_n = load_cases(load_path, desc)
     if not cases:
         raise SystemExit("annotation: testcases.json has no cases")
     size_kind, space_mode = determine_size_model(cases, max_n)
-    log(f"[1/4] Loaded {len(cases)} candidate case(s)  ·  "
+    src = "raw pool (re-select)" if load_path == pool_path else "freshly generated pool"
+    log(f"[1/4] Loaded {len(cases)} candidate case(s) from {src}  ·  "
         f"size_model={size_kind} (max_n={max_n})  ·  space={space_mode}")
     log(f"      oracles: reference={'present' if reference else 'MISSING'}  ·  "
         f"brute-force={'present' if brute else 'absent'}  ·  "
@@ -296,7 +339,7 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
             f"{len(cases)} case(s)…")
     else:
         log("[2/4] Scoring kills: SKIPPED (no wrong_solutions/*.py found)")
-    wrong_ids = annotate_kills(cases, wrong, batch_runner)
+    wrong_ids = annotate_kills(cases, wrong, batch_runner, log=log)
 
     if brute and size_kind != "none":
         log(f"[3/4] Verifying brute-force TLE on large-regime case(s) "
@@ -304,7 +347,7 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
     else:
         why = "no brute force" if not brute else "no size dimension"
         log(f"[3/4] Brute-force TLE: N/A ({why})")
-    tle_n = annotate_tle(cases, brute, one_runner, max_n, size_kind)
+    tle_n = annotate_tle(cases, brute, one_runner, max_n, size_kind, log=log)
 
     kwargs = {"size_kind": size_kind, "space_mode": space_mode}
     if cap is not None:
