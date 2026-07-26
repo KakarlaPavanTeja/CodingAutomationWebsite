@@ -278,10 +278,19 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
     def batch_runner(code, inputs):
         return run_solutions_batch(code, inputs, BENCHMARK_RUN_TIMEOUT)
 
+    # TLE is measured against the PROBLEM's time limit, not an arbitrary bound. Default
+    # to the pipeline's per-case run budget (BENCHMARK_RUN_TIMEOUT, ~3s — a realistic
+    # judge limit); override per problem/platform with TESTCASE_TLE_LIMIT_SEC. A brute
+    # that exceeds this on a large case is the verified TLE.
+    _tle_env = os.environ.get("TESTCASE_TLE_LIMIT_SEC", "").strip()
+    try:
+        tle_limit = float(_tle_env) if _tle_env else float(BENCHMARK_RUN_TIMEOUT)
+    except ValueError:
+        tle_limit = float(BENCHMARK_RUN_TIMEOUT)
+    tle_limit = max(0.5, tle_limit)
+
     def one_runner(code, stdin):
-        # The brute-force time limit IS the problem limit; DEFAULT_RUN_TIMEOUT (10s)
-        # stands in for it — a timeout at that bound is the verified TLE.
-        return run_solution(code, stdin, DEFAULT_RUN_TIMEOUT)
+        return run_solution(code, stdin, tle_limit)
 
     if wrong:
         log(f"[2/4] Scoring kills: running {len(wrong)} wrong solution(s) over "
