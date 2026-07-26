@@ -42,8 +42,8 @@ def validate_solutions_llm(description, optimal_code, brute_code, *, _call=None,
     `_call` injects a fake call_llm in tests; when provided, usage is not recorded.
     """
     call = _call or call_llm
-    system, user = get_validate_solutions_prompt(description, optimal_code, brute_code)
     try:
+        system, user = get_validate_solutions_prompt(description, optimal_code, brute_code)
         content, usage = call(system, user, purpose="validate_solutions")
     except Exception:
         return None
