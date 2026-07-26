@@ -57,6 +57,23 @@ class TestLoadCases(unittest.TestCase):
             cases, _ = load_cases(p, description="n <= 10")
             self.assertEqual(len(cases), 1)
 
+    def test_reads_root_size_model_and_max_n(self):
+        # New generator: root carries size_model/space_mode; declared max_n wins.
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "testcases.json")
+            body = {"test_cases": [{"order": 1, "input": "abc", "output": "3",
+                                    "size_metric": 3, "scenario": "s", "tags": ["subtask_1"]}],
+                    "size_model": {"kind": "grid", "max_n": 999},
+                    "space_mode": "exhaustive"}
+            with open(p, "w") as f:
+                json.dump([body], f)
+            cases, max_n = load_cases(p, description="1 <= n <= 50")  # description says 50
+            self.assertEqual(max_n, 999)                    # declared max_n wins over parse
+            self.assertEqual(cases[0]["size_kind"], "grid")
+            self.assertEqual(cases[0]["space_mode"], "exhaustive")
+            kind, space = determine_size_model(cases, max_n)
+            self.assertEqual((kind, space), ("grid", "exhaustive"))
+
 
 class TestSizeModel(unittest.TestCase):
     def test_none_when_no_dimension(self):

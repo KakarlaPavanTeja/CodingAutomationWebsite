@@ -29,6 +29,14 @@ MAX_SUBTASKS = 8
 MAX_CASES_PER_SUBTASK = 12
 MIN_TESTCASES = 25                          # raised from 20 — LeetCode Easy floor
 
+# Over-generation targets (redesign): the LLM emits a generator SCRIPT, so volume
+# is nearly free. A downstream deterministic selector dedups, verifies TLE, scores
+# wrong-solution kills, and trims to CASE_CAP — so the generator should aim HIGH and
+# leave the final count/size%/weights to the selector. These bound the candidate POOL.
+POOL_TARGET_MIN = 150
+POOL_TARGET_MAX = 250
+CASE_CAP = 150                              # mirrors testcase_selection.CASE_CAP
+
 # Size-category distribution targets (count %, enforced by B3 in benchmark_suite).
 # Philosophy (matches real judges like LeetCode): the suite is dominated by cheap
 # small/edge CORRECTNESS cases; large/stress cases are FEW but high-value. You don't
@@ -53,10 +61,11 @@ def size_tag(bucket: str) -> str:
 
 # Difficulty x problem-type target band. Used only as a hint to the model; the
 # manager passes difficulty + (optional) detected type. Strings/DP skew high.
+# Over-generate: the selector dedups + trims to CASE_CAP, so aim for a large POOL.
 COUNT_BAND_BY_DIFFICULTY = {
-    "easy":   (25, 45),
-    "medium": (50, 90),
-    "hard":   (90, 160),
+    "easy":   (60, 150),
+    "medium": (120, 220),
+    "hard":   (150, 280),
 }
 # Multipliers nudging the band by problem family (applied to the upper end).
 TYPE_COUNT_HINT = {
@@ -169,18 +178,20 @@ def _count_hint(difficulty, problem_type, num_testcases):
     band = COUNT_BAND_BY_DIFFICULTY.get(diff)
     type_note = TYPE_COUNT_HINT.get((problem_type or "generic").strip().lower(),
                                     TYPE_COUNT_HINT["generic"])
+    overflow = (f"OVER-GENERATE toward a pool of ~{POOL_TARGET_MIN}-{POOL_TARGET_MAX} DISTINCT "
+                f"cases — the downstream selector dedups and trims to {CASE_CAP}, so more is "
+                f"better and there is NO tight per-subtask cap.")
     if num_testcases is not None:
         floor = max(num_testcases, MIN_TESTCASES)
-        return (f"at least {floor} (hard minimum {MIN_TESTCASES}; "
-                f"max {MAX_CASES_PER_SUBTASK} per subtask). Type guidance: {type_note}.")
+        return (f"at least {floor} (hard minimum {MIN_TESTCASES}). {overflow} "
+                f"Type guidance: {type_note}.")
     if band:
         lo, hi = band
         lo = max(lo, MIN_TESTCASES)
-        return (f"target {lo}-{hi} for '{diff}' difficulty "
-                f"(hard minimum {MIN_TESTCASES}; max {MAX_CASES_PER_SUBTASK} per subtask). "
-                f"Type guidance: {type_note}.")
-    return (f"at least {MIN_TESTCASES} (no difficulty given; "
-            f"max {MAX_CASES_PER_SUBTASK} per subtask). Type guidance: {type_note}.")
+        return (f"target {lo}-{hi} for '{diff}' difficulty (hard minimum {MIN_TESTCASES}). "
+                f"{overflow} Type guidance: {type_note}.")
+    return (f"at least {MIN_TESTCASES} (no difficulty given). {overflow} "
+            f"Type guidance: {type_note}.")
 
 
 def get_testcases_prompt(
@@ -278,7 +289,7 @@ Every case carries subtask structure and per-case weights.
 - Each case carries `weightage` (> 0), exactly one `subtask_<n>` tag, and exactly one `size_<edge|small|medium|large>` tag.
 - Subtask weight split comes from DISTRIBUTION_BY_COUNT[preset][SUBTASK_COUNT].
 - Within a subtask, skew weight toward stress/adversarial scenarios (see multiplier fn).
-- Output case keys IN ORDER: `input`, `output`, `weightage`, `tags`, `order`.
+- Output case keys IN ORDER: `input`, `output`, `weightage`, `tags`, `order`, `size_metric`, `scenario`, `is_edge`.
 - Invariants: weights sum to TOTAL_WEIGHTAGE (±0.01); top subtask holds >= 35% of weight;
   stress/large cases carry ~50% of weight (target 50%, assert >= 45%) — they are FEW in
   COUNT but high-value, so passing them gates most of the score; all weights > 0.
@@ -322,6 +333,48 @@ Every case carries subtask structure and per-case weights.
   * Space-separated values via `' '.join(map(str, values))`. Do NOT use Python's default
     `str([1,2,3])` (gives "[1, 2, 3]") unless the spec literally uses that bracket form.
   * Handle newlines and trailing spaces per spec. Both fields are STDIN/STDOUT strings."""
+
+    overgenerate_block = f"""
+(OVER-GENERATE — a downstream SELECTOR dedups, verifies TLE, scores kills, and trims to {CASE_CAP}):
+This suite is NO LONGER the final suite. A deterministic selector runs AFTER you: it removes
+exact-input duplicates, buckets by size, times the brute force for TLE, scores which cases catch
+wrong solutions, and keeps the strongest ~{CASE_CAP}. So:
+  * Aim HIGH: emit a LARGE pool of DISTINCT cases (target ~{POOL_TARGET_MIN}-{POOL_TARGET_MAX}). More
+    distinct, well-labeled cases is strictly better. Do NOT minimize the count or stop early.
+  * You are NOT responsible for the final count, the exact size %, or the final weights — the
+    selector owns those. You ARE responsible for: correct outputs, DISTINCT inputs, explicit edge
+    cases, real at-MAX_N stress cases, and accurate per-case labels (below).
+  * Keep emitting distinct cases per scenario/size until the scenario runs dry (respect `seen_inputs`
+    and the attempt caps); never pad with duplicates.
+"""
+
+    declared_metadata_block = """
+(DECLARED PER-CASE METADATA — REQUIRED on EVERY case, consumed by the selector):
+In ADDITION to input/output/weightage/tags/order, every case MUST also carry:
+  * `size_metric` (int): the REAL numeric size THIS case scales by — array length / string length /
+    rows*cols / nodes+edges / the value of n. This is what the selector buckets on, so it must be the
+    true size (NOT blindly the first token if that token is not the size). Use 0 ONLY when the problem
+    has no size dimension at all.
+  * `scenario` (str, snake_case): the named scenario, e.g. "answer_at_end", "all_equal", "max_stress",
+    "duplicates". Mirror the scenario tag; one token.
+  * `is_edge` (bool): true for degenerate / boundary / min literals (empty, n=min, all-same, overflow
+    boundary, singleton). The selector FORCE-KEEPS every is_edge case, so mark them accurately.
+"""
+
+    size_model_block = """
+(PROBLEM SIZE MODEL — REQUIRED at the ROOT dict, alongside `test_cases`):
+Declare how THIS problem scales so the selector buckets correctly:
+  * `size_model`: {"kind": "count"|"value"|"grid"|"multi"|"none", "max_n": <int>}
+      - count : size is a count/length (array n, string length, #nodes). max_n = that maximum.
+      - value : size is the magnitude of a single value (e.g. an integer up to 1e9). max_n = that max.
+      - grid  : size is rows*cols. max_n = max rows*cols.
+      - multi : several independent sizes (n and m and q...). max_n = the dominant one.
+      - none  : NO size dimension (fixed/tiny input). max_n = 0.
+  * `space_mode`: "sampled" | "exhaustive"
+      - exhaustive : ONLY when you enumerate the ENTIRE legal input space (a small finite domain). A
+        below-cap count is then COMPLETE, not a shortfall.
+      - sampled : the normal case — the space is huge, you sample it.
+"""
 
     system_prompt = f"""
 (Role): You are an Expert Content Developer for Competitive Programming and technical
@@ -475,10 +528,14 @@ post-processing strips extra text.
   * Typically you need only `import json`, `import random`, `import sys`, `from io import StringIO`,
     and maybe `import math`.
 
+{overgenerate_block}
+{declared_metadata_block}
+{size_model_block}
 (OUTPUT JSON SHAPE):
-Root: a LIST containing EXACTLY ONE dict whose only key is `"test_cases"`.
-  CORRECT:   [ {{"test_cases": [...]}} ]
-  INCORRECT: {{"test_cases": [...]}}   (dict at root is invalid)
+Root: a LIST containing EXACTLY ONE dict with keys `"test_cases"`, `"size_model"`, `"space_mode"`.
+  CORRECT:   [ {{"test_cases": [...], "size_model": {{"kind": "count", "max_n": 100000}}, "space_mode": "sampled"}} ]
+  INCORRECT: {{"test_cases": [...]}}   (dict at root is invalid; missing size_model/space_mode)
+Each case dict carries: `input`, `output`, `weightage`, `tags`, `order`, `size_metric`, `scenario`, `is_edge`.
 Write with `json.dump(result, f, indent=4, ensure_ascii=False)`.
 `order` is global 1..N, sequential (+1 each), smallest/example first, max stress last.
 
@@ -518,6 +575,8 @@ intentional: large cases are few in count but must gate roughly half the score.
   * Bimodal size check: assert there exist cases with small n AND cases at/near max n.
   * Size distribution: assert each size_* bucket within +/-{tol:g}pp of targets ({size_targets_inline}).
   * Scenario diversity: distinct scenario tags >= max(2, non_example_count // 3).
+  * Declared metadata present: EVERY case has int `size_metric`, str `scenario`, bool `is_edge`;
+    the root dict has `size_model` (kind+max_n) and `space_mode`.
   * `order` == 1..N sequential.
   * Weight asserts: weight-sum, top-tier-share, stress-share (see scoring block).
 
@@ -530,7 +589,8 @@ intentional: large cases are few in count but must gate roughly half the score.
 6. weight computation
 7. iterate SCENARIO_PLAN: deterministic construct per scenario → run optimal{" + brute cross-check" if has_brute else ""} → append case
 8. self-checks + diversity + bimodal asserts
-9. json.dump([{{"test_cases": test_cases}}], open("testcases.json","w"), indent=4, ensure_ascii=False)
+9. json.dump([{{"test_cases": test_cases, "size_model": {{"kind": SIZE_KIND, "max_n": MAX_N}}, "space_mode": SPACE_MODE}}], open("testcases.json","w"), indent=4, ensure_ascii=False)
+   (every case dict must include size_metric/scenario/is_edge; SIZE_KIND/SPACE_MODE are the declared problem size model)
 
 Return ONLY the Python script. No markdown fences, no prose outside comments.
 """

@@ -84,13 +84,22 @@ def load_cases(testcases_json_path: str, description: str = "") -> tuple[list, i
     with open(testcases_json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if isinstance(data, list) and data and isinstance(data[0], dict):
-        raw_cases = data[0].get("test_cases", []) or []
+        root = data[0]
     elif isinstance(data, dict):
-        raw_cases = data.get("test_cases", []) or []
+        root = data
     else:
-        raw_cases = []
+        root = {}
+    raw_cases = root.get("test_cases", []) or []
 
-    max_n = parse_constraint_max_n(description) or 0
+    # Root-level declared size model (new generator). max_n from the declaration wins
+    # over parsing the description; kind/space_mode are stamped on each case so
+    # determine_size_model prefers them over inference.
+    declared = root.get("size_model") if isinstance(root.get("size_model"), dict) else {}
+    declared_kind = declared.get("kind")
+    declared_max = declared.get("max_n")
+    declared_space = root.get("space_mode")
+    max_n = (declared_max if isinstance(declared_max, int) and declared_max > 0
+             else parse_constraint_max_n(description) or 0)
     cases = []
     for idx, tc in enumerate(raw_cases):
         tags = _tags(tc)
@@ -112,6 +121,8 @@ def load_cases(testcases_json_path: str, description: str = "") -> tuple[list, i
             "size_metric": int(size_metric),
             "max_n": int(max_n),
             "kills": set(),
+            "size_kind": declared_kind,
+            "space_mode": declared_space,
             "_raw": tc,
         })
     return cases, int(max_n)
@@ -126,8 +137,10 @@ def determine_size_model(cases: list, max_n: int) -> tuple[str, str]:
     enumerated its whole input space must say so explicitly)."""
     for c in cases:
         raw = c.get("_raw") or {}
-        if raw.get("size_kind") or raw.get("space_mode"):
-            return (raw.get("size_kind") or "count", raw.get("space_mode") or "sampled")
+        kind = c.get("size_kind") or raw.get("size_kind")
+        space = c.get("space_mode") or raw.get("space_mode")
+        if kind or space:
+            return (kind or "count", space or "sampled")
     has_dim = max_n and max_n > 2 and any(c["size_metric"] > 1 for c in cases)
     return ("count" if has_dim else "none", "sampled")
 
