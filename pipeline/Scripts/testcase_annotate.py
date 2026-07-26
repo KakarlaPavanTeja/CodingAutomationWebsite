@@ -248,7 +248,6 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
         run_solutions_batch,
         run_solution,
         BENCHMARK_RUN_TIMEOUT,
-        DEFAULT_RUN_TIMEOUT,
     )
 
     tc_path = os.path.join(outputs_dir, "testcases.json")
@@ -301,7 +300,7 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
 
     if brute and size_kind != "none":
         log(f"[3/4] Verifying brute-force TLE on large-regime case(s) "
-            f"(limit {DEFAULT_RUN_TIMEOUT:g}s; a timeout = verified TLE)…")
+            f"(limit {tle_limit:g}s; a timeout = verified TLE)…")
     else:
         why = "no brute force" if not brute else "no size dimension"
         log(f"[3/4] Brute-force TLE: N/A ({why})")
