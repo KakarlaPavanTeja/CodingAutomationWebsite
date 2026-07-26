@@ -170,7 +170,10 @@ def _write_blob_and_get_s3_url(base_dir, question_id, question_name, order, io_k
     qname = _slugify(question_name)
     filename = f"{qid}_{qname}_testcases_{order}_{io_kind}.txt"
 
-    blobs_dir = os.path.join(base_dir, "Outputs", "s3_blobs")
+    # Staging dir OUTSIDE Outputs/ — Outputs is synced to object storage after a
+    # run, and these blobs (>50KB each, by definition) were bloating it. They are
+    # only needed locally long enough to upload to S3.
+    blobs_dir = os.path.join(base_dir, "s3_blobs_tmp")
     os.makedirs(blobs_dir, exist_ok=True)
     local_path = os.path.join(blobs_dir, filename)
     # Parallel (approach, language) runs hit the same testcase concurrently and
@@ -181,6 +184,11 @@ def _write_blob_and_get_s3_url(base_dir, question_id, question_name, order, io_k
             f.write(contents or "")
 
         uploaded, info = _upload_blob_to_s3(local_path, filename)
+        if uploaded:
+            try:
+                os.remove(local_path)  # staging copy; S3 has it now
+            except OSError:
+                pass
     if uploaded:
         return info, local_path, True
     if os.environ.get("SUPPRESS_S3_UPLOAD_LOGS", "").lower() not in ("1", "true", "yes"):
