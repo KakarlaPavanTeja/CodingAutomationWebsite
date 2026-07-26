@@ -151,23 +151,37 @@ def _fill_pass(selected, seen, remaining, cap):
     return selected
 
 
-def select_suite(cases, wrong_ids, max_n, cap=CASE_CAP, floor=CASE_FLOOR):
+def select_suite(cases, wrong_ids, max_n, cap=CASE_CAP, floor=CASE_FLOOR,
+                 size_kind="count", space_mode="sampled"):
     """Full pipeline: bucket -> dedup -> guarantee pass -> fill to cap.
+
+    size_kind: "count"|"value"|"grid"|"multi" use size_metric bucketing;
+        "none" (no size dimension) puts every case in a single "flat" bucket so
+        coverage is driven by subtask x scenario only.
+    space_mode: "sampled" (huge input space, target the cap) or "exhaustive"
+        (small input space enumerated in full — a below-cap count is COMPLETE,
+        never a shortfall).
+
     Returns (selected_cases, report)."""
     generated = len(cases)
     for c in cases:
-        c["bucket"] = bucket_size(c["size_metric"], max_n)
+        c["bucket"] = "flat" if size_kind == "none" else bucket_size(c["size_metric"], max_n)
         c["kills"] = set(c.get("kills") or set())
     unique, _dropped = dedup_by_input(cases)
     selected, report = guarantee_pass(unique, wrong_ids)
     seen = {c["id"] for c in selected}
     remaining = [c for c in unique if c["id"] not in seen]
     selected = _fill_pass(selected, seen, remaining, cap)
+    exhaustive = space_mode == "exhaustive"
     report.update({
         "generated": generated,
         "unique": len(unique),
         "selected": len(selected),
-        "below_floor": len(selected) < floor,
+        "size_kind": size_kind,
+        "space_mode": space_mode,
+        "exhaustive_complete": exhaustive,
+        # A short SAMPLED suite is a shortfall; an exhaustive one is complete.
+        "below_floor": (not exhaustive) and (len(selected) < floor),
     })
     return selected, report
 
@@ -185,6 +199,8 @@ def format_funnel(report):
     flags = []
     if report.get("uncatchable"):
         flags.append("uncatchable: " + ", ".join(report["uncatchable"]))
+    if report.get("exhaustive_complete"):
+        flags.append(f"exhaustive: complete {report['selected']}/{report['unique']}")
     if report.get("below_floor"):
         flags.append("BELOW FLOOR")
     if flags:

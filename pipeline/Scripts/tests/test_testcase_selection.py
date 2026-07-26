@@ -132,6 +132,46 @@ class TestSelectSuite(unittest.TestCase):
         self.assertEqual([c["id"] for c in a], [c["id"] for c in b])
 
 
+class TestSizeKindNone(unittest.TestCase):
+    def test_flat_bucket_when_no_size_dimension(self):
+        cases = []
+        for i in range(6):
+            c = mk(f"c{i}", "S1", "small", f"s{i % 3}")
+            c["input"] = c["id"]
+            c.pop("bucket")
+            cases.append(c)
+        selected, rep = select_suite(cases, set(), max_n=0, size_kind="none")
+        self.assertTrue(all(c["bucket"] == "flat" for c in selected))
+        self.assertEqual(rep["slots_total"], 3)   # subtask x scenario only
+        self.assertEqual(rep["size_kind"], "none")
+
+
+class TestExhaustive(unittest.TestCase):
+    def test_small_exhaustive_is_complete_not_below_floor(self):
+        cases = []
+        for i in range(10):
+            c = mk(f"c{i:02d}", "S1", "small", f"s{i}")
+            c["input"] = c["id"]
+            c.pop("bucket")
+            cases.append(c)
+        selected, rep = select_suite(cases, set(), max_n=100, floor=25,
+                                     space_mode="exhaustive")
+        self.assertEqual(len(selected), 10)          # shipped the whole space
+        self.assertFalse(rep["below_floor"])         # not a shortfall
+        self.assertTrue(rep["exhaustive_complete"])
+
+    def test_sampled_below_floor_still_flags(self):
+        cases = []
+        for i in range(5):
+            c = mk(f"c{i}", "S1", "small", f"s{i}")
+            c["input"] = c["id"]
+            c.pop("bucket")
+            cases.append(c)
+        selected, rep = select_suite(cases, set(), max_n=100, floor=25,
+                                     space_mode="sampled")
+        self.assertTrue(rep["below_floor"])
+
+
 class TestFunnel(unittest.TestCase):
     def test_one_line_summary(self):
         rep = {"generated": 250, "unique": 231, "selected": 150, "edges": 9, "tle": 4,
