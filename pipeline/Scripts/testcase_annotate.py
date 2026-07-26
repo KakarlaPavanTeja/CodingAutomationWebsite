@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 from testcase_selection import bucket_size, select_suite, format_funnel
 
@@ -163,8 +164,10 @@ def annotate_kills(cases: list, wrong_solutions, batch_runner, log=None) -> set:
     for i, (name, code) in enumerate(wrong_solutions, 1):
         wrong_ids.add(name)
         if log:
-            log(f"  → wrong {i}/{len(wrong_solutions)}: {name} — running on {len(cases)} case(s)…")
+            log(f"  → wrong {i}/{len(wrong_solutions)}: {name} — running {len(cases)} case(s) in parallel…")
+        t0 = time.time()
         results = batch_runner(code, inputs)
+        dt = time.time() - t0
         caught = 0
         for c, exp, res in zip(cases, expected, results):
             out, status = res
@@ -174,38 +177,41 @@ def annotate_kills(cases: list, wrong_solutions, batch_runner, log=None) -> set:
                 caught += 1
         if log:
             verdict = "caught" if caught else "NOT CAUGHT (no case discriminates it)"
-            log(f"     {name}: {verdict} by {caught}/{len(cases)} case(s)")
+            log(f"     {name}: {verdict} by {caught}/{len(cases)} case(s)  ({dt:.1f}s)")
     return wrong_ids
 
 
 # --------------------------------------------------------------------------- #
-# 3. TLE annotation — inject one_runner(code, stdin) -> (out, status)
+# 3. TLE annotation — inject tle_batch_runner(code, inputs) -> [(out, status), ...]
 # --------------------------------------------------------------------------- #
-def annotate_tle(cases: list, brute_code, one_runner, max_n: int,
+def annotate_tle(cases: list, brute_code, tle_batch_runner, max_n: int,
                  size_kind: str = "count", log=None) -> int:
     """Time the brute force on large-bucket cases; a timeout is a verified TLE.
 
-    Conditional (spec §5): only meaningful when a large regime exists. Returns
-    the number of verified-TLE cases (0 when there is no brute or no large
-    regime — reported as N/A upstream, never a failure). `log` (optional) emits
-    a per-case line so the compiler poll output is attributable to a case."""
+    All large cases run in ONE parallel batch (`tle_batch_runner(code, inputs)`
+    -> [(out, status), ...] at the TLE limit). Conditional (spec §5): only
+    meaningful when a large regime exists. Returns the number of verified-TLE
+    cases (0 when there is no brute or no large regime — N/A, never a failure)."""
     if not brute_code or size_kind == "none":
         return 0
     large = [c for c in cases if bucket_size(c["size_metric"], max_n) == "large"]
-    if log:
-        log(f"  → {len(large)} large-regime case(s) to time against the limit")
-    n = 0
-    for i, c in enumerate(large, 1):
+    if not large:
         if log:
-            log(f"  → [{i}/{len(large)}] timing brute on {c['id']} (size_metric={c['size_metric']})…")
-        _out, status = one_runner(brute_code, c["input"])
+            log("  → no large-regime case(s) — TLE N/A")
+        return 0
+    if log:
+        log(f"  → timing brute force on {len(large)} large-regime case(s) in one parallel batch…")
+    t0 = time.time()
+    results = tle_batch_runner(brute_code, [c["input"] for c in large])
+    dt = time.time() - t0
+    n = 0
+    for c, res in zip(large, results):
+        _out, status = res
         if status == "timeout":
             c["is_tle"] = True
             n += 1
-            if log:
-                log(f"     {c['id']}: TIMED OUT → verified TLE ✓")
-        elif log:
-            log(f"     {c['id']}: finished within limit (not a TLE case)")
+    if log:
+        log(f"     {n}/{len(large)} large case(s) exceeded the limit → verified TLE  ({dt:.1f}s)")
     return n
 
 
@@ -268,9 +274,17 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
     annotate_* functions above are what the unit tests exercise with fakes."""
     from benchmark_suite import (
         run_solutions_batch,
-        run_solution,
         BENCHMARK_RUN_TIMEOUT,
     )
+
+    # Quiet the compiler's per-poll chatter ("poll N/480 -> PROCESSING"); our own
+    # framed per-batch lines carry the progress. Only when the compiler is in use.
+    if os.environ.get("BENCHMARK_USE_COMPILER", "").strip().lower() in ("1", "true", "yes"):
+        try:
+            import execution_manager_v3 as _emv3
+            _emv3.QUIET = True
+        except Exception:
+            pass
 
     tc_path = os.path.join(outputs_dir, "testcases.json")
     desc = _read(os.path.join(outputs_dir, "generated_description.md")) or ""
@@ -331,8 +345,9 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
         tle_limit = _TLE_DEFAULT_SEC
     tle_limit = max(0.5, tle_limit)
 
-    def one_runner(code, stdin):
-        return run_solution(code, stdin, tle_limit)
+    def tle_batch_runner(code, inputs):
+        # Brute force timed against the problem limit; a per-input timeout = TLE.
+        return run_solutions_batch(code, inputs, tle_limit)
 
     if wrong:
         log(f"[2/4] Scoring kills: running {len(wrong)} wrong solution(s) over "
@@ -347,7 +362,7 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
     else:
         why = "no brute force" if not brute else "no size dimension"
         log(f"[3/4] Brute-force TLE: N/A ({why})")
-    tle_n = annotate_tle(cases, brute, one_runner, max_n, size_kind, log=log)
+    tle_n = annotate_tle(cases, brute, tle_batch_runner, max_n, size_kind, log=log)
 
     kwargs = {"size_kind": size_kind, "space_mode": space_mode}
     if cap is not None:

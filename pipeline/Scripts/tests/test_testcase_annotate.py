@@ -133,21 +133,22 @@ class TestAnnotateTle(unittest.TestCase):
             {"id": "c1", "input": "big", "size_metric": 100, "is_tle": False},
             {"id": "c2", "input": "small", "size_metric": 2, "is_tle": False},
         ]
-        def one(code, stdin):
-            return ("", "timeout") if stdin == "big" else ("ok", "ok")
-        n = annotate_tle(cases, "brute", one, max_n=100, size_kind="count")
+        # batch runner: receives only the large-case inputs, returns aligned statuses
+        def batch(code, inputs):
+            return [("", "timeout") if i == "big" else ("ok", "ok") for i in inputs]
+        n = annotate_tle(cases, "brute", batch, max_n=100, size_kind="count")
         self.assertEqual(n, 1)
         self.assertTrue(cases[0]["is_tle"])   # large -> timed out
-        self.assertFalse(cases[1]["is_tle"])  # small -> not even run
+        self.assertFalse(cases[1]["is_tle"])  # small -> not even sent to the batch
 
     def test_no_brute_is_na(self):
         cases = [{"id": "c1", "input": "x", "size_metric": 100, "is_tle": False}]
-        n = annotate_tle(cases, None, lambda c, s: ("", "timeout"), max_n=100)
+        n = annotate_tle(cases, None, lambda c, ins: [("", "timeout")], max_n=100)
         self.assertEqual(n, 0)
 
     def test_size_none_skips_tle(self):
         cases = [{"id": "c1", "input": "x", "size_metric": 100, "is_tle": False}]
-        n = annotate_tle(cases, "brute", lambda c, s: ("", "timeout"),
+        n = annotate_tle(cases, "brute", lambda c, ins: [("", "timeout")],
                          max_n=100, size_kind="none")
         self.assertEqual(n, 0)
 
