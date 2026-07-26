@@ -38,5 +38,38 @@ class TestValidatePrompt(unittest.TestCase):
             self.assertIn(token, system)
 
 
+class TestValidateSolutionsLLM(unittest.TestCase):
+    def _fake_call(self, content):
+        def _c(system, user, purpose="chat", **kw):
+            self.assertEqual(purpose, "validate_solutions")
+            return content, {"prompt_tokens": 1, "completion_tokens": 1, "model": "fake", "cost": 0.0}
+        return _c
+
+    def test_clean_json_parses(self):
+        from validate_solutions import validate_solutions_llm
+        payload = '{"examples": [{"input": "1\\n", "expected_output": "1\\n"}], "optimal": {"ok": true, "input_format_ok": true, "issues": []}, "brute": {"ok": true, "independent": true, "issues": []}}'
+        out = validate_solutions_llm("d", "o", "b", _call=self._fake_call(payload))
+        self.assertEqual(len(out["examples"]), 1)
+        self.assertTrue(out["optimal"]["ok"])
+
+    def test_fenced_json_parses(self):
+        from validate_solutions import validate_solutions_llm
+        payload = '```json\n{"examples": [], "optimal": {"ok": true, "input_format_ok": true, "issues": []}, "brute": {"ok": true, "independent": true, "issues": []}}\n```'
+        out = validate_solutions_llm("d", "o", "b", _call=self._fake_call(payload))
+        self.assertEqual(out["examples"], [])
+
+    def test_malformed_json_returns_none(self):
+        from validate_solutions import validate_solutions_llm
+        out = validate_solutions_llm("d", "o", "b", _call=self._fake_call("not json at all"))
+        self.assertIsNone(out)
+
+    def test_call_raises_returns_none(self):
+        from validate_solutions import validate_solutions_llm
+        def _boom(system, user, purpose="chat", **kw):
+            raise RuntimeError("network")
+        out = validate_solutions_llm("d", "o", "b", _call=_boom)
+        self.assertIsNone(out)
+
+
 if __name__ == "__main__":
     unittest.main()
