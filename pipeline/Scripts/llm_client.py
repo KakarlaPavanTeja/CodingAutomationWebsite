@@ -63,10 +63,11 @@ _OPUS_48 = "anthropic/claude-opus-4.8"
 _KIMI_K2_THINKING = "moonshotai/kimi-k2-thinking"
 
 # Per-model output-token override. Overrides the shared purpose default so a
-# model can use its own provider ceiling — k2-thinking's max_completion_tokens
-# is 100,352 (higher than the 100k testcases default).
+# model can use its own provider ceiling. k2-thinking's provider (Novita) hard-
+# caps max_tokens at 98,304 — sending more is a 400 (not a capacity fallback),
+# so pin at the ceiling rather than above it.
 _MODEL_MAX_TOKENS: dict[str, int] = {
-    _KIMI_K2_THINKING: 100352,
+    _KIMI_K2_THINKING: 98304,
 }
 
 
