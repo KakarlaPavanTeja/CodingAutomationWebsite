@@ -20,5 +20,23 @@ class TestValidateSolutionsRouting(unittest.TestCase):
         self.assertEqual(lc._resolve_reasoning_effort("validate_solutions"), "low")
 
 
+class TestValidatePrompt(unittest.TestCase):
+    def test_builder_returns_two_strings_with_inputs(self):
+        from Prompts.validatesolutionsprompt import get_validate_solutions_prompt
+        system, user = get_validate_solutions_prompt(
+            "Add two numbers. Read n then n ints.", "OPTCODE_MARKER", "BRUTECODE_MARKER"
+        )
+        self.assertIsInstance(system, str)
+        self.assertIsInstance(user, str)
+        # The optimal + brute + description must reach the model.
+        self.assertIn("OPTCODE_MARKER", user)
+        self.assertIn("BRUTECODE_MARKER", user)
+        self.assertIn("Add two numbers", user)
+        # The system prompt must mandate strict JSON, the format-inference job,
+        # and the expected_output field.
+        for token in ("STRICT JSON", "expected_output", "input format", "examples"):
+            self.assertIn(token, system)
+
+
 if __name__ == "__main__":
     unittest.main()
