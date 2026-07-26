@@ -507,8 +507,21 @@ If the statement says "exactly one solution" / "guaranteed unique":
     then call opt_env['main']() (or the named function) inside run_optimal.
   * Do NOT use `exec(CODE, globals_dict, locals_dict)` with two dicts — that splits the
     solution's imports from where you look up `main`, causing NameError for `sys`.
-  * `run_optimal` (and `run_brute`) feed `input` via StringIO on sys.stdin and capture
-    stdout; `normalize` strips trailing whitespace per line before comparison.
+  * `run_optimal` (and `run_brute`) feed `input` on sys.stdin and capture stdout;
+    `normalize` strips trailing whitespace per line before comparison.
+  * STDIN SHIM — CRITICAL (the #1 in-process crash): the solution may read BYTES via
+    `sys.stdin.buffer` (e.g. `data = sys.stdin.buffer.read()` — very common in fast-IO
+    DP/graph solutions). A plain `io.StringIO` has NO `.buffer` and raises
+    `AttributeError: '_io.StringIO' object has no attribute 'buffer'`. So build stdin as a
+    REAL text stream over a byte buffer, which supports BOTH `sys.stdin.read()` and
+    `sys.stdin.buffer`:
+        sys.stdin = io.TextIOWrapper(io.BytesIO(input_str.encode("utf-8")), encoding="utf-8")
+    Do the same for stdout so a solution that writes via `sys.stdout.buffer` still works:
+        buf = io.BytesIO(); sys.stdout = io.TextIOWrapper(buf, encoding="utf-8",
+                                                          write_through=True)
+        # ...run the solution...; sys.stdout.flush(); captured = buf.getvalue().decode("utf-8")
+    ALWAYS restore the real sys.stdin/sys.stdout in a finally block. NEVER feed stdin with a
+    bare StringIO.
 
 (OUTPUT HYGIENE — YOUR RESPONSE IS EXECUTED DIRECTLY AS .py — ABSOLUTELY CRITICAL):
 Your ENTIRE response is written verbatim to a .py file and run with python. No
@@ -525,8 +538,8 @@ post-processing strips extra text.
     BUILT-INS — never `from math import round`; use directly.
   * From `math` only real members (floor, ceil, sqrt, gcd, log, factorial, inf, pi), or
     `import math` and qualify. Prefer `import math/random/json` + qualified calls.
-  * Typically you need only `import json`, `import random`, `import sys`, `from io import StringIO`,
-    and maybe `import math`.
+  * Typically you need only `import json`, `import random`, `import sys`, `import io`
+    (for `io.BytesIO`/`io.TextIOWrapper` — the stdin/stdout shim above), and maybe `import math`.
 
 {overgenerate_block}
 {declared_metadata_block}
