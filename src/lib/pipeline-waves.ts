@@ -33,7 +33,6 @@ export const TESTCASE_CHAIN_STEPS: StepId[] = [
   "generate_testcases",
   "generate_wrong_solutions",
   "select_testcases",
-  "benchmark_testcases",
 ];
 
 

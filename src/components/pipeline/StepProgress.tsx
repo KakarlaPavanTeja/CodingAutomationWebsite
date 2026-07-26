@@ -107,18 +107,12 @@ function parseProgress(
     return extractSteps(steps, logs, isRunning);
   }
 
-  if (stepId === "benchmark_testcases") {
-    const steps = [
-      { key: "bench", label: "Running Benchmark", patterns: [/Benchmark Report|Mutation kill rate/i], done: [/Gate \(min_kill/i] },
-    ];
-    return extractSteps(steps, logs, isRunning);
-  }
-
   if (stepId === "select_testcases") {
     const steps = [
       { key: "load", label: "Loading Candidates", patterns: [/\[1\/4\] Loaded/i], done: [/\[2\/4\]/i] },
       { key: "annotate", label: "Scoring Kills & TLE", patterns: [/\[2\/4\]/i], done: [/\[4\/4\] Selected/i] },
       { key: "select", label: "Selecting Suite", patterns: [/\[4\/4\] Selected|generated \d+/i], done: [/Wrote \d+ case/i] },
+      { key: "bench", label: "Benchmarking Suite", patterns: [/=== BENCHMARK|Mutation kill rate/i], done: [/Benchmark report|Quality:/i] },
     ];
     return extractSteps(steps, logs, isRunning);
   }

@@ -4,7 +4,6 @@ export type StepId =
   | "generate_testcases"
   | "generate_wrong_solutions"
   | "select_testcases"
-  | "benchmark_testcases"
   | "split_code"
   | "execute_tests_function"
   | "execute_tests_nonfunction"

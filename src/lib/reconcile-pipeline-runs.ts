@@ -19,7 +19,7 @@ export { ORPHAN_EXIT_CODE };
 //    completion" signal — counting it would false-demote a clean full run. It is
 //    also re-run frequently via the Refine feature; re-folding it into the JSON
 //    goes through prepare_platform_json, which IS in this set.
-//  - execute_tests_*, execute_editorial, benchmark_testcases: informational
+//  - execute_tests_*, execute_editorial: informational
 //    steps that legitimately run LAST and must not undo completion.
 //    (execute_editorial being the last-started run is exactly what used to
 //    wrongly leave a finished pipeline stuck on "draft".)

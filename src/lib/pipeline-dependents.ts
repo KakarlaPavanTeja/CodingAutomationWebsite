@@ -8,8 +8,8 @@ import type { StepId, StepState } from "@/types/pipeline";
  *   - split_code depends on Generate Question, NOT testcases
  *   - generate_enrichment depends on Generate Question only
  *   - generate_brute_force feeds testcases AND editorial
- *   - select_testcases consumes the suite AND the wrong solutions, and benchmark
- *     consumes select_testcases' selected suite.
+ *   - select_testcases consumes the suite AND the wrong solutions (and benchmarks
+ *     the selected suite in the same pass — no separate benchmark step).
  */
 export const STEP_DATA_DEPS: Record<StepId, StepId[]> = {
   generate_question: [],
@@ -17,7 +17,6 @@ export const STEP_DATA_DEPS: Record<StepId, StepId[]> = {
   generate_testcases: ["generate_question", "generate_brute_force"],
   generate_wrong_solutions: ["generate_testcases"],
   select_testcases: ["generate_testcases", "generate_wrong_solutions"],
-  benchmark_testcases: ["select_testcases", "generate_wrong_solutions"],
   split_code: ["generate_question"],
   execute_tests_function: ["split_code", "generate_testcases"],
   execute_tests_nonfunction: ["generate_testcases"],

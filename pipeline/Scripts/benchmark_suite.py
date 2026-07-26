@@ -4,7 +4,8 @@ Benchmark harness for test-case suite strength (Component B).
 Pure local execution: mutation kill rate (B1), wrong-approach gate (B2),
 coverage-shape audit (B3), differential fuzz (B4).
 
-Standalone CLI + importable API for harden_suite.py.
+Standalone CLI + importable API. Read-only: reports a strength score and never
+mutates the suite (case selection + kill guarantees are owned by select_testcases).
 """
 
 from __future__ import annotations
@@ -933,97 +934,6 @@ def run_differential_fuzz(
     }
 
 
-# --------------------------------------------------------------------------- #
-# Fuzz-harden helpers (used by harden_suite)
-# --------------------------------------------------------------------------- #
-def fuzz_kill_survivors(
-    optimal_code: str,
-    test_cases: list[dict],
-    survivors: list[dict],
-    mutant_map: dict[str, Mutant],
-    brute_code: str | None = None,
-    description: str = "",
-    count: int = 300,
-    timeout: float = DEFAULT_RUN_TIMEOUT,
-    progress: bool = False,
-) -> list[dict]:
-    """Generate random/boundary inputs; keep those that kill surviving mutants."""
-    if not survivors:
-        return []
-    survivor_ids = {s["id"] for s in survivors}
-    max_n = parse_constraint_max_n(description) or 100
-    cap = min(max_n, 80)
-    random.seed(123)
-    new_cases: list[dict] = []
-    seen_inputs = {tc.get("input", "") for tc in test_cases}
-
-    size_pool: list[int] = []
-    for n in [1, 2, max(1, cap // 2), cap, max_n if max_n else cap]:
-        if n and n <= (max_n or cap):
-            size_pool.append(n)
-
-    # Generate all candidate inputs up front (deduped), then execute in batches —
-    # one process for the optimal over all inputs, one for brute, and one per
-    # survivor mutant — instead of a subprocess per (input x solution).
-    gen_inputs: list[str] = []
-    for _fi in range(count):
-        n = random.choice(size_pool) if size_pool else random.randint(1, cap)
-        inp = f"{n}\n" + " ".join(str(random.randint(-1000, 1000)) for _ in range(n))
-        if inp in seen_inputs:
-            continue
-        seen_inputs.add(inp)
-        gen_inputs.append(inp)
-    if not gen_inputs:
-        return []
-
-    # Keep inputs the optimal accepts; record expected output.
-    opt_results = run_solutions_batch(optimal_code, gen_inputs, timeout)
-    valid: list[tuple[str, str]] = [
-        (inp, normalize(out)) for inp, (out, s1) in zip(gen_inputs, opt_results) if s1 == "ok"
-    ]
-    # Cross-check against brute force where available.
-    if brute_code and valid:
-        bru_results = run_solutions_batch(brute_code, [inp for inp, _ in valid], timeout)
-        valid = [
-            (inp, exp)
-            for (inp, exp), (bout, bs) in zip(valid, bru_results)
-            if bs == "ok" and normalize(bout) == exp
-        ]
-    if not valid:
-        return []
-
-    valid_inputs = [inp for inp, _ in valid]
-    expected_by_input = dict(valid)
-
-    # An input kills a survivor when that mutant errors/timeouts or disagrees with
-    # the (already-validated) expected output. One batched run per survivor.
-    killer: set[str] = set()
-    for sid in survivor_ids:
-        m = mutant_map.get(sid)
-        if not m:
-            continue
-        mres = run_solutions_batch(m.code, valid_inputs, timeout)
-        for inp, (mout, mstatus) in zip(valid_inputs, mres):
-            if mstatus in ("timeout", "error") or normalize(mout) != expected_by_input[inp]:
-                killer.add(inp)
-    if progress:
-        print(f"    fuzz: {len(valid_inputs)} valid input(s), {len(killer)} killer case(s)", flush=True)
-
-    for inp, exp in valid:
-        if inp not in killer:
-            continue
-        n_val = parse_primary_n(inp)
-        bucket = derive_size_bucket(n_val, max_n, inp)
-        new_cases.append({
-            "input": inp,
-            "output": exp,
-            "weightage": 1.0,
-            "tags": [size_tag_from_bucket(bucket), "fuzz_harden", "adversarial"],
-            "order": 0,
-        })
-    return new_cases
-
-
 _SORTED_INPUT_RE = re.compile(
     r"\bsorted\b|\bascending order\b|\bnon-?decreasing\b|\bincreasing order\b"
     r"|\bin (?:ascending|increasing|sorted) order\b",
@@ -1147,77 +1057,6 @@ def _perturb_numeric_inputs(
         seen.add(cand)
         out.append(cand)
     return out
-
-
-def fuzz_kill_wrong_solutions(
-    optimal_code: str,
-    test_cases: list[dict],
-    wrong_solutions: list[tuple[str, str]],
-    brute_code: str | None = None,
-    count: int = 200,
-    timeout: float = BENCHMARK_RUN_TIMEOUT,
-    description: str = "",
-    progress: bool = False,
-    chunk: int = 40,
-    target_per_solution: int = 3,
-    max_seconds: float = 45.0,
-) -> list[dict]:
-    """Find inputs that kill surviving WRONG solutions (B2). Perturbs existing
-    inputs (format-preserving), validates against optimal (+ brute), and keeps
-    cases where a wrong solution disagrees. Processed in CHUNKS with early-stop
-    and a wall-time cap — a handful of discriminating cases per wrong solution is
-    enough, and blind perturbation can't always find subtle ones, so it must not
-    run unbounded."""
-    if not wrong_solutions:
-        return []
-    candidates = _perturb_numeric_inputs(test_cases, count, description=description)
-    if not candidates:
-        return []
-    max_n = parse_constraint_max_n(description) or 100
-    deadline = time.monotonic() + max_seconds
-
-    killer_cases: dict[str, str] = {}  # input -> expected
-    kills_per_sol = {name: 0 for name, _ in wrong_solutions}
-
-    for start in range(0, len(candidates), chunk):
-        if time.monotonic() > deadline:
-            if progress:
-                print(f"    wrong-soln harden: time cap reached ({max_seconds:.0f}s)", flush=True)
-            break
-        batch = candidates[start:start + chunk]
-        opt_results = run_solutions_batch(optimal_code, batch, timeout)
-        valid = [(inp, normalize(o)) for inp, (o, s) in zip(batch, opt_results) if s == "ok"]
-        if brute_code and valid:
-            bru = run_solutions_batch(brute_code, [i for i, _ in valid], timeout)
-            valid = [(i, e) for (i, e), (bo, bs) in zip(valid, bru) if bs == "ok" and normalize(bo) == e]
-        if valid:
-            vin = [i for i, _ in valid]
-            exp_by = dict(valid)
-            for name, code in wrong_solutions:
-                wres = run_solutions_batch(code, vin, timeout)
-                for inp, (wout, wstatus) in zip(vin, wres):
-                    if wstatus in ("timeout", "error") or normalize(wout) != exp_by[inp]:
-                        killer_cases.setdefault(inp, exp_by[inp])
-                        kills_per_sol[name] += 1
-        if progress:
-            print(f"    wrong-soln harden: {len(killer_cases)} killer case(s) after "
-                  f"{min(start + chunk, len(candidates))} candidate(s)", flush=True)
-        # Stop once every surviving wrong solution has enough discriminating cases.
-        if all(kills_per_sol[name] >= target_per_solution for name, _ in wrong_solutions):
-            break
-
-    new_cases: list[dict] = []
-    for inp, exp in killer_cases.items():
-        n_val = parse_primary_n(inp)
-        bucket = derive_size_bucket(n_val, max_n, inp)
-        new_cases.append({
-            "input": inp,
-            "output": exp,
-            "weightage": 1.0,
-            "tags": [size_tag_from_bucket(bucket), "wrong_soln_harden", "adversarial"],
-            "order": 0,
-        })
-    return new_cases
 
 
 _EXAMPLE_INPUT_RE = re.compile(r"\*\*Input:\*\*\s*```[^\n]*\n(.*?)```", re.S)
@@ -1413,6 +1252,7 @@ def run_benchmark(
     advisory_size: bool = False,
     timeout: float = BENCHMARK_RUN_TIMEOUT,
     fuzz_count: int = BENCHMARK_FUZZ_COUNT,
+    precomputed_b2: dict | None = None,
 ) -> BenchmarkReport:
     optimal_path = optimal_path or os.path.join("Outputs", "generatedFullCode", "PYTHON.py")
     testcases_path = testcases_path or os.path.join("Outputs", "testcases.json")
@@ -1455,8 +1295,16 @@ def run_benchmark(
             f"— below {min_kill:.0%} target"
         )
 
-    print("[B2] Wrong-approach gate", flush=True)
-    report.b2 = run_wrong_approach_gate(test_cases, timeout=timeout, progress=True)
+    if precomputed_b2 is not None:
+        # Merged select+benchmark step: select_testcases already ran every wrong
+        # solution over the pool and knows which the selected suite fails to catch
+        # (`uncatchable`). Reuse that verdict instead of re-executing every wrong
+        # solution over the suite — same answer, one fewer full-suite pass.
+        print("[B2] Wrong-approach gate (reused from selection)", flush=True)
+        report.b2 = precomputed_b2
+    else:
+        print("[B2] Wrong-approach gate", flush=True)
+        report.b2 = run_wrong_approach_gate(test_cases, timeout=timeout, progress=True)
     if report.b2.get("skipped"):
         pass
     elif report.b2.get("hard_fail"):

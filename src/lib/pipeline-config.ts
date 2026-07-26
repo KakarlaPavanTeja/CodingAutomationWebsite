@@ -70,22 +70,10 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
   },
   {
     id: "select_testcases",
-    label: "Select Test Cases",
+    label: "Validate & Benchmark Test Cases",
     description:
-      "Dedups exact-input duplicates, verifies brute-force TLE, scores wrong-solution kills, and selects the strongest suite (up to 150 cases).",
+      "Dedups exact-input duplicates, verifies brute-force TLE, scores wrong-solution kills, and selects the strongest suite (up to 150 cases) — then benchmarks it (injects bugs to measure kill rate, coverage, and fuzz) in the same pass. Read-only benchmark: reports a score, never changes the selected suite.",
     script: "Scripts/testcase_annotate.py",
-    subSteps: [],
-    hasLanguageSelector: false,
-    hasTestcaseCount: false,
-    needsMode: false,
-    llmUsage: "none",
-  },
-  {
-    id: "benchmark_testcases",
-    label: "Benchmark Test Cases",
-    description:
-      "Checks how strong your test cases are: it secretly injects small bugs into the solution and verifies the tests catch them. Read-only — it reports a score and never changes your tests.",
-    script: "Scripts/benchmark_suite.py",
     subSteps: [],
     hasLanguageSelector: false,
     hasTestcaseCount: false,
@@ -199,7 +187,6 @@ export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode)
     "generate_testcases",
     "generate_wrong_solutions",
     "select_testcases",
-    "benchmark_testcases",
   ];
 
   if (questionType === "nonfunction") {
@@ -345,10 +332,6 @@ export function buildCommand(
 
   if (stepId === "execute_tests_nonfunction") {
     args.push("--nonfunction");
-  }
-
-  if (stepId === "benchmark_testcases") {
-    args.push("--no-gate");
   }
 
   if (stepId === "select_testcases") {

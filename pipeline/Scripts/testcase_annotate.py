@@ -393,6 +393,43 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
         log(f"      ⚠ BELOW FLOOR: only {report['selected']} case(s) — the generator "
             f"pool was too small; consider raising the candidate count.")
     log(f"Wrote {report['selected']} case(s) → {tc_path}")
+
+    # Merged benchmark: report-only mutation/coverage/fuzz on the SELECTED suite.
+    # B2 (wrong-approach gate) reuses the kill data we just computed — `uncatchable`
+    # is exactly the set of wrong solutions the final suite fails to catch — so we
+    # never re-run the wrong solutions. Informational only: a benchmark failure must
+    # not fail selection, which is the step's real deliverable.
+    try:
+        from benchmark_suite import run_benchmark, print_report, DEFAULT_MIN_KILL
+        uncatchable = report.get("uncatchable") or []
+        b2 = {
+            "skipped": report.get("kills_total", 0) == 0,
+            "wrong_files": report.get("kills_total", 0),
+            "failures": [{"file": f, "reused_from_select": True} for f in uncatchable],
+            "hard_fail": len(uncatchable) > 0,
+        }
+        brute_path = None
+        for name in ("BRUTE_FORCE.py", "BRUTE.py"):
+            p = os.path.join(outputs_dir, "generatedFullCode", name)
+            if os.path.exists(p):
+                brute_path = p
+                break
+        if not brute_path:
+            p = os.path.join(outputs_dir, "generated_brute_force.py")
+            brute_path = p if os.path.exists(p) else None
+        log("")
+        log("=== BENCHMARK (report-only; injects bugs to measure suite strength) ===")
+        bench = run_benchmark(
+            optimal_path=os.path.join(outputs_dir, "generatedFullCode", "PYTHON.py"),
+            testcases_path=tc_path,
+            description_path=os.path.join(outputs_dir, "generated_description.md"),
+            brute_path=brute_path,
+            precomputed_b2=b2,
+        )
+        print_report(bench, DEFAULT_MIN_KILL, report_only=True)
+    except Exception as e:
+        log(f"⚠ benchmark (informational) skipped — {type(e).__name__}: {e}")
+
     return report
 
 
