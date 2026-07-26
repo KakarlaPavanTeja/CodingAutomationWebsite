@@ -529,7 +529,6 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
     globalLanguages,
     questionType,
     ownerTitle,
-    isAnyRunning,
     stateLoading,
     loadProblemState,
     runStep,
@@ -825,7 +824,6 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
   const handleStopGenerate = () => stopStep("generate_editorial");
   const handleStopExecute = () => stopStep("execute_editorial");
 
-  const pipelineBusy = stateLoading || isAnyRunning;
   // Generate Editorial only conflicts with its own runs — it reads the
   // description/solutions outputs and runs in an isolated workspace, so other
   // steps (e.g. generate_testcases) running concurrently must not disable it.
@@ -992,7 +990,7 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
             <Button
               size="sm"
               className="h-8"
-              disabled={!canExecute || pipelineBusy}
+              disabled={!canExecute || stateLoading}
               onClick={handleExecuteSolutions}
             >
               <Play className="mr-1.5 h-3.5 w-3.5" />
