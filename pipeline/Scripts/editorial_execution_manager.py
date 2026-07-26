@@ -39,6 +39,18 @@ from execution_manager_v2 import (
     write_execution_results_file,
 )
 
+# New-compiler batch path — same endpoint the pipeline's execute steps use.
+import execution_manager_v3 as emv3
+from execution_manager_v3 import (
+    LANG_CONFIG as V3_LANG_CONFIG,
+    NONFUNCTION_LANG_CONFIG as V3_NONFUNCTION_LANG_CONFIG,
+    _run_one_language,
+)
+
+# (approach, language) pairs poll concurrently — per-poll progress lines from
+# many threads would interleave into noise.
+emv3.QUIET = True
+
 import json
 
 STEP = "execute_editorial"
@@ -263,7 +275,63 @@ def _run_one(base_dir, mode, lang, config, prepared_code, driver, node_h,
              testcases, question_id, question_name, approach):
     """Run all testcases for a single (approach, language). Returns a list of
     test_res dicts; emits a sentinel line per testcase. Never raises.
-    Runs on a worker thread — must not touch shared mutable state."""
+    Runs on a worker thread — must not touch shared mutable state.
+
+    Routing mirrors the pipeline's execute steps: new-compiler batch (v3) for
+    C++/Python/Java, legacy per-testcase API (v2) for Node.js."""
+    v3_cfg_map = V3_LANG_CONFIG if mode == "function" else V3_NONFUNCTION_LANG_CONFIG
+    if lang in v3_cfg_map:
+        return _run_pair_v3(base_dir, mode, lang, v3_cfg_map[lang], prepared_code,
+                            driver, node_h, testcases, question_id, question_name,
+                            approach)
+    return _run_pair_v2(base_dir, mode, lang, config, prepared_code, driver,
+                        node_h, testcases, question_id, question_name, approach)
+
+
+def _run_pair_v3(base_dir, mode, lang, cfg, prepared_code, driver, node_h,
+                 testcases, question_id, question_name, approach):
+    """One batch submit + poll against the new compiler (same as execute_tests)."""
+    label = approach["label"]
+    index = approach["index"]
+    total = len(testcases)
+
+    if mode == "function":
+        code_files = [
+            (cfg["main_file"], driver),
+            (cfg.get("solution_file", cfg["solution"]), prepared_code),
+        ]
+        if lang == "C++" and node_h:
+            code_files.append(("node.h", node_h))
+    else:
+        code_files = [(cfg["main_file"], prepared_code)]
+
+    print(f"\n  [{label}] {lang}: batch submit of {total} testcase(s) to "
+          f"{emv3.NEW_COMPILER_URL}", flush=True)
+    try:
+        language_results, passed, _halted = _run_one_language(
+            base_dir, lang, code_files, cfg["main_file"], cfg["id"],
+            cfg.get("default_execution_time_limit", 5), testcases,
+            question_id, question_name, quiet=True,
+        )
+    except Exception as exc:
+        language_results = [{
+            "passed": False, "api_time": None, "memory_mb": None,
+            "status": "ERROR", "error": f"Execution error: {exc}",
+            "test_index": i + 1, "order": tc.get("order", i + 1),
+            "input": tc.get("input", ""),
+            "expected": (tc.get("output") or "").strip(),
+        } for i, tc in enumerate(testcases)]
+        passed = 0
+
+    for test_res in language_results:
+        emit_tc_result(STEP, label, index, lang, test_res, total=total)
+    print(f"    [{label}] {lang}: passed {passed}/{total}", flush=True)
+    return language_results
+
+
+def _run_pair_v2(base_dir, mode, lang, config, prepared_code, driver, node_h,
+                 testcases, question_id, question_name, approach):
+    """Legacy per-testcase compiler API — Node.js only (not on the new compiler)."""
     label = approach["label"]
     index = approach["index"]
     total = len(testcases)
