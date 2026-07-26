@@ -17,6 +17,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from llm_client import call_llm  # noqa: E402
 from usage_tracker import update_usage  # noqa: E402
 from Prompts.validatesolutionsprompt import get_validate_solutions_prompt  # noqa: E402
+from benchmark_suite import (  # noqa: E402
+    run_solutions_batch,
+    normalize,
+    is_open_ended_problem,
+    BENCHMARK_RUN_TIMEOUT,
+)
 
 
 def _parse_slm_json(content: str) -> dict | None:
@@ -61,3 +67,43 @@ def validate_solutions_llm(description, optimal_code, brute_code, *, _call=None,
         except Exception:
             pass
     return _parse_slm_json(content)
+
+
+def validate_examples(examples, optimal_code, brute_code, description, *, _batch=None):
+    """Run the SLM examples against the optimal (and brute). Advisory checks:
+    input-format (optimal didn't error), ground-truth (optimal output == SLM
+    expected), and optimal-vs-brute agreement (skipped for open-ended problems)."""
+    runner = _batch or (lambda code, inputs: run_solutions_batch(code, inputs, BENCHMARK_RUN_TIMEOUT))
+    inputs = [e.get("input", "") for e in examples]
+    if not inputs:
+        return {"example_results": [], "optimal_ok": True, "brute_ok": True}
+
+    opt = runner(optimal_code, inputs)
+    brute = runner(brute_code, inputs) if brute_code else [None] * len(inputs)
+    open_ended = is_open_ended_problem(description or "")
+
+    results = []
+    optimal_ok = True
+    brute_ok = True
+    for e, o, b in zip(examples, opt, brute):
+        out, status = o
+        fmt_ok = status != "error"
+        matches = status == "ok" and normalize(out) == normalize(e.get("expected_output", ""))
+        if not fmt_ok or not matches:
+            optimal_ok = False
+        rec = {
+            "input": e.get("input", ""),
+            "optimal_status": status,
+            "input_format_ok": fmt_ok,
+            "matches_expected": matches,
+        }
+        if b is not None:
+            bout, bstatus = b
+            agrees = open_ended or (
+                status == "ok" and bstatus == "ok" and normalize(bout) == normalize(out)
+            )
+            rec["brute_agrees"] = agrees
+            if not agrees:
+                brute_ok = False
+        results.append(rec)
+    return {"example_results": results, "optimal_ok": optimal_ok, "brute_ok": brute_ok}

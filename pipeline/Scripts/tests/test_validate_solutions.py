@@ -71,5 +71,47 @@ class TestValidateSolutionsLLM(unittest.TestCase):
         self.assertIsNone(out)
 
 
+class TestValidateExamples(unittest.TestCase):
+    def test_flags_format_error_and_mismatch_and_brute_disagreement(self):
+        from validate_solutions import validate_examples
+        examples = [
+            {"input": "1\n", "expected_output": "1\n"},   # ok, matches, brute agrees
+            {"input": "bad\n", "expected_output": "9\n"},  # optimal errors -> format flag
+            {"input": "2\n", "expected_output": "2\n"},    # optimal ok but wrong output
+        ]
+
+        def fake_batch(code, inputs):
+            if code == "OPT":
+                return [("1\n", "ok"), ("", "error"), ("5\n", "ok")]
+            return [("1\n", "ok"), ("", "error"), ("2\n", "ok")]  # BRUTE disagrees on case 3
+
+        res = validate_examples(examples, "OPT", "BRUTE", "Add numbers.", _batch=fake_batch)
+        rows = res["example_results"]
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(rows[0]["input_format_ok"] and rows[0]["matches_expected"] and rows[0]["brute_agrees"])
+        self.assertFalse(rows[1]["input_format_ok"])          # optimal errored
+        self.assertFalse(rows[2]["matches_expected"])         # 5 != 2
+        self.assertFalse(rows[2]["brute_agrees"])             # brute 2 != optimal 5
+        self.assertFalse(res["optimal_ok"])
+        self.assertFalse(res["brute_ok"])
+
+    def test_open_ended_never_fails_brute(self):
+        from validate_solutions import validate_examples
+        examples = [{"input": "1\n", "expected_output": "1\n"}]
+
+        def fake_batch(code, inputs):
+            return [("1\n", "ok")] if code == "OPT" else [("99\n", "ok")]
+
+        res = validate_examples(examples, "OPT", "BRUTE", "Return any valid answer.", _batch=fake_batch)
+        self.assertTrue(res["example_results"][0]["brute_agrees"])
+        self.assertTrue(res["brute_ok"])
+
+    def test_no_examples_is_ok(self):
+        from validate_solutions import validate_examples
+        res = validate_examples([], "OPT", "BRUTE", "d", _batch=lambda c, i: [])
+        self.assertEqual(res["example_results"], [])
+        self.assertTrue(res["optimal_ok"] and res["brute_ok"])
+
+
 if __name__ == "__main__":
     unittest.main()
