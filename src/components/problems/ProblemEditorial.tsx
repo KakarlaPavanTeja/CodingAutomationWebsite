@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { StepLogPane } from "@/components/pipeline/StepLogPane";
 import { usePipeline } from "@/lib/pipeline-context";
 import { getStepConfig } from "@/lib/pipeline-config";
 import {
@@ -560,6 +561,31 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
   const genRunning = generateState?.status === "running";
   const execRunning = executeState?.status === "running";
 
+  // Live logs for Generate Editorial: shown while it runs (and kept on
+  // failure/stop for debugging), hidden automatically once the editorial is
+  // created. The user can also close the pane manually.
+  const [genLogsClosed, setGenLogsClosed] = useState(false);
+  const [genLogsExpanded, setGenLogsExpanded] = useState(true);
+  const showGenLogs =
+    !genLogsClosed &&
+    !!generateState &&
+    ["running", "stopping", "failed", "stopped"].includes(generateState.status);
+  const genLogPane = showGenLogs && generateState ? (
+    <div className={genLogsExpanded ? "flex h-72 flex-col" : undefined}>
+      <StepLogPane
+        label="Generate Editorial"
+        status={generateState.status}
+        problemId={problemId}
+        logStepId="generate_editorial"
+        activeRunId={generateState.activeRunId}
+        liveLogs={generateState.logs}
+        isExpanded={genLogsExpanded}
+        onToggleExpand={() => setGenLogsExpanded((v) => !v)}
+        onClose={() => setGenLogsClosed(true)}
+      />
+    </div>
+  ) : null;
+
   useEffect(() => {
     loadProblemState(problemId);
   }, [problemId, loadProblemState]);
@@ -630,6 +656,11 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
   const prevGenStatus = useRef(generateState?.status);
   useEffect(() => {
     const status = generateState?.status;
+    if (status === "running" && prevGenStatus.current !== "running") {
+      // New run: re-open the log pane even if it was closed last time.
+      setGenLogsClosed(false);
+      setGenLogsExpanded(true);
+    }
     if (prevGenStatus.current === "running" && status === "completed") {
       load();
       fetchPrereqs();
@@ -850,6 +881,7 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
             )}
           </div>
         </div>
+        {genLogPane}
         <div className="rounded-lg border bg-card p-10 text-center">
           <BookOpen className="mx-auto h-10 w-10 text-muted-foreground/40" />
           <h3 className="mt-3 text-sm font-semibold">No editorial yet</h3>
@@ -1017,6 +1049,8 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
           </div>
         );
       })()}
+
+      {genLogPane}
 
       {/* Body */}
       <div className="rounded-lg border bg-card p-5 sm:p-6">
