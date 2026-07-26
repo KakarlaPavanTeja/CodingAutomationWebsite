@@ -439,12 +439,29 @@ COUNT the derived buckets against targets ({size_targets_inline}). If a bucket i
 ADD constraint-scaled cases for it before writing JSON. Do NOT assert or exit on the
 counts — over-supplying a bucket is fine; the downstream selector trims to a balanced suite.
 
+(MULTI-AXIS STRESS — MANDATORY when constraints expose MORE THAN ONE resource axis):
+Many problems have TWO independent size axes: a COUNT (n items) and a SECONDARY resource
+(per-item/total string length, value magnitude, coordinate range, #queries). Example:
+`n <= 1e5` AND `sum of |s_i| <= 5e5`. Scaling ONLY the count axis produces stress cases of
+many TINY items — a brute force whose per-pair cost depends on the SECONDARY axis (e.g. an
+O(m^2) rotation/substring check) then survives, because m stays tiny. This exact failure
+shipped suites where a quadratic brute force passed 152/153.
+For EVERY secondary axis found in the constraints, the plan MUST include stress cases at:
+  1. count axis max, secondary minimal      (n = MAX_N, tiny items — the usual shape)
+  2. count MINIMAL, secondary at ITS cap    (e.g. n = 2 with total length at the cap:
+     two ~250K-char strings when sum|s| <= 5e5) — derived bucket will be small/edge; that
+     is EXPECTED and CORRECT, do NOT inflate n to please the audit. Include them anyway.
+  3. balanced middle (both axes at ~sqrt of their joint budget, e.g. n=10 x len 50K)
+Construct these adversarially for the likely wrong approaches: same-length pairwise
+NON-equivalent items (forces full quadratic scans), near-miss pairs that defeat early
+exits (differ only at the last compared position), and worst-case-shaped single items.
+
 (PER-PROBLEM-TYPE REQUIRED SCENARIOS):
 Detect the problem family from the statement + solution and include its mandatory cases.
 | Family | Must-include scenarios |
 |--------|------------------------|
 | Array | all-negative, all-zero, all-equal, single element, min & max values, heavy duplicates, sorted asc, reverse sorted |
-| String | empty (if allowed), single char, all-same char, palindrome, no-match, max length, spaces/unicode if in alphabet |
+| String | empty (if allowed), single char, all-same char, palindrome, no-match, max length, FEW VERY LONG strings at the total-length cap (see multi-axis stress), spaces/unicode if in alphabet |
 | Tree | single node, fully left-skewed (linked-list shape), fully right-skewed, perfectly balanced, max depth |
 | Graph | single node, disconnected components, self-loop (if allowed), complete graph, line/path graph, max edges |
 | DP | n=0 (if allowed), n=1, the impossible/"-1" case, greedy-beats-correct trap, all-zeros, max n |
