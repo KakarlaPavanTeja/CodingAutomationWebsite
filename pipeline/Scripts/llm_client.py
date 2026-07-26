@@ -84,6 +84,7 @@ _PURPOSE_DEFAULTS: dict[str, str] = {
     "editorial": _GPT_54,
     "harden": _GPT_54,
     "wrong_solutions": _GPT_54,
+    "validate_solutions": _GEMINI_FLASH,
 }
 
 # Default reasoning + fallback ladder per purpose (429/5xx only).
@@ -133,6 +134,12 @@ _PURPOSE_CONFIG: dict[str, dict] = {
             {"model": _GPT_55, "effort": "medium"},
         ],
     },
+    "validate_solutions": {
+        "default_effort": "low",
+        "fallbacks": [
+            {"model": _GPT_54, "effort": "low"},
+        ],
+    },
 }
 
 # Testcase tier defaults when OPENROUTER_MODEL_TESTCASES is not pinned.
@@ -168,6 +175,7 @@ _ENV_SUFFIX = {
     "editorial": "EDITORIAL",
     "harden": "HARDEN",
     "wrong_solutions": "WRONG_SOLUTIONS",
+    "validate_solutions": "VALIDATE_SOLUTIONS",
 }
 
 
@@ -207,6 +215,7 @@ _DEFAULT_MAX_TOKENS: dict[str, int] = {
     "enrichment": 16000,
     "editorial": 100000,
     "wrong_solutions": 48000,
+    "validate_solutions": 8000,
 }
 
 
@@ -919,7 +928,7 @@ def _resolve_reasoning_effort(purpose: str) -> str | None:
         raw = os.environ.get("OPENAI_REASONING_EFFORT_HARDEN")
         effort = "medium" if raw is None else str(raw).strip().lower()
         return effort if effort in _REASONING_EFFORT_ALLOWED else None
-    if p in {"code", "wrong_solutions", "enrichment", "chat"}:
+    if p in {"code", "wrong_solutions", "enrichment", "chat", "validate_solutions"}:
         env_key = f"OPENAI_REASONING_EFFORT_{_ENV_SUFFIX[p]}"
         raw = os.environ.get(env_key)
         if raw is None and p == "chat":
