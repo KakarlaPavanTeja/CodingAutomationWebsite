@@ -3,6 +3,20 @@ _CONSTRAINTS_NO_META = """
 """
 
 
+# Applied to EVERY scenario-wrapped description (light/moderate/heavy). A themed
+# story must never make the task harder to understand than the plain version —
+# the failure mode is a riddle where the actual operation is buried in metaphor.
+_SCENARIO_CLARITY_MANDATE = """
+**CLARITY OVER DISGUISE (NON-NEGOTIABLE — HIGHEST PRIORITY, OVERRIDES THE IMMERSION GOAL):**
+The scenario adds flavor; it must NEVER make the problem harder to understand than the plain, un-themed version. A solver who has never seen the original algorithm must be able to work out EXACTLY what to compute from your text alone — with no reverse-engineering of the story. Enforce ALL of the following:
+- **Define every object concretely, in literal terms, the first time it appears.** Say what each story object actually IS, e.g. "a ribbon is a lowercase string; its even strand is the characters at indices `0, 2, 4, ...`". Do not leave the mapping to be guessed from the metaphor.
+- **Define every operation mechanically and unambiguously.** Any transformation the solver must implement (rotation, reindexing, pairing, sorting, merging, …) must be spelled out precisely, including edge cases — e.g. what "rotate right by `k`" does, that it is cyclic, and that `k = 0` is allowed. Never rely on the reader to infer an operation from the narrative.
+- **Illustrate any non-obvious operation inline with a tiny concrete instance**, right after you define it and separate from the Examples section, e.g. "rotating `ac` right by 1 gives `ca`".
+- **State the exact question in one crisp, literal sentence** using the concrete terms — not only the poetic framing.
+- **No riddles.** If a sentence must be decoded before it can be acted on, rewrite it literally. Flavor decorates the specification; it never encodes it.
+"""
+
+
 def get_structure_only_prompt(problem_name, question_type, user_code):
     """
     Prompt for scenario_level == "none".
@@ -517,6 +531,7 @@ You MUST use the `USER CODE` provided below as the absolute SOURCE OF TRUTH for 
 Generate a comprehensive **Coding Question Description** that is REPHRASED and uses NEW variable/function names.
 
 {rephrasing_mode}
+{_SCENARIO_CLARITY_MANDATE}
 
 **NAMING REQUIREMENTS (ALWAYS APPLY):**
 
@@ -787,6 +802,7 @@ Use the `USER CODE` below as the absolute source of truth for **Input Format** a
 ```
 
 {rephrasing}
+{_SCENARIO_CLARITY_MANDATE}
 
 **CRITICAL: DO NOT COPY EXAMPLES** from the input problem. Invent exactly 2 new valid examples.
 
