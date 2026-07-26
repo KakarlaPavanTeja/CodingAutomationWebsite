@@ -19,6 +19,10 @@
 # production
 /build
 
+.gitignore
+
+pipeline/QUALITY_AUDIT.md
+
 # misc
 .DS_Store
 *.pem
