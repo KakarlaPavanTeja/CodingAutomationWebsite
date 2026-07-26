@@ -17,6 +17,14 @@ The scenario adds flavor; it must NEVER make the problem harder to understand th
 """
 
 
+# Applied to the Input Format of EVERY builder (none → heavy). The failure mode
+# is hedged layout prose like "may appear on separate lines or on the same line,
+# because the input is read token by token" — which never tells the solver the
+# actual layout.
+_INPUT_LAYOUT_RULE = """
+- **STATE ONE EXACT LAYOUT — NO HEDGING (APPLIES AT EVERY SCENARIO LEVEL).** Commit to a SINGLE concrete input layout and describe it precisely. NEVER write vague either-or phrasing such as "may appear on separate lines or on the same line", "in any whitespace-separated form", or "because the input is read token by token". Even when the `USER CODE` reads token-by-token (`cin >>`, `scanf`, `input().split()`) and would technically accept any whitespace, pick the ONE layout shown in your Examples and describe THAT. Be explicit about what sits on each line and the separator between items — e.g. "The first line contains the integer `n`." then "The second line contains the `n` strings separated by single spaces.", OR "Each of the next `n` lines contains one string." when that is what the Examples show. The layout you describe MUST match the Input blocks of your Examples exactly (same lines, same separators)."""
+
+
 def get_structure_only_prompt(problem_name, question_type, user_code):
     """
     Prompt for scenario_level == "none".
@@ -136,7 +144,7 @@ Your response MUST END immediately after the **Output Format** section.
 - Title: **Input Format** followed by a blank line.
 - Describe the input structure consistent with the ORIGINAL examples and the `USER CODE` logic.
 - **BULLET POINTS**: Use bullet points to describe inputs line-by-line or item-by-item.
-- Keep the original variable names.
+- Keep the original variable names.{_INPUT_LAYOUT_RULE}
 
 **Output Format**
 - Title: **Output Format** followed by a blank line.
@@ -663,7 +671,7 @@ Your response MUST END immediately after the **Output Format** section.
 - Examples of good phrasing:
   - "- The first string represents `text`, the string to be matched."
   - "- The second string represents `regex`, the pattern to match against."
-- Your description MUST be consistent with the Examples you generated earlier.
+- Your description MUST be consistent with the Examples you generated earlier.{_INPUT_LAYOUT_RULE}
 
 **Output Format**
 - Title: **Output Format** followed by a blank line.
@@ -740,7 +748,7 @@ The rendered page does NOT support LaTeX/MathJax. Convert all math notation to c
 - Start immediately with the rebuilt description text (no title line). Break into short lines per rule/objective.
 
 **Input Format**
-- Title: **Input Format** then a blank line. Bullet points describing stdin line-by-line, consistent with the ORIGINAL examples and the `USER CODE`. Keep original variable names.
+- Title: **Input Format** then a blank line. Bullet points describing stdin line-by-line, consistent with the ORIGINAL examples and the `USER CODE`. Keep original variable names.{_INPUT_LAYOUT_RULE}
 
 **Output Format**
 - Title: **Output Format** then a blank line. Bullet points describing stdout, consistent with the ORIGINAL examples and `USER CODE`.
@@ -827,7 +835,7 @@ Use the `USER CODE` below as the absolute source of truth for **Input Format** a
 - Code fences in examples: bare ``` with no language tag
 
 **Input Format / Output Format:**
-- Describe stdin/stdout line-by-line based on USER CODE
+- Describe stdin/stdout line-by-line based on USER CODE{_INPUT_LAYOUT_RULE}
 - State explicitly whether output is printed or returned (usually printed for full programs)
 - **DETERMINISTIC ANSWER (CRITICAL):** if the task could admit MORE THAN ONE valid output
   (e.g. indices of a pair summing to k when several pairs qualify, "any valid arrangement",
