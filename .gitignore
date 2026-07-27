@@ -46,8 +46,11 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Claude Code
-.claude/
+# Claude Code — local settings stay private, shared skills are committed.
+# `.claude/*` (not `.claude/`) is required: git cannot re-include a path whose
+# parent directory is excluded, so a bare `!.claude/skills/` would do nothing.
+.claude/*
+!.claude/skills/
 
 # python build artifacts
 *.pyc
