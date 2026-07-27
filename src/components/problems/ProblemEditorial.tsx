@@ -585,6 +585,29 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
     </div>
   ) : null;
 
+  // Same live-log treatment for Execute Solutions (execute_editorial).
+  const [execLogsClosed, setExecLogsClosed] = useState(false);
+  const [execLogsExpanded, setExecLogsExpanded] = useState(true);
+  const showExecLogs =
+    !execLogsClosed &&
+    !!executeState &&
+    ["running", "stopping", "failed", "stopped"].includes(executeState.status);
+  const execLogPane = showExecLogs && executeState ? (
+    <div className={execLogsExpanded ? "flex h-72 flex-col" : undefined}>
+      <StepLogPane
+        label="Execute Solutions"
+        status={executeState.status}
+        problemId={problemId}
+        logStepId="execute_editorial"
+        activeRunId={executeState.activeRunId}
+        liveLogs={executeState.logs}
+        isExpanded={execLogsExpanded}
+        onToggleExpand={() => setExecLogsExpanded((v) => !v)}
+        onClose={() => setExecLogsClosed(true)}
+      />
+    </div>
+  ) : null;
+
   useEffect(() => {
     loadProblemState(problemId);
   }, [problemId, loadProblemState]);
@@ -671,6 +694,11 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
   const prevExecStatus = useRef(executeState?.status);
   useEffect(() => {
     const status = executeState?.status;
+    if (status === "running" && prevExecStatus.current !== "running") {
+      // New run: re-open the log pane even if it was closed last time.
+      setExecLogsClosed(false);
+      setExecLogsExpanded(true);
+    }
     if (prevExecStatus.current === "running" && status !== "running") {
       onStatusChange?.();
     }
@@ -1051,6 +1079,7 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
       })()}
 
       {genLogPane}
+      {execLogPane}
 
       {/* Body */}
       <div className="rounded-lg border bg-card p-5 sm:p-6">
