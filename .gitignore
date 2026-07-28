@@ -18,6 +18,9 @@
 /graphify-out
 # production
 /build
+pipeline/graphify-out/
+scripts/com.user.cp-auto-resume.plist
+scripts/cp-auto-resume.sh
 
 .gitignore
 

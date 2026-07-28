@@ -196,6 +196,35 @@ export function extractQuestionFromFile(raw: string): PlatformQuestion {
   return items[0];
 }
 
+/** Platform JSON nests the human-facing fields under `question`. */
+function innerQuestion(question: PlatformQuestion): Record<string, unknown> {
+  const inner = question.question;
+  return inner && typeof inner === "object" ? (inner as Record<string, unknown>) : {};
+}
+
+/** EASY | MEDIUM | HARD, from either the nested or a flattened question shape. */
+export function readDifficulty(question: PlatformQuestion): string | null {
+  const raw = innerQuestion(question).difficulty ?? question.difficulty;
+  return typeof raw === "string" && raw.trim() ? raw.trim().toUpperCase() : null;
+}
+
+/** Question title, used to tell rows apart when they all came from one file. */
+export function readShortText(question: PlatformQuestion): string | null {
+  const raw = innerQuestion(question).short_text ?? question.short_text;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
+}
+
+/** Move one entry, clamping out-of-range targets to a no-op. Order of the exam JSON. */
+export function moveQuestion<T>(rows: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || from >= rows.length || to < 0 || to >= rows.length) {
+    return rows;
+  }
+  const next = [...rows];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
 export function sumQuestionMarks(rows: { marks: number }[]): number {
   return round2(rows.reduce((a, r) => a + r.marks, 0));
 }

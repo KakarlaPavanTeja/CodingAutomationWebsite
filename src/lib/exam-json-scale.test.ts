@@ -2,14 +2,24 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildExamJsonFromQuestions,
+  moveQuestion,
   parseQuestionInput,
   parseQuestionsInput,
+  readDifficulty,
+  readShortText,
 } from "./exam-json-scale";
 
 const question = (n: number) => ({
   short_text: `q${n}`,
   total_score: 10,
   test_cases: [{ weightage: 3 }, { weightage: 7 }],
+});
+
+/** Shape produced by the Python pipeline: human fields nested under `question`. */
+const platformQuestion = (difficulty: unknown) => ({
+  total_score: 10,
+  test_cases: [{ weightage: 3 }, { weightage: 7 }],
+  question: { difficulty, short_text: "Two Sum", content: "..." },
 });
 
 test("parseQuestionsInput reads every question in a multi-question file", () => {
@@ -56,6 +66,44 @@ test("buildExamJsonFromQuestions scales each question's weightage to its marks",
   assert.deepEqual(
     meta.map((m) => m.originalTotalScore),
     [10, 10, 10],
+  );
+});
+
+test("readDifficulty reads the nested pipeline shape, normalised", () => {
+  assert.equal(readDifficulty(platformQuestion("medium")), "MEDIUM");
+  assert.equal(readDifficulty(platformQuestion(" Hard ")), "HARD");
+  assert.equal(readShortText(platformQuestion("EASY")), "Two Sum");
+});
+
+test("readDifficulty falls back to a flat shape and reports absence", () => {
+  assert.equal(readDifficulty({ difficulty: "EASY", test_cases: [] }), "EASY");
+  assert.equal(readDifficulty(platformQuestion("")), null);
+  assert.equal(readDifficulty(platformQuestion(3)), null);
+  assert.equal(readDifficulty({ test_cases: [] }), null);
+  assert.equal(readShortText({ test_cases: [] }), null);
+});
+
+test("moveQuestion reorders and leaves out-of-range moves alone", () => {
+  assert.deepEqual(moveQuestion(["a", "b", "c"], 2, 0), ["c", "a", "b"]);
+  assert.deepEqual(moveQuestion(["a", "b", "c"], 0, 1), ["b", "a", "c"]);
+  assert.deepEqual(moveQuestion(["a", "b", "c"], 0, -1), ["a", "b", "c"]);
+  assert.deepEqual(moveQuestion(["a", "b", "c"], 2, 3), ["a", "b", "c"]);
+  assert.deepEqual(moveQuestion(["a", "b", "c"], 1, 1), ["a", "b", "c"]);
+});
+
+test("row order drives the order of the generated exam JSON", () => {
+  const parsed = parseQuestionsInput(JSON.stringify([question(1), question(2), question(3)]));
+  const rows = parsed.map((q, i) => ({ question: q, marks: 30 + i * 5, fileName: `f${i}` }));
+  const reordered = moveQuestion(rows, 2, 0);
+  const { examJson } = buildExamJsonFromQuestions(reordered, 105);
+  assert.deepEqual(
+    examJson.map((e) => e.short_text),
+    ["q3", "q1", "q2"],
+  );
+  // Marks travel with their question, they are not positional.
+  assert.deepEqual(
+    examJson.map((e) => e.total_score),
+    [40, 30, 35],
   );
 });
 

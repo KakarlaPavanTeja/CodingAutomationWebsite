@@ -1,12 +1,25 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { Download, FileJson, Loader2, Plus, Minus, Upload, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Download,
+  FileJson,
+  Loader2,
+  Plus,
+  Minus,
+  Upload,
+  X,
+} from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
   buildExamJsonFromQuestions,
   distributeMarksEvenly,
+  moveQuestion,
+  readDifficulty,
   readOriginalTotalScore,
+  readShortText,
   parseQuestionsInput,
   sumQuestionMarks,
   type PlatformQuestion,
@@ -40,6 +53,33 @@ function emptyRow(): QuestionRow {
 
 async function readJsonFile(file: File): Promise<string> {
   return file.text();
+}
+
+const DIFFICULTY_STYLES: Record<string, string> = {
+  EASY: "bg-green-500/15 text-green-700 dark:text-green-400",
+  MEDIUM: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+  HARD: "bg-red-500/15 text-red-700 dark:text-red-400",
+};
+
+function DifficultyBadge({ question }: { question: PlatformQuestion }) {
+  const difficulty = readDifficulty(question);
+  if (!difficulty) {
+    return (
+      <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        No difficulty
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+        DIFFICULTY_STYLES[difficulty] ?? "bg-muted text-muted-foreground",
+      )}
+    >
+      {difficulty}
+    </span>
+  );
 }
 
 export default function PrepareExamJsonPage() {
@@ -152,6 +192,11 @@ export default function PrepareExamJsonPage() {
         : `${ok} question(s) loaded — marks split evenly`,
       failed ? "error" : "success",
     );
+  };
+
+  /** Row order is the order questions appear in the generated exam JSON. */
+  const moveRow = (from: number, to: number) => {
+    setRows((prev) => moveQuestion(prev, from, to));
   };
 
   const clearFile = (index: number) => {
@@ -299,7 +344,8 @@ export default function PrepareExamJsonPage() {
                 file containing every question (an array of{" "}
                 <code className="text-xs">coding_questions.json</code> entries). It
                 creates a row per question and splits marks evenly. Or fill rows one
-                at a time below.
+                at a time below. Rows are written to the exam JSON top to bottom — use
+                the arrows to reorder.
               </CardDescription>
             </div>
             <div className="flex items-center gap-3">
@@ -340,9 +386,45 @@ export default function PrepareExamJsonPage() {
               className="grid gap-3 rounded-lg border p-3 sm:grid-cols-[1fr_7rem]"
             >
               <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">
-                  Question {index + 1}
-                </Label>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Label className="shrink-0 text-xs text-muted-foreground">
+                      Question {index + 1}
+                    </Label>
+                    {row.question && (
+                      <>
+                        <span className="truncate text-sm font-medium">
+                          {readShortText(row.question) ?? "Untitled question"}
+                        </span>
+                        <DifficultyBadge question={row.question} />
+                      </>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => moveRow(index, index - 1)}
+                      disabled={index === 0}
+                      aria-label={`Move question ${index + 1} up`}
+                    >
+                      <ArrowUp className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => moveRow(index, index + 1)}
+                      disabled={index === rows.length - 1}
+                      aria-label={`Move question ${index + 1} down`}
+                    >
+                      <ArrowDown className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <input
                     ref={(el) => {

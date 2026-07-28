@@ -3,13 +3,18 @@
  * `problems` row, uploads Inputs/ + Outputs/ to object storage, and records
  * `llm_usage` rows marking the content as Claude-generated.
  *
+ * Everything about the problem is derived from the run tree itself — the
+ * headers in Inputs/problem.md and the packaged coding_questions.json — so
+ * there is nothing to hand-edit between questions.
+ *
  * Dry run (default) prints every write and touches nothing:
- *   npx tsx attach_problem.mts
+ *   npx tsx scripts/attach-manual-run.mts --run ~/cp-questions/q1-rubrik-towers
  * Execute:
- *   npx tsx attach_problem.mts --execute
+ *   npx tsx scripts/attach-manual-run.mts --run ~/cp-questions/q1-rubrik-towers --execute
  */
 import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { config as loadEnv } from "dotenv";
 import postgres from "postgres";
@@ -18,22 +23,74 @@ import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 const REPO = "/Users/kakarlapavanteja/Content/CodingAutomationWebsite";
 loadEnv({ path: path.join(REPO, ".env.local"), quiet: true });
 
-const RUN = "/private/tmp/claude-501/-Users-kakarlapavanteja-Downloads/e9dbab6f-6f02-40d1-a9df-34b63374234b/scratchpad/run";
 const OWNER = "a1581635-8be3-441f-ba39-12cb39f1dc93"; // kakarla.pavanteja@nxtwave.co.in
 const EXECUTE = process.argv.includes("--execute");
 
-const PROBLEM = {
-  createdBy: OWNER,
-  name: "Message Requirement Fulfillment",
-  questionType: "function",
-  structureType: "standard",
-  mode: "practice",
-  scenarioLevel: "none",
-  difficulty: "easy",
-  score: 100,
-  languages: ["python", "cpp", "java", "nodejs"],
-  status: "completed",
+function arg(flag: string): string | undefined {
+  const i = process.argv.indexOf(flag);
+  return i === -1 ? undefined : process.argv[i + 1];
+}
+
+const runArg = arg("--run");
+if (!runArg) throw new Error("--run <dir> is required (the pipeline run tree)");
+const RUN = path.resolve(runArg.replace(/^~(?=$|\/)/, os.homedir()));
+
+/**
+ * Re-upload a run tree over an already-attached problem. A pipeline session can
+ * keep rebuilding after the attach, which leaves the platform serving a stale
+ * suite; this refreshes the artifacts without minting a new problem id or
+ * duplicating the llm_usage rows.
+ */
+const REFRESH = arg("--refresh");
+
+/** Platform language enum in coding_questions.json -> `problems.languages` value. */
+const LANG: Record<string, string> = {
+  PYTHON: "python",
+  CPP: "cpp",
+  JAVA: "java",
+  NODE_JS: "nodejs",
 };
+
+/** Read the `# Header: value` lines the pipeline expects at the top of problem.md. */
+async function readHeaders(): Promise<Record<string, string>> {
+  const md = await readFile(path.join(RUN, "Inputs", "problem.md"), "utf8");
+  const out: Record<string, string> = {};
+  for (const line of md.split("\n").slice(0, 12)) {
+    const m = /^#\s*([^:]+):\s*(.+)$/.exec(line.trim());
+    if (m) out[m[1].trim().toLowerCase()] = m[2].trim();
+  }
+  return out;
+}
+
+async function buildProblem() {
+  const h = await readHeaders();
+  const pkg = JSON.parse(
+    await readFile(path.join(RUN, "Outputs", "forJSONPreparation", "coding_questions.json"), "utf8"),
+  );
+  const q = Array.isArray(pkg) ? pkg[0] : pkg;
+
+  const languages = q.coding_question_details.map((c: { language: string }) => {
+    const mapped = LANG[c.language];
+    if (!mapped) throw new Error(`unknown language in package: ${c.language}`);
+    return mapped;
+  });
+
+  const name = h["problem"] ?? q.question.short_text;
+  if (!name) throw new Error("could not determine problem name");
+
+  return {
+    createdBy: OWNER,
+    name,
+    questionType: h["question type"] ?? "function",
+    structureType: h["type"] ?? "standard",
+    mode: "practice",
+    scenarioLevel: h["scenario level"] ?? "none",
+    difficulty: String(q.question.difficulty).toLowerCase(),
+    score: q.total_score,
+    languages,
+    status: "completed",
+  };
+}
 
 /** One row per LLM-backed pipeline step. Tokens/cost are 0 — these were produced
  *  in a Claude Code session, not through OpenRouter, so there is no spend to report. */
@@ -100,6 +157,7 @@ async function walk(dir: string, base = ""): Promise<string[]> {
 
 async function main() {
   if (!existsSync(RUN)) throw new Error(`run tree not found: ${RUN}`);
+  const PROBLEM = await buildProblem();
 
   const inputs = await walk(path.join(RUN, "Inputs"));
   const outputs = await walk(path.join(RUN, "Outputs"));
@@ -110,7 +168,9 @@ async function main() {
   }
 
   console.log(EXECUTE ? "=== EXECUTING ===" : "=== DRY RUN (no writes) ===");
-  console.log("\n[1] problems row");
+  console.log(`run:  ${RUN}`);
+  console.log(`mode: ${REFRESH ? `REFRESH existing problem ${REFRESH}` : "ATTACH new problem"}`);
+  console.log(`\n[1] problems row${REFRESH ? " (update score/difficulty only)" : ""}`);
   console.log(JSON.stringify(PROBLEM, null, 2));
   console.log("\n[2] object storage");
   console.log(`    ${inputs.length} input file(s), ${outputs.length} output file(s), ${(bytes / 1024).toFixed(0)} KB total`);
@@ -119,8 +179,12 @@ async function main() {
   for (const f of outputs.slice(0, 10)) console.log(`      outputs/${f}`);
   if (outputs.length > 10) console.log(`      ... ${outputs.length - 10} more`);
   console.log("\n[3] llm_usage rows");
-  console.log(`    ${LLM_STEPS.length} rows | model=${MODEL} account=${ACCOUNT} tokens=0 cost=0`);
-  for (const s of LLM_STEPS) console.log(`      ${s.stepId.padEnd(26)} purpose=${s.purpose}`);
+  if (REFRESH) {
+    console.log("    skipped — the rows from the original attach still stand");
+  } else {
+    console.log(`    ${LLM_STEPS.length} rows | model=${MODEL} account=${ACCOUNT} tokens=0 cost=0`);
+    for (const s of LLM_STEPS) console.log(`      ${s.stepId.padEnd(26)} purpose=${s.purpose}`);
+  }
 
   if (!EXECUTE) {
     console.log("\nNothing written. Re-run with --execute to apply.");
@@ -129,17 +193,44 @@ async function main() {
 
   const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
   try {
-    const [row] = await sql`
-      insert into problems
-        (created_by, name, question_type, structure_type, mode, scenario_level,
-         difficulty, score, languages, status)
-      values
-        (${PROBLEM.createdBy}, ${PROBLEM.name}, ${PROBLEM.questionType},
-         ${PROBLEM.structureType}, ${PROBLEM.mode}, ${PROBLEM.scenarioLevel},
-         ${PROBLEM.difficulty}, ${PROBLEM.score}, ${PROBLEM.languages}, ${PROBLEM.status})
-      returning id`;
-    const problemId: string = row.id;
-    console.log(`\n  problems row created: ${problemId}`);
+    let problemId: string;
+
+    if (REFRESH) {
+      const [existing] = await sql`
+        select id, name from problems where id = ${REFRESH} and deleted_at is null`;
+      if (!existing) throw new Error(`no live problem with id ${REFRESH}`);
+      if (existing.name !== PROBLEM.name) {
+        throw new Error(
+          `refusing to refresh: ${REFRESH} is "${existing.name}" but this run is ` +
+            `"${PROBLEM.name}". Wrong problem id?`,
+        );
+      }
+      problemId = existing.id;
+      console.log(`\n  refreshing existing problem: ${problemId}`);
+    } else {
+      // Re-running this script would otherwise silently create a second copy.
+      const dupes = await sql`
+        select id from problems
+        where created_by = ${OWNER} and name = ${PROBLEM.name} and deleted_at is null`;
+      if (dupes.length > 0) {
+        throw new Error(
+          `"${PROBLEM.name}" is already attached (${dupes.map((d) => d.id).join(", ")}). ` +
+            `Re-run with --refresh <id> to overwrite its artifacts, or rename this run.`,
+        );
+      }
+
+      const [row] = await sql`
+        insert into problems
+          (created_by, name, question_type, structure_type, mode, scenario_level,
+           difficulty, score, languages, status)
+        values
+          (${PROBLEM.createdBy}, ${PROBLEM.name}, ${PROBLEM.questionType},
+           ${PROBLEM.structureType}, ${PROBLEM.mode}, ${PROBLEM.scenarioLevel},
+           ${PROBLEM.difficulty}, ${PROBLEM.score}, ${PROBLEM.languages}, ${PROBLEM.status})
+        returning id`;
+      problemId = row.id;
+      console.log(`\n  problems row created: ${problemId}`);
+    }
 
     let uploaded = 0;
     for (const [dir, files, prefix] of [
@@ -153,8 +244,19 @@ async function main() {
     }
     console.log(`  uploaded ${uploaded} file(s) to object storage`);
 
-    await sql`update problems set storage_path = ${problemId}, updated_at = now() where id = ${problemId}`;
-    console.log(`  storage_path set`);
+    // A rebuilt suite can change the score/difficulty, so keep the row in step.
+    await sql`
+      update problems
+      set storage_path = ${problemId}, score = ${PROBLEM.score},
+          difficulty = ${PROBLEM.difficulty}, updated_at = now()
+      where id = ${problemId}`;
+    console.log(`  storage_path / score / difficulty synced`);
+
+    if (REFRESH) {
+      console.log(`  llm_usage untouched (original attach already recorded it)`);
+      console.log(`\nDone. problem id = ${problemId}`);
+      return;
+    }
 
     for (const s of LLM_STEPS) {
       await sql`
