@@ -9,6 +9,17 @@ const TUNNEL_DEV_ORIGINS = [
   "*.trycloudflare.com",
 ];
 
+/**
+ * `src/proxy.ts` buffers request bodies, and Next caps that at 10 MB by default —
+ * which silently truncated large /api/files/save posts. Next requires a concrete
+ * limit (>= 1 byte; there is no "unlimited"), so mirror the route's own cap in
+ * src/app/api/files/save/route.ts and honour the same env override.
+ */
+const CLIENT_MAX_BODY_BYTES = (() => {
+  const fromEnv = parseInt(process.env.FILE_SAVE_MAX_BYTES || "", 10);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 256 * 1024 * 1024;
+})();
+
 const nextConfig: NextConfig = {
   allowedDevOrigins: [
     process.env.REPLIT_DEV_DOMAIN,
@@ -23,6 +34,7 @@ const nextConfig: NextConfig = {
     .filter((d): d is string => Boolean(d)),
   experimental: {
     authInterrupts: true,
+    proxyClientMaxBodySize: CLIENT_MAX_BODY_BYTES,
   },
   async headers() {
     return [
