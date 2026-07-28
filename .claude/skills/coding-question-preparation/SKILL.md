@@ -1,6 +1,6 @@
 ---
 name: coding-question-preparation
-description: Use when preparing a competitive-programming coding question end-to-end with this repo's Python pipeline — turning a raw problem statement plus a reference solution into a verified, platform-ready coding_questions.json. Trigger on "prepare a coding question", "run the CP pipeline", "build this problem", or when given a problem statement plus a reference solution for this project.
+description: Use when preparing a competitive-programming coding question end-to-end with this repo's Python pipeline — turning a raw problem statement into a verified, platform-ready coding_questions.json with testcases, multi-language solutions and an editorial. A reference solution is optional; the skill writes one when none is given. The topics taxonomy ships with the skill. Trigger on "prepare a coding question", "run the CP pipeline", "build this problem", or when given a problem statement for this project.
 ---
 
 # CP Coding Question Creation
@@ -31,6 +31,11 @@ Ask in one `AskUserQuestion` round:
    may NOT invent a story or rename anything (see Trap 1).
 6. **Languages** — default `python,cpp,java,nodejs`.
 
+Also establish, without asking if it is already obvious: **is there a reference
+solution?** If not, you will write it — see "When no reference solution is
+provided" below, and confirm the problem semantics before generating testcases.
+Never ask for `topics_list.txt`; it ships with this skill.
+
 Record the answers in `Inputs/problem.md` headers:
 
 ```
@@ -54,7 +59,48 @@ cd "$PIPELINE_BASE_DIR"                          # several scripts use relative 
 Use **`/usr/bin/python3`** — homebrew python3 lacks `requests`. Never run the
 pipeline against `pipeline/Inputs` or `pipeline/Outputs`; those hold other work.
 
-Inputs are exactly three files: `problem.md`, `solution.py`, `topics_list.txt`.
+### Inputs
+
+The pipeline reads three files from `$PIPELINE_BASE_DIR/Inputs/`:
+
+| File | Source |
+|---|---|
+| `problem.md` | the user's statement + the four headers above |
+| `topics_list.txt` | **ships with this skill** — copy it in, never ask for it |
+| `solution.py` | the user's reference solution, **or written by you** (see below) |
+
+```bash
+mkdir -p "$PIPELINE_BASE_DIR/Inputs"
+cp .claude/skills/coding-question-preparation/topics_list.txt "$PIPELINE_BASE_DIR/Inputs/"
+```
+
+The topics taxonomy is fixed: `Beginner:` / `Intermediate:` / `Advance:` lines.
+`generated_topics.json` must draw ONLY from it, with exact spelling and casing,
+into keys `beginner_topics`, `intermediate_topics`, `advanced_topics`.
+
+### When no reference solution is provided
+
+The pipeline needs `solution.py` — it is the ground truth for every expected
+output. If the user has none, you write it. **Say so explicitly and get the
+semantics confirmed before generating 150+ testcases from it.**
+
+This removes the workflow's main safety net, so compensate:
+
+- **State your reading of the problem back to the user in plain language** —
+  every rule, every tie-break, every edge case — and get it confirmed. A
+  misread here silently poisons every expected output downstream.
+- **Mine the statement's own examples for ground truth.** Run your solution
+  against every worked example on the compiler endpoint before anything else.
+  If the statement has no examples, that is a blocking gap — ask for one.
+- **The dual-oracle check is weaker than it looks.** Normally the brute force
+  cross-checks a solution someone else wrote. If you write both, they share
+  your misreading and can agree while both being wrong. Agreement now proves
+  only internal consistency, NOT correctness — say that in the final report
+  rather than quoting the pass rate as if it settled the question.
+- Derive the brute force from the *statement*, not from your own optimal
+  solution, so the two readings stay as independent as possible.
+- Flag any ambiguity you had to resolve by choosing. Those choices are the
+  likeliest place the question is wrong.
 
 ## OUTPUT HYGIENE (non-negotiable)
 
