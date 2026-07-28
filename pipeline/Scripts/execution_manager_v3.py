@@ -700,7 +700,7 @@ def _s3_credentials_available():
     except Exception:
         return False
 
-def _load_testcases(base_dir, testcases_path):
+def _load_testcases(base_dir, testcases_path=None):
     testcases_path = testcases_path or os.path.join(base_dir, "Outputs", "testcases.json")
     if not os.path.exists(testcases_path):
         print("Error: Outputs/testcases.json not found.")
