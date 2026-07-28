@@ -1,13 +1,13 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { Download, FileJson, Loader2, Plus, Minus, X } from "lucide-react";
+import { Download, FileJson, Loader2, Plus, Minus, Upload, X } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
   buildExamJsonFromQuestions,
   distributeMarksEvenly,
   readOriginalTotalScore,
-  parseQuestionInput,
+  parseQuestionsInput,
   sumQuestionMarks,
   type PlatformQuestion,
 } from "@/lib/exam-json-scale";
@@ -17,6 +17,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
+
+const MAX_QUESTIONS = 50;
 
 type QuestionRow = {
   fileName: string;
@@ -73,7 +75,7 @@ export default function PrepareExamJsonPage() {
     rowMarks.every((m) => m > 0);
 
   const setQuestionCount = (count: number) => {
-    const n = Math.max(1, Math.min(50, count));
+    const n = Math.max(1, Math.min(MAX_QUESTIONS, count));
     setRows((prev) => {
       if (prev.length === n) return prev;
       if (prev.length < n) {
@@ -91,40 +93,65 @@ export default function PrepareExamJsonPage() {
     );
   };
 
-  const handleFilePick = async (index: number, file: File | undefined) => {
-    if (!file) return;
+  /** Rows produced by one file: one per question it holds, or one error row. */
+  const rowsFromFile = async (file: File): Promise<QuestionRow[]> => {
     try {
-      const raw = await readJsonFile(file);
-      const question = parseQuestionInput(raw);
-      const originalTotalScore = readOriginalTotalScore(question);
-      setRows((prev) =>
-        prev.map((r, i) =>
-          i === index
-            ? {
-                fileName: file.name,
-                question,
-                originalTotalScore,
-                parseError: null,
-                marks: r.marks,
-              }
-            : r,
-        ),
-      );
+      const questions = parseQuestionsInput(await readJsonFile(file));
+      return questions.map((question, qi) => ({
+        fileName: questions.length > 1 ? `${file.name} [${qi + 1}]` : file.name,
+        question,
+        originalTotalScore: readOriginalTotalScore(question),
+        parseError: null,
+        marks: "",
+      }));
     } catch (e) {
-      setRows((prev) =>
-        prev.map((r, i) =>
-          i === index
-            ? {
-                fileName: file.name,
-                question: null,
-                originalTotalScore: null,
-                parseError: e instanceof Error ? e.message : "Invalid JSON",
-                marks: r.marks,
-              }
-            : r,
-        ),
-      );
+      return [
+        {
+          ...emptyRow(),
+          fileName: file.name,
+          parseError: e instanceof Error ? e.message : "Invalid JSON",
+        },
+      ];
     }
+  };
+
+  const handleFilePick = async (index: number, files: File[]) => {
+    if (files.length === 0) return;
+    const loaded = (await Promise.all(files.map(rowsFromFile))).flat();
+    setRows((prev) => {
+      // Keep the marks already typed on the row being replaced.
+      const withMarks = loaded.map((r, i) =>
+        i === 0 ? { ...r, marks: prev[index]?.marks ?? "" } : r,
+      );
+      const next = [...prev.slice(0, index), ...withMarks, ...prev.slice(index + 1)];
+      if (next.length > MAX_QUESTIONS) {
+        toast(`Only the first ${MAX_QUESTIONS} questions were kept`, "error");
+      }
+      return next.slice(0, MAX_QUESTIONS);
+    });
+    const ok = loaded.filter((r) => r.question).length;
+    if (ok > 1) toast(`Loaded ${ok} questions`, "success");
+  };
+
+  /** One file (or a few) holding every question: replaces all rows and splits marks. */
+  const handleCombinedUpload = async (files: File[]) => {
+    if (files.length === 0) return;
+    const loaded = (await Promise.all(files.map(rowsFromFile))).flat();
+    if (loaded.length > MAX_QUESTIONS) {
+      toast(`Only the first ${MAX_QUESTIONS} questions were kept`, "error");
+    }
+    const kept = loaded.slice(0, MAX_QUESTIONS);
+    const parts = totalValid ? distributeMarksEvenly(parsedTotal, kept.length) : [];
+    setRows(kept.map((r, i) => ({ ...r, marks: parts[i] != null ? String(parts[i]) : "" })));
+
+    const failed = kept.filter((r) => r.parseError).length;
+    const ok = kept.length - failed;
+    toast(
+      failed
+        ? `${ok} question(s) loaded, ${failed} file(s) failed to parse`
+        : `${ok} question(s) loaded — marks split evenly`,
+      failed ? "error" : "success",
+    );
   };
 
   const clearFile = (index: number) => {
@@ -192,8 +219,9 @@ export default function PrepareExamJsonPage() {
         <p className="mt-1 text-sm text-muted-foreground">
           Upload each question&apos;s{" "}
           <code className="text-xs">coding_questions.json</code> (or a single question
-          object). Weightage is scaled proportionally to your target marks; coding
-          files and question content stay unchanged.
+          object). A file holding several questions expands into one row per question.
+          Weightage is scaled proportionally to your target marks; coding files and
+          question content stay unchanged.
         </p>
       </div>
 
@@ -235,7 +263,7 @@ export default function PrepareExamJsonPage() {
                 id="question-count"
                 type="number"
                 min={1}
-                max={50}
+                max={MAX_QUESTIONS}
                 value={rows.length}
                 onChange={(e) => setQuestionCount(Number(e.target.value) || 1)}
                 className="w-20 text-center"
@@ -246,7 +274,7 @@ export default function PrepareExamJsonPage() {
                 size="icon"
                 className="h-10 w-10"
                 onClick={() => setQuestionCount(rows.length + 1)}
-                disabled={rows.length >= 50}
+                disabled={rows.length >= MAX_QUESTIONS}
                 aria-label="More questions"
               >
                 <Plus className="h-4 w-4" />
@@ -267,18 +295,42 @@ export default function PrepareExamJsonPage() {
             <div>
               <CardTitle className="text-base">Question JSON files</CardTitle>
               <CardDescription>
-                One <code className="text-xs">.json</code> file per row — typically
-                from pipeline output <code className="text-xs">coding_questions.json</code>.
+                Fastest path: <strong>Upload JSON with all questions</strong> — one
+                file containing every question (an array of{" "}
+                <code className="text-xs">coding_questions.json</code> entries). It
+                creates a row per question and splits marks evenly. Or fill rows one
+                at a time below.
               </CardDescription>
             </div>
-            <p
-              className={cn(
-                "text-sm font-medium",
-                marksMatch ? "text-green-600 dark:text-green-400" : "text-amber-600 dark:text-amber-400",
-              )}
-            >
-              Sum: {marksSum} / {totalValid ? parsedTotal : "—"}
-            </p>
+            <div className="flex items-center gap-3">
+              <input
+                type="file"
+                accept=".json,application/json"
+                multiple
+                className="hidden"
+                id="combined-json"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  e.target.value = "";
+                  void handleCombinedUpload(files);
+                }}
+              />
+              <Button
+                type="button"
+                onClick={() => document.getElementById("combined-json")?.click()}
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                Upload JSON with all questions
+              </Button>
+              <p
+                className={cn(
+                  "text-sm font-medium",
+                  marksMatch ? "text-green-600 dark:text-green-400" : "text-amber-600 dark:text-amber-400",
+                )}
+              >
+                Sum: {marksSum} / {totalValid ? parsedTotal : "—"}
+              </p>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -298,9 +350,14 @@ export default function PrepareExamJsonPage() {
                     }}
                     type="file"
                     accept=".json,application/json"
+                    multiple
                     className="hidden"
                     id={`question-file-${index}`}
-                    onChange={(e) => handleFilePick(index, e.target.files?.[0])}
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files ?? []);
+                      e.target.value = "";
+                      void handleFilePick(index, files);
+                    }}
                   />
                   <Button
                     type="button"
@@ -311,7 +368,7 @@ export default function PrepareExamJsonPage() {
                     }
                   >
                     <FileJson className="mr-2 h-4 w-4" />
-                    {row.fileName ? "Replace file" : "Choose JSON file"}
+                    {row.fileName ? "Replace file" : "Choose JSON file(s)"}
                   </Button>
                   {row.fileName && (
                     <>

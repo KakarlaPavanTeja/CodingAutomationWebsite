@@ -107,8 +107,8 @@ export function scaleQuestionJson(question: PlatformQuestion, targetMarks: numbe
   return copy;
 }
 
-/** Parse an uploaded coding_questions.json or single question object. */
-export function parseQuestionInput(raw: string): PlatformQuestion {
+/** Parse an uploaded coding_questions.json (one or many questions) or a single question object. */
+export function parseQuestionsInput(raw: string): PlatformQuestion[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -119,12 +119,23 @@ export function parseQuestionInput(raw: string): PlatformQuestion {
     if (parsed.length === 0) {
       throw new Error("JSON array is empty — expected at least one question");
     }
-    return parsed[0] as PlatformQuestion;
+    const bad = parsed.findIndex(
+      (q) => !q || typeof q !== "object" || Array.isArray(q),
+    );
+    if (bad >= 0) {
+      throw new Error(`Entry ${bad + 1} is not a question object`);
+    }
+    return parsed as PlatformQuestion[];
   }
   if (parsed && typeof parsed === "object") {
-    return parsed as PlatformQuestion;
+    return [parsed as PlatformQuestion];
   }
   throw new Error("Expected a question object or array of questions");
+}
+
+/** First question of an uploaded file. */
+export function parseQuestionInput(raw: string): PlatformQuestion {
+  return parseQuestionsInput(raw)[0];
 }
 
 export function buildExamJsonFromQuestions(

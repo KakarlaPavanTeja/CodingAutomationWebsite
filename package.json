@@ -11,6 +11,7 @@
     "db:studio": "drizzle-kit studio",
     "db": "tsx scripts/db.mts",
     "test:json": "cd pipeline/Scripts && PYTHONPATH=. python3 -m unittest discover -s tests -p 'test_*.py'",
+    "test:ts": "tsx --test \"src/**/*.test.ts\"",
     "setup:local": "bash scripts/setup-local.sh",
     "export:db": "tsx scripts/export-replit-db.mts --pg-dump",
     "import:db": "tsx scripts/import-db.mts"

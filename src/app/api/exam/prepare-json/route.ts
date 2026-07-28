@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuthApi } from "@/lib/auth/server";
 import {
   buildExamJsonFromQuestions,
-  parseQuestionInput,
+  distributeMarksEvenly,
+  parseQuestionsInput,
   type PlatformQuestion,
 } from "@/lib/exam-json-scale";
 
@@ -44,12 +45,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let question: PlatformQuestion;
+    // questionJson may hold several questions; `marks` is then the total for them.
+    let parsed: PlatformQuestion[];
     try {
       if (typeof row.questionJson === "string") {
-        question = parseQuestionInput(row.questionJson);
+        parsed = parseQuestionsInput(row.questionJson);
       } else if (row.questionJson && typeof row.questionJson === "object") {
-        question = parseQuestionInput(JSON.stringify(row.questionJson));
+        parsed = parseQuestionsInput(JSON.stringify(row.questionJson));
       } else {
         throw new Error("questionJson is required");
       }
@@ -60,10 +62,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    items.push({
-      question,
-      marks: Math.round(marks * 100) / 100,
-      fileName: row.fileName?.trim() || `question-${i + 1}.json`,
+    const label = row.fileName?.trim() || `question-${i + 1}.json`;
+    const split = distributeMarksEvenly(Math.round(marks * 100) / 100, parsed.length);
+    if (split.some((m) => m <= 0)) {
+      return NextResponse.json(
+        { error: `Question ${i + 1}: ${marks} marks cannot be split across ${parsed.length} questions` },
+        { status: 400 },
+      );
+    }
+
+    parsed.forEach((question, qi) => {
+      items.push({
+        question,
+        marks: split[qi],
+        fileName: parsed.length > 1 ? `${label} [${qi + 1}]` : label,
+      });
     });
   }
 
