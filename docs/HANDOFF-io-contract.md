@@ -168,6 +168,16 @@ import { config } from "dotenv"; config({ path: ".env.local", quiet: true });
 })();'
 ```
 
+## Open in the working tree at handoff time
+
+- `pipeline/Scripts/llm_client.py` is **modified and uncommitted**: `brute_force`
+  `default_effort` lowered from `xhigh` to `medium`, with the rationale that effort is
+  not differentiated above medium on v4-flash (medium spent more reasoning than high for
+  the same answer) and `xhigh` severed the stream. This came from an `effort_probe.py`
+  measurement run outside the repo and was left uncommitted deliberately — confirm the
+  measurement still holds, then commit it.
+- Nothing else is outstanding. `git status` should otherwise be clean.
+
 ## Status of the questions themselves
 
 - **Infinite Coins** — fine. Regenerated at 10:22, now 150 cases, 22/22 slots, 8/8
