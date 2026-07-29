@@ -104,7 +104,10 @@ def resolve_short_title(outputs_dir):
         # Strip list markers / trailing "- 95%" annotations, e.g. "- Pair Sum - 95%".
         if line.startswith("- "):
             line = line[2:]
-        line = line.split("-")[0].strip()
+        # Trailing "- 95%" only — splitting on the first "-" truncated
+        # hyphenated titles ("Two-Sum" -> "Two"). Must match
+        # prepare_lua_and_testcases.get_problem_name().
+        line = re.sub(r"\s*-\s*\d+(?:\.\d+)?%\s*$", "", line).strip()
         return line
     return ""
 

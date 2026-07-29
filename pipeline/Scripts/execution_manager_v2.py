@@ -110,6 +110,11 @@ _UPLOAD_CONFIG_WARNING_PRINTED = False
 _EMIT_LOCK = threading.Lock()
 _S3_LOCK = threading.Lock()      # guards lazy boto3 client creation
 _BLOB_LOCK = threading.Lock()    # guards write+upload of shared local blob files
+# Guards the read-merge-write of the shared results file. editorial_execution_manager
+# runs approach/language pairs in a ThreadPoolExecutor and they all merge into the
+# same file, so without this the later writer's snapshot predates the earlier
+# merge and one language's results disappear from the report.
+_RESULTS_FILE_LOCK = threading.Lock()
 
 
 def _short_path(path, base_dir):
@@ -368,8 +373,19 @@ def _print_error_table(all_results):
 
 
 def _write_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+    # Write-then-rename so a crash mid-write cannot leave a truncated file that
+    # the next merge (or the frontend) fails to parse.
+    tmp = f"{path}.tmp{os.getpid()}"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -510,37 +526,39 @@ def write_execution_results_file(base_dir, step, question_id, solutions, total_t
         filename = _RESULTS_FILENAME.get(step, f"{step}_results.json")
         path = os.path.join(outputs_dir, filename)
 
-        existing = None
-        if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    existing = json.load(f)
-            except Exception:
-                existing = None
+        # Read, merge and write as one critical section — see _RESULTS_FILE_LOCK.
+        with _RESULTS_FILE_LOCK:
+            existing = None
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        existing = json.load(f)
+                except Exception:
+                    existing = None
 
-        if existing and isinstance(existing.get("solutions"), list):
-            merged_by_index = {
-                s.get("index", 0): s for s in existing["solutions"] if isinstance(s, dict)
-            }
-            for sol in out["solutions"]:
-                idx = sol.get("index", 0)
-                prev = merged_by_index.get(idx)
-                if prev:
-                    sol["languages"] = _merge_language_result_lists(
-                        prev.get("languages"), sol.get("languages")
-                    )
-                    if not sol.get("label") and prev.get("label"):
-                        sol["label"] = prev["label"]
-                merged_by_index[idx] = sol
-            out["solutions"] = sorted(
-                merged_by_index.values(), key=lambda s: s.get("index", 0)
-            )
-            if out.get("totalTestcases") is None and existing.get("totalTestcases") is not None:
-                out["totalTestcases"] = existing["totalTestcases"]
-            if existing.get("questionId") and (not question_id or question_id == "unknown"):
-                out["questionId"] = existing["questionId"]
+            if existing and isinstance(existing.get("solutions"), list):
+                merged_by_index = {
+                    s.get("index", 0): s for s in existing["solutions"] if isinstance(s, dict)
+                }
+                for sol in out["solutions"]:
+                    idx = sol.get("index", 0)
+                    prev = merged_by_index.get(idx)
+                    if prev:
+                        sol["languages"] = _merge_language_result_lists(
+                            prev.get("languages"), sol.get("languages")
+                        )
+                        if not sol.get("label") and prev.get("label"):
+                            sol["label"] = prev["label"]
+                    merged_by_index[idx] = sol
+                out["solutions"] = sorted(
+                    merged_by_index.values(), key=lambda s: s.get("index", 0)
+                )
+                if out.get("totalTestcases") is None and existing.get("totalTestcases") is not None:
+                    out["totalTestcases"] = existing["totalTestcases"]
+                if existing.get("questionId") and (not question_id or question_id == "unknown"):
+                    out["questionId"] = existing["questionId"]
 
-        _write_json(path, out)
+            _write_json(path, out)
         print(f"Wrote execution results: {_short_path(path, base_dir)}", flush=True)
     except Exception as exc:
         print(f"Warning: failed to write execution results file: {exc}", flush=True)

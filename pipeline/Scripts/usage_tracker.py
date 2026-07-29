@@ -16,6 +16,7 @@ Environment variables used:
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import uuid
@@ -99,8 +100,24 @@ def _insert_remote(row: dict) -> bool:
 # Local JSON fallback
 # ---------------------------------------------------------------------------
 def _append_local(row: dict) -> None:
-    """Append usage entry to local usage_tracker.json as fallback."""
+    """Append usage entry to local usage_tracker.json as fallback.
+
+    Pipeline steps run as separate processes and several can bill a call at the
+    same moment, so the read-modify-write below is serialized with an exclusive
+    flock on a sidecar lock file (locking the tracker itself would not survive
+    the atomic replace — the next process would lock a different inode) and the
+    write is a rename so a crash cannot leave truncated JSON.
+    """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    with open(USAGE_TRACKER_FILE + ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            _append_local_locked(row)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _append_local_locked(row: dict) -> None:
     tracker = {}
     if os.path.exists(USAGE_TRACKER_FILE):
         try:
@@ -140,8 +157,26 @@ def _append_local(row: dict) -> None:
     if len(tracker["history"]) > 500:
         tracker["history"] = tracker["history"][-500:]
 
-    with open(USAGE_TRACKER_FILE, "w") as f:
-        json.dump(tracker, f, indent=2)
+    _write_tracker(tracker)
+
+
+def _write_tracker(tracker: dict) -> None:
+    """Atomic write — a crash mid-write must not truncate the billing file.
+
+    Caller is responsible for holding the flock (taking it here would deadlock
+    _append_local, which already holds it on a different file description).
+    """
+    tmp = f"{USAGE_TRACKER_FILE}.tmp{os.getpid()}"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(tracker, f, indent=2)
+        os.replace(tmp, USAGE_TRACKER_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -226,5 +261,9 @@ def load_usage_tracker() -> dict:
 
 def save_usage_tracker(tracker: dict) -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    with open(USAGE_TRACKER_FILE, "w") as f:
-        json.dump(tracker, f, indent=2)
+    with open(USAGE_TRACKER_FILE + ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            _write_tracker(tracker)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)

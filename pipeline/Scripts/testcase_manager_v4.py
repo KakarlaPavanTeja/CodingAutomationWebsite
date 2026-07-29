@@ -18,7 +18,6 @@ from Prompts.testcasesprompt_v4 import (
     MIN_SUBTASKS,
     MIN_TESTCASES,
     subtask_tag,
-    tier_from_tags,
     get_testcases_prompt,
     get_size_fix_prompt,
 )
@@ -30,6 +29,8 @@ from testcase_helpers import (
     detect_problem_type,
     format_compliance,
     format_io_shape,
+    has_subtask_tags,
+    reorder_testcases_json_root,
     repair_suite_json_root,
     sync_size_tags_json_root,
     sync_subtask_tags,
@@ -99,89 +100,9 @@ def _syntax_error_of(source: str) -> str | None:
                 + (f"\n    {snippet}" if snippet else ""))
 
 
-# --------------------------------------------------------------------------- #
-# Reorder helpers (payload-size sort, subtask-aware) — v3 compatible
-# --------------------------------------------------------------------------- #
-def _testcase_payload_byte_size(tc: dict) -> int:
-    inp = tc.get("input", "") or ""
-    out = tc.get("output", "") or ""
-    if not isinstance(inp, str):
-        inp = str(inp)
-    if not isinstance(out, str):
-        out = str(out)
-    return len(inp.encode("utf-8")) + len(out.encode("utf-8"))
-
-
-def _tier_from_testcase(tc: dict) -> int | None:
-    if not isinstance(tc, dict):
-        return None
-    try:
-        return tier_from_tags(tc.get("tags") or [])
-    except ValueError:
-        return None
-
-
-def _has_subtask_tags(test_cases: list) -> bool:
-    return any(
-        _tier_from_testcase(tc) is not None
-        for tc in test_cases
-        if isinstance(tc, dict)
-    )
-
-
-def reorder_testcases_by_subtask(test_cases: list) -> tuple[list, bool]:
-    """Weighted mode: preserve subtask_<n> blocks; sort by payload size within tier >= 3."""
-    if not test_cases or not _has_subtask_tags(test_cases):
-        return test_cases, False
-
-    buckets: dict[int, list] = {}
-    for tc in test_cases:
-        tier = _tier_from_testcase(tc)
-        if tier is None:
-            continue
-        buckets.setdefault(tier, []).append(tc)
-
-    ordered: list = []
-    for tier in range(1, MAX_SUBTASKS + 1):
-        group = buckets.get(tier)
-        if not group:
-            continue
-        if tier >= 3:
-            group = sorted(group, key=_testcase_payload_byte_size)
-        ordered.extend(group)
-
-    for idx, tc in enumerate(ordered, start=1):
-        tc["order"] = idx
-    test_cases[:] = ordered
-    return test_cases, True
-
-
-def reorder_testcases_by_payload_size(test_cases: list) -> tuple[list, bool]:
-    """Fallback (no subtask tags present): smallest first, largest (stress) last."""
-    if not test_cases:
-        return test_cases, False
-    ordered = sorted(test_cases, key=_testcase_payload_byte_size)
-    for idx, tc in enumerate(ordered, start=1):
-        tc["order"] = idx
-    test_cases[:] = ordered
-    return test_cases, True
-
-
-def _reorder_testcases_json_root(data) -> bool:
-    """In-place reorder. Subtask blocks when tagged; payload-size fallback otherwise."""
-    def _reorder_list(test_cases: list) -> bool:
-        if _has_subtask_tags(test_cases):
-            _, ok = reorder_testcases_by_subtask(test_cases)
-            return ok
-        _, ok = reorder_testcases_by_payload_size(test_cases)
-        return ok
-
-    if isinstance(data, list) and data and isinstance(data[0], dict):
-        if "test_cases" in data[0]:
-            return _reorder_list(data[0]["test_cases"])
-    if isinstance(data, dict) and "test_cases" in data:
-        return _reorder_list(data["test_cases"])
-    return False
+# Reorder helpers live in testcase_helpers (has_subtask_tags,
+# reorder_testcases_json_root) — this module used to carry a byte-identical
+# second copy that both had to be kept in sync.
 
 
 # --------------------------------------------------------------------------- #
@@ -203,10 +124,12 @@ def _script_timeout_sec() -> int:
     """
     raw = os.environ.get("TESTCASE_SCRIPT_TIMEOUT_SEC", "").strip()
     if raw:
+        # float() like _grounding_timeout_sec: int("600.5") raises, and silently
+        # falling back to 600 hides the misconfiguration.
         try:
-            return max(1, int(raw))
+            return max(1, int(float(raw)))
         except ValueError:
-            pass
+            print(f"Warning: TESTCASE_SCRIPT_TIMEOUT_SEC={raw!r} is not a number — using 600s.")
     return 600
 
 
@@ -239,8 +162,15 @@ def _run_generator(script_path: str):
             capture_output=True, text=True, timeout=timeout_sec,
         )
     except subprocess.TimeoutExpired:
-        print(f"Error: Test case generator script timed out after {timeout_sec} seconds.")
-        sys.exit(1)
+        # Report like the syntax-error path above instead of exiting: the
+        # size-fix and grounding-repair callers back up the last good suite and
+        # restore it on a failed regeneration. sys.exit(1) here killed the
+        # process before that restore ran, losing a valid suite to a hung script.
+        msg = f"Test case generator script timed out after {timeout_sec} seconds."
+        print(f"Error: {msg}")
+        return subprocess.CompletedProcess(
+            args=[script_path], returncode=1, stdout="", stderr=msg,
+        )
 
 
 # The primary call's system prompt (~6.4k tokens: I/O format, size ladder, metadata
@@ -374,6 +304,83 @@ def _load_testcases_from(out_path: str) -> list[dict]:
     if isinstance(data, dict):
         return data.get("test_cases", []) or []
     return []
+
+
+def verify_io_contract(description: str, optimal_path: str, outputs_dir: str = "Outputs") -> dict:
+    """CHECKPOINT: freeze the I/O contract from the description's own Examples, verified
+    against the reference solution, BEFORE any testcase is generated.
+
+    The root cause of every I/O failure on 2026-07-29 is that no artifact OWNS the I/O
+    contract — the description, the normalized solution, the per-language driver and the
+    testcases each re-derive it, so they can silently disagree. "T primes" shipped
+    `[8]` / `["NO"]` and scored 0/150 in all three languages; "Infinite Coins" shipped
+    `N = 2763`. Both were only visible three steps downstream.
+
+    So: take Examples 1 and 2 from the statement, serialize them as raw stdin, run the
+    reference solution, and compare its stdout to the stated expected output. Two
+    subprocess runs, at the cheapest point in the pipeline. A mismatch here is a real
+    defect in the description or the solution, and it is a two-minute fix at this point.
+
+    Writes `io_contract.json` so downstream steps can quote a VERIFIED concrete pair
+    instead of prose describing a format. Returns the contract dict.
+    """
+    from benchmark_suite import extract_example_io
+
+    contract = {"verified": False, "pairs": [], "mismatches": [], "reason": ""}
+    try:
+        pairs = extract_example_io(description) or []
+    except Exception as e:
+        contract["reason"] = f"could not parse Examples from the description ({e})"
+        pairs = []
+    if not pairs:
+        contract["reason"] = contract["reason"] or "the description states no parseable Examples"
+        return contract
+
+    timeout = _grounding_timeout_sec()
+    for idx, (inp, out) in enumerate(pairs[:2], start=1):
+        stdin_str = inp if inp.endswith("\n") else inp + "\n"
+        want = _normalize_output(out)
+        got, status = _run_reference_on_input(optimal_path, stdin_str, timeout)
+        entry = {"example": idx, "stdin": stdin_str, "expected": want}
+        if status != "ok":
+            entry.update({"got": f"<{status}>", "detail": _normalize_output(got)[:300]})
+            contract["mismatches"].append(entry)
+        elif _normalize_output(got) != want:
+            entry["got"] = _normalize_output(got)[:300]
+            contract["mismatches"].append(entry)
+        else:
+            entry["stdout"] = want          # the verified pair, byte for byte
+            contract["pairs"].append(entry)
+
+    contract["verified"] = bool(contract["pairs"]) and not contract["mismatches"]
+    try:
+        os.makedirs(outputs_dir, exist_ok=True)
+        with open(os.path.join(outputs_dir, "io_contract.json"), "w", encoding="utf-8") as f:
+            json.dump(contract, f, indent=4, ensure_ascii=False)
+    except OSError as e:
+        print(f"Warning: could not write io_contract.json — {e}")
+    return contract
+
+
+def format_io_contract(contract: dict) -> str:
+    """Human report for the generate_testcases log."""
+    if contract.get("verified"):
+        pairs = contract["pairs"]
+        lines = [f"I/O CONTRACT verified against the reference solution "
+                 f"({len(pairs)} example(s)):"]
+        for p in pairs:
+            lines.append(f"    example {p['example']}: stdin={p['stdin']!r} "
+                         f"stdout={p['stdout']!r}")
+        return "\n".join(lines)
+    if contract.get("mismatches"):
+        lines = ["I/O CONTRACT NOT VERIFIED — the reference solution does not reproduce "
+                 "the description's own Examples. Testcases built on this will not match "
+                 "the platform driver:"]
+        for m in contract["mismatches"]:
+            lines.append(f"    example {m['example']}: stdin={m['stdin']!r} "
+                         f"expected={m['expected']!r} got={m.get('got')!r}")
+        return "\n".join(lines)
+    return f"I/O CONTRACT skipped — {contract.get('reason') or 'no examples available'}."
 
 
 def _ground_against_reference(out_path: str, optimal_path: str) -> list[dict]:
@@ -559,7 +566,7 @@ def _reformat_and_audit(out_path: str, description: str) -> dict:
     # objects inside `data`), so the changes persist when `data` is written below.
     examples_fixed = sync_example_testcases(tcs, description) if tcs else 0
     # Reorder AFTER subtask tags exist so the subtask-aware sort applies.
-    did_reorder = _reorder_testcases_json_root(data)
+    did_reorder = reorder_testcases_json_root(data)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
     # Shape check on the TEXT. Grounding cannot catch this class: if the reference
@@ -581,7 +588,7 @@ def _reformat_and_audit(out_path: str, description: str) -> dict:
     if examples_fixed:
         print(f"Synced {examples_fixed} public example case(s) from description Examples 1 & 2.")
     if did_reorder:
-        if _has_subtask_tags(tcs):
+        if has_subtask_tags(tcs):
             print("Reordered within subtask tag blocks (payload sort for subtask >= 3).")
         else:
             print("Reordered cases by input+output size (ascending); stress cases last.")
@@ -787,6 +794,11 @@ def main():
                   "defaulting to STDIN/STDOUT I/O format.")
     print(f"I/O format: {'function (raw stdin the solution parses)' if is_function else 'STDIN/STDOUT'}"
           + (f"; params={signature_params}" if signature_params else ""))
+
+    # 4b. CHECKPOINT — freeze and verify the I/O contract before generating anything.
+    #     Two subprocess runs; catches a description/solution disagreement here rather
+    #     than as a 0/150 execute_tests result three steps later.
+    print(format_io_contract(verify_io_contract(description, optimal_path)))
 
     # 5. Prompt
     system_prompt, user_prompt = get_testcases_prompt(

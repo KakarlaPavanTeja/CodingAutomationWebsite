@@ -72,8 +72,12 @@ def get_problem_name():
         # Clean title_line e.g., "- Pair Sum Indices - 95%"
         if title_line.startswith("- "):
             title_line = title_line[2:]
-        title_line = title_line.split("-")[0].strip()
-        
+        # Drop only a trailing "- 95%" annotation. Splitting on the first "-"
+        # truncated hyphenated titles ("Two-Sum" -> "Two"). The same expression
+        # is used in prepare_platform_json, editorial_manager and
+        # execution_manager_v3 — all four must agree on the LUA short_text.
+        title_line = re.sub(r"\s*-\s*\d+(?:\.\d+)?%\s*$", "", title_line).strip()
+
         problem_name = "".join(word.capitalize() for word in title_line.split())
         return problem_name, title_line
 

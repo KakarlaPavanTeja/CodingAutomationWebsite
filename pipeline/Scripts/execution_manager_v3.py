@@ -45,6 +45,7 @@ Env overrides:
     NEW_COMPILER_CAPTURE_DIR         override capture output root directory
 """
 
+import math
 import os
 import re
 import sys
@@ -534,6 +535,20 @@ def submit_compile(base_url, compile_payload):
     return data, elapsed_ms, url
 
 
+def poll_budget(time_limit: float, num_inputs: int) -> int:
+    """Poll attempts to allow for a batch of `num_inputs` cases at `time_limit`s each.
+
+    MAX_POLL_ATTEMPTS alone is a flat wall-clock cap (120 polls x 1s = 2 min),
+    which a large suite legitimately exceeds — the run then returns TIMEOUT and
+    every result is discarded even though execution would have succeeded. Scale
+    with the batch's worst case and keep the flat value as the floor.
+    """
+    return max(
+        MAX_POLL_ATTEMPTS,
+        int(math.ceil(max(0.0, time_limit) * max(0, num_inputs) / POLL_INTERVAL_SECONDS)) + 30,
+    )
+
+
 def poll_status(base_url, request_id, max_attempts=None):
     url = f"{base_url}/status/{request_id}"
     attempts = max_attempts if max_attempts is not None else MAX_POLL_ATTEMPTS
@@ -680,7 +695,12 @@ def _resolve_question_meta(base_dir, question_payload, nonfunction):
             with open(titles_path, "r", encoding="utf-8") as f:
                 first = next((ln.strip() for ln in f if ln.strip()), "")
             if first:
-                question_name = first.lstrip("- ").split("-")[0].strip() or question_id
+                # Trailing "- 95%" only, matching
+                # prepare_lua_and_testcases.get_problem_name() — splitting on
+                # the first "-" truncated hyphenated titles.
+                question_name = re.sub(
+                    r"\s*-\s*\d+(?:\.\d+)?%\s*$", "", first.lstrip("- ")
+                ).strip() or question_id
             else:
                 question_name = question_id
         except OSError:
@@ -790,7 +810,11 @@ def _run_one_language(base_dir, lang, code_files, main_file, lang_id,
                 language_results.append(tr)
             return language_results, 0, True
     else:
-        status_data = poll_status(NEW_COMPILER_URL, request_id)
+        status_data = poll_status(
+            NEW_COMPILER_URL,
+            request_id,
+            max_attempts=poll_budget(default_time_limit, len(ordered_ids)),
+        )
 
     language_results, passed_count, global_error = build_language_results(
         status_data, id_index, ordered_ids

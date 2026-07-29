@@ -21,6 +21,7 @@ import base64
 import glob
 import json
 import os
+import re
 import sys
 import uuid
 import random
@@ -164,7 +165,10 @@ def get_problem_name():
         title_line = f.readline().strip()
         if title_line.startswith("- "):
             title_line = title_line[2:]
-        title_line = title_line.split("-")[0].strip()
+        # Trailing "- 95%" only, matching prepare_lua_and_testcases — splitting
+        # on the first "-" truncated hyphenated titles ("Two-Sum" -> "Two"), and
+        # this name must equal the one prepare_lua used to write the .lua file.
+        title_line = re.sub(r"\s*-\s*\d+(?:\.\d+)?%\s*$", "", title_line).strip()
         return "".join(word.capitalize() for word in title_line.split())
 
 

@@ -11,20 +11,20 @@ import math
 import os
 from typing import List, Tuple
 
+
 from project_env import load_execution_manager_env
 
 load_execution_manager_env()
 
 from execution_manager_v3 import (  # noqa: E402
     BASE64_ENCODE_IO,
-    MAX_POLL_ATTEMPTS,
     NEW_COMPILER_URL,
-    POLL_INTERVAL_SECONDS,
     _build_input_object,
     _decode_result_outputs,
     _maybe_b64,
     build_compile_payload,
     normalize_testcase_inputs,
+    poll_budget,
     poll_status,
     submit_compile,
 )
@@ -95,13 +95,6 @@ def _build_benchmark_testcases(
     return payload_testcases, ordered_ids
 
 
-def _poll_budget(timeout: float, num_inputs: int) -> int:
-    return max(
-        MAX_POLL_ATTEMPTS,
-        int(math.ceil(timeout * num_inputs / POLL_INTERVAL_SECONDS)) + 30,
-    )
-
-
 def run_solutions_batch_compiler(
     code_str: str,
     inputs: List[str],
@@ -140,14 +133,20 @@ def run_solutions_batch_compiler(
     status_data = poll_status(
         NEW_COMPILER_URL,
         request_id,
-        max_attempts=_poll_budget(timeout, len(inputs)),
+        max_attempts=poll_budget(timeout, len(inputs)),
     )
     overall = status_data.get("status")
     body = status_data.get("response") or {}
 
+    # A batch-level FAILED does NOT mean every testcase failed — the compiler
+    # still reports per-testcase results, and one TLE'd case flips the whole
+    # batch's status. Discarding the good results here marked every mutant
+    # "killed" and inflated the kill rate. Keep the per-result data and use the
+    # batch error only for testcases that came back with nothing, matching
+    # execution_manager_v3.build_language_results.
+    global_error = None
     if overall in ("FAILED", "ERROR", "TIMEOUT", "NOT_FOUND"):
-        err = body.get("error") or f"Batch status: {overall}"
-        return [(str(err), "error") for _ in inputs]
+        global_error = str(body.get("error") or f"Batch status: {overall}")
 
     results_by_id: dict[str, dict] = {}
     for r in body.get("results", []) or []:
@@ -159,7 +158,7 @@ def run_solutions_batch_compiler(
     for tc_id in ordered_ids:
         r = results_by_id.get(tc_id)
         if r is None:
-            out.append(("", "error"))
+            out.append((global_error or "", "error"))
             continue
         got, stderr = _decode_result_outputs(r)
         status = _map_result_status(r.get("status"))

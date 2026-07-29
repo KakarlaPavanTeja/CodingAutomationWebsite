@@ -169,6 +169,20 @@ _PURPOSE_CONFIG: dict[str, dict] = {
             {"model": _GPT_54, "effort": "low"},
         ],
     },
+    # The tiered ladder in _TESTCASES_TIER_DEFAULTS only reaches call_llm via the
+    # env vars apply_testcases_routing() writes. Without an entry here, any
+    # caller that skips that call (or runs before it) got a single model with no
+    # 429/5xx fallback at all, so a capacity blip aborted generation. Mirrors the
+    # "medium" tier; apply_testcases_routing still overrides per difficulty.
+    "testcases": {
+        "default_effort": "medium",
+        "fallbacks": [
+            {"model": _GPT_54, "effort": "medium"},
+            {"model": _OPUS_48, "effort": "medium"},
+            {"model": _GEMINI_FLASH, "effort": "medium"},
+            {"model": _GPT_55, "effort": "medium"},
+        ],
+    },
 }
 
 # Testcase tier defaults when OPENROUTER_MODEL_TESTCASES is not pinned.
