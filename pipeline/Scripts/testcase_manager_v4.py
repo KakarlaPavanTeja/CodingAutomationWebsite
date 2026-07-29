@@ -25,9 +25,11 @@ from Prompts.testcasesprompt_v4 import (
 from llm_client import apply_testcases_routing, call_llm, resolve_pipeline_difficulty
 from usage_tracker import update_usage
 from testcase_helpers import (
+    audit_io_shape,
     audit_size_distribution,
     detect_problem_type,
     format_compliance,
+    format_io_shape,
     repair_suite_json_root,
     sync_size_tags_json_root,
     sync_subtask_tags,
@@ -560,6 +562,12 @@ def _reformat_and_audit(out_path: str, description: str) -> dict:
     did_reorder = _reorder_testcases_json_root(data)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
+    # Shape check on the TEXT. Grounding cannot catch this class: if the reference
+    # solution of the moment also parses the literal form, a literal suite grounds
+    # clean and then scores 0/150 against the real driver (T primes, 2026-07-29).
+    io_shape = format_io_shape(audit_io_shape(tcs, description)) if tcs else ""
+    if io_shape:
+        print(f"WARNING: {io_shape}")
     violations = format_compliance(compliance)
     if violations:
         # Named, not silent: this line is the evidence for which prompt rules to keep.

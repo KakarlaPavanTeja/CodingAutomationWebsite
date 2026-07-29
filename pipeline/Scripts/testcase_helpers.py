@@ -415,6 +415,88 @@ def repair_suite(test_cases: list) -> dict:
     return report
 
 
+# A whole line that is a bracketed literal holding digits or quotes: `[8]`, `["NO"]`,
+# `[1, 2, 3]`. Bare `[]` is not flagged — an empty collection is a legitimate input.
+_LITERAL_LINE = re.compile(r"^\s*[\[\(]\s*[\d\"'].*[\]\)]\s*$")
+# Quoted tokens inside data: `["NO","YES"]`, `'a', 'b'`.
+_QUOTED_TOKENS = re.compile(r"[\"'][A-Za-z0-9_]+[\"']\s*[,\]]")
+# A human-readable assignment the description shows for display: `N = 2763`.
+_ASSIGNMENT_LINE = re.compile(r"^\s*[A-Za-z_]\w*\s*=\s*\S")
+# Forms the description may legitimately use, in which case none of the above is a bug.
+_BRACKETS_SANCTIONED = re.compile(
+    r"level[- ]order|linked[- ]?list|\btree\b|\bnull\b", re.IGNORECASE)
+
+
+def _description_sanctions_literals(description: str) -> bool:
+    """True when the description's own format legitimately uses bracketed input.
+
+    Tree and linked-list problems are fed a bracketed level-order line by convention
+    (the generation prompt says so), so brackets there are correct, not a defect.
+    """
+    text = description or ""
+    if _BRACKETS_SANCTIONED.search(text):
+        return True
+    # The statement literally shows a bracketed list in its format/examples.
+    return any(_LITERAL_LINE.match(ln) for ln in text.splitlines())
+
+
+def audit_io_shape(test_cases: list, description: str, limit: int = 5) -> dict:
+    """Flag cases whose `input`/`output` is a Python/JSON literal, not raw stdin.
+
+    The defect this catches, from a real 2026-07-29 run ("T primes"): the suite stored
+    `input: "1\\n[8]\\n"` and `output: '["NO"]'` where the driver reads
+    `sys.stdin.buffer.read().split()` and prints one token per line. All three languages
+    scored 0/150. It survived grounding because the reference solution of the moment
+    parsed the literal form too — so grounding alone cannot catch this class, and a
+    shape check on the text itself is the only thing that can.
+
+    Returns {"inputs": n, "outputs": n, "samples": [...]}; empty dict when clean.
+    """
+    if not test_cases or _description_sanctions_literals(description):
+        return {}
+
+    def offends(text: str) -> bool:
+        for line in str(text or "").splitlines():
+            if _LITERAL_LINE.match(line) or _QUOTED_TOKENS.search(line):
+                return True
+            if _ASSIGNMENT_LINE.match(line):
+                return True
+        return False
+
+    bad_in, bad_out, samples = 0, 0, []
+    for tc in test_cases:
+        if not isinstance(tc, dict):
+            continue
+        hit_in, hit_out = offends(tc.get("input")), offends(tc.get("output"))
+        if hit_in:
+            bad_in += 1
+        if hit_out:
+            bad_out += 1
+        if (hit_in or hit_out) and len(samples) < limit:
+            samples.append({
+                "order": tc.get("order"),
+                "input": str(tc.get("input", ""))[:60],
+                "output": str(tc.get("output", ""))[:40],
+            })
+    if not (bad_in or bad_out):
+        return {}
+    return {"inputs": bad_in, "outputs": bad_out, "total": len(test_cases),
+            "samples": samples}
+
+
+def format_io_shape(report: dict) -> str:
+    """Multi-line human report for the generate_testcases log. Empty when clean."""
+    if not report:
+        return ""
+    head = (f"I/O SHAPE: {report['inputs']} input(s) and {report['outputs']} output(s) of "
+            f"{report['total']} look like Python/JSON literals rather than raw "
+            f"stdin/stdout. The platform driver will fail on these.")
+    lines = [head]
+    for s in report["samples"]:
+        lines.append(f"    order {s['order']}: input={s['input']!r} output={s['output']!r}")
+    return "\n".join(lines)
+
+
 def repair_suite_json_root(data) -> dict:
     if isinstance(data, list) and data and isinstance(data[0], dict) and "test_cases" in data[0]:
         return repair_suite(data[0]["test_cases"])
