@@ -42,6 +42,7 @@ import time
 import httpx
 from openai import (
     APIConnectionError,
+    APIError,
     APIStatusError,
     APITimeoutError,
     InternalServerError,
@@ -845,6 +846,14 @@ def _is_capacity_error(exc: Exception) -> bool:
     if isinstance(exc, APIStatusError):
         if getattr(exc, "status_code", None) in (500, 502, 503, 529):
             return True
+    # A BARE APIError (exact type — every HTTP/connection subclass carries a
+    # status_code) is only raised by the SDK when the provider injects an
+    # {"error": ...} payload INTO an already-open SSE stream (e.g. OpenRouter's
+    # "JSON error injected into SSE stream"). The request was accepted and
+    # generation was interrupted mid-flight, so rotate to the next model instead
+    # of failing the step on whatever wording that provider happened to use.
+    if type(exc) is APIError:
+        return True
     low = str(getattr(exc, "message", "") or exc).lower()
     signals = (
         "overloaded", "high demand", "no instances", "temporarily unavailable",
