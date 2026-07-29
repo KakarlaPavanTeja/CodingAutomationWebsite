@@ -4,15 +4,20 @@ Written 2026-07-29. Read this first in a new session, then `git log --oneline -7
 
 ## The one-sentence problem
 
-**No artifact owns the I/O contract.** The description, the normalized solution
+**No artifact owned the I/O contract.** The description, the normalized solution
 (`Outputs/generatedFullCode/PYTHON.py`), each per-language driver
 (`Outputs/CodeContentFiles/<Lang>/driver.py`), and the generated testcases each
-re-derive "what does stdin look like" independently — so they disagree silently, and
-the disagreement only surfaces at `execute_tests` as a 0/150 result.
+re-derived "what does stdin look like" independently — so they disagreed silently, and
+the disagreement only surfaced at `execute_tests` as a 0/150 result.
 
-## The precise root cause (found last, most important)
+**`Outputs/io_contract.json` now owns it** for the description ↔ solution ↔ testcases
+edge: verified by execution, quoted verbatim into the prompt, forced into the order-1/2
+cases. The **per-language drivers are still outside it** — that is item 2 below, and it is
+where Libra and Message Decoder died.
 
-`benchmark_suite.extract_example_io` (~line 1099) **deliberately skips** named-variable
+## The precise root cause (found last, most important) — FIXED 2026-07-29
+
+`benchmark_suite.extract_example_io` (~line 1099) **deliberately skipped** named-variable
 example blocks:
 
 ```python
@@ -21,12 +26,13 @@ if is_named_var_example_block(inp):
 ```
 
 `N = 2763 / C = 0` is the form **every function-type description uses** — all 20
-questions prepared on 2026-07-29. So nothing in the pipeline ever converts the
-display form into raw stdin. Kimi guesses one way, the driver guesses another.
+questions prepared on 2026-07-29. So nothing in the pipeline ever converted the
+display form into raw stdin. Kimi guessed one way, the driver guessed another.
 
-**The missing piece is a converter**, not more validation:
-named-variable example block + signature params + the solution's own parse order
-→ raw stdin. Once that exists, everything else in this document becomes cheap.
+**The missing piece was a converter**, not more validation — and it now exists. The block
+is serialized into the plausible raw-stdin layouts and the **reference solution picks the
+winner** by reproducing the stated answer, so no guess survives. Old items 1 and 2 are
+done; what remains is renumbered below.
 
 ## Evidence from 2026-07-29 (20 questions)
 
@@ -56,41 +62,20 @@ The 12 repairs were **not** format problems. They were ordinary Python bugs:
 | `cbdd61a` | Parse pre-flight in `_run_generator` (all four script-writing paths funnel through it); ASCII transliteration in `_sanitize_generated_script`; **repair calls now carry the primary 6.4k-token contract** instead of a 294-token stub. Prompt: NEVER CRASH / pure-ASCII / imports-at-top. |
 | `dbc7f1c` | `repair_suite` — dedup, fill missing keys, derive `size_metric`, force positive weights, renumber `order`, run right after generation. `format_compliance` logs which rules the model broke. FINAL CHECK block as the last 977 chars of the system prompt. |
 | `5709d7b` | `audit_io_shape` — flags literal-shaped input/output (`[8]`, `["NO"]`, `N = 2763`). Warning, not a hard failure; sanctions brackets for tree/linked-list problems and when the description shows that form. |
-| `3874f81` | `verify_io_contract` — the checkpoint. Runs the reference on the description's Examples, compares byte-for-byte, writes `Outputs/io_contract.json`. Works for raw-stdin descriptions; reports "skipped" for named-variable ones (the gap above). |
+| `3874f81` | `verify_io_contract` — the checkpoint. Runs the reference on the description's Examples, compares byte-for-byte, writes `Outputs/io_contract.json`. Works for raw-stdin descriptions; reported "skipped" for named-variable ones (the gap above). |
+| *(this change)* | **The converter + the frozen pair.** `named_var_stdin_candidates` (benchmark_suite) serializes a display-form block into the plausible raw-stdin layouts; `_resolve_named_var_example` (testcase_manager_v4) pipes each to the reference and keeps the one reproducing the stated answer, comparing via `display_value_tokens` because the description states the *return value* (`[2, 5]`) while the solution *prints* it (`2 5`). The frozen `stdout` is the reference's real bytes. A verified contract then **replaces** the 16 lines of I/O prose in the system prompt with the executed pair (`_frozen_io_block`), and drives `_mandatory_example_block` + `sync_example_testcases` — so the shipped order-1/order-2 cases are raw stdin even for function-type descriptions. Verified end-to-end on the repo's own `two_sum` artifacts: display form and raw form converge on byte-identical stdin. |
 
-Tests: **220 passing** via `npm run test:json`. New files:
+Tests: **242 passing** via `npm run test:json`. New files:
 `tests/test_generator_preflight.py`, `test_repair_suite.py`, `test_io_shape_audit.py`,
 `test_io_contract.py`.
 
+Prompt size: **25,450 chars when the contract verifies** vs 26,770 unverified — the frozen
+pair is shorter than the prose it replaces, and the prose is kept as the fallback so
+unverified runs are unchanged.
+
 ## Next, in order
 
-### 1. The named-variable → raw stdin converter (the real fix)
-
-Read first: `benchmark_suite.extract_example_io` + `is_named_var_example_block`,
-`Prompts/descriptionPrompt.py` (`_function_example_format_addon` — it defines the
-display form), and `signature_params` as passed to `get_testcases_prompt`.
-
-Build: `convert_named_var_example(block, signature_params, solution_source) -> str`.
-The solution's own parse order is the tiebreaker for field order — read how
-`PYTHON.py:main` consumes `sys.stdin`.
-
-Then flip `test_named_var_examples_are_not_yet_convertible` to assert `verified`.
-
-### 2. Feed the verified pair into the testcase prompt
-
-This is the payoff. Replace the 16 lines of prose at
-`Prompts/testcasesprompt_v4.py:320` with the frozen pair:
-
-```
-Case 1 stdin is exactly:  1\n8\n
-Case 1 stdout is exactly: NO
-Produce every case in this shape.
-```
-
-Shorter *and* more reliable — the same "copy this verbatim" effect that makes
-`tc_harness` the one instruction Kimi never violates.
-
-### 3. Run `split_code` in parallel with the testcase chain
+### 1. Run `split_code` in parallel with the testcase chain
 
 Verified: **no data dependency.** `split_code` (`Scripts/code_splitter.py`) needs the
 normalized solution + signature from `generate_question`. The testcase chain is
@@ -99,20 +84,20 @@ select_testcases]` in `src/lib/pipeline-waves.ts`. `execute_tests` is the first 
 needing both. The wave system already models parallel groups.
 
 The prize is **not** wall-clock. It makes the per-language drivers exist before
-`select_testcases`, which unblocks item 4. Risk to watch: two concurrent LLM steps
+`select_testcases`, which unblocks item 2. Risk to watch: two concurrent LLM steps
 under an OpenRouter rate limit is contention, not speedup.
 
-### 4. Ground testcases against the real per-language drivers
+### 2. Ground testcases against the real per-language drivers
 
 Currently `_ground_against_reference` runs `PYTHON.py` standalone, but the platform
 runs `driver.py` + `solution.py`, and in Java a translated driver. **Libra and Message
-Decoder both died in exactly that gap.** Blocked on item 3 (drivers must exist first).
+Decoder both died in exactly that gap.** Blocked on item 1 (drivers must exist first).
 
 Note this is a **translation** defect — the fix likely belongs in `split_code` /
 `translate_java`: verify the translated driver against the Python driver on the public
 examples and reject a translation that disagrees. That path has not been read yet.
 
-### 5. Prompt deletions — only after the compliance log has data
+### 3. Prompt deletions — only after the compliance log has data
 
 `format_compliance` now prints, per run, which contract rules the model actually broke.
 Collect ~20 runs, then delete the prompt text for rules that never appear. Do **not**
@@ -145,7 +130,7 @@ Cosmetic (`_asciify_punctuation` catches the output) but a mixed signal.
 ## Useful commands
 
 ```bash
-npm run test:json                                   # 220 Python tests
+npm run test:json                                   # 242 Python tests
 npx tsx scripts/db.mts --problem <id-prefix>        # problem + runs + state
 npx tsx scripts/db.mts --sql "..."                  # read-only SQL
 
@@ -182,5 +167,9 @@ import { config } from "dotenv"; config({ path: ".env.local", quiet: true });
 
 - **Infinite Coins** — fine. Regenerated at 10:22, now 150 cases, 22/22 slots, 8/8
   wrong solutions caught. Needs nothing.
-- **T primes, Libra, Message Decoder** — still carry suites built before these fixes.
-  Re-run after item 1 lands, not before.
+- **T primes** — carries a suite built before these fixes, but the converter it was waiting
+  on has landed. Re-run it first; it is the cleanest test of whether the frozen pair
+  actually stops the literal-form failure.
+- **Libra, Message Decoder** — same, but their failures were **translation** defects, so
+  expect Python to pass and Java still to fail until item 2 lands. Re-running them proves
+  the class, it does not fix them.

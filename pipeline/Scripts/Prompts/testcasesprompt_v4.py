@@ -147,21 +147,64 @@ def tier_from_tags(tags: list) -> int:
 
 
 
-def _mandatory_example_block(description: str) -> str:
+def verified_contract_pairs(io_contract) -> list[tuple[str, str]]:
+    """[(stdin, stdout), ...] from a VERIFIED io_contract, else [].
+
+    The contract is the one artifact that OWNS the I/O shape: its pairs came from running
+    the reference solution on the description's own Examples. Quoting them beats any prose
+    describing the format — it is the only source that has actually been executed."""
+    if not isinstance(io_contract, dict) or not io_contract.get("verified"):
+        return []
+    return [
+        (p["stdin"], p["stdout"])
+        for p in io_contract.get("pairs") or []
+        if isinstance(p, dict) and p.get("stdin") and p.get("stdout") is not None
+    ]
+
+
+def _frozen_io_block(io_contract) -> str:
+    """The I/O FORMAT block when the contract is verified: quote the executed pair.
+
+    Replaces the prose that told the model to infer the layout by studying the reference's
+    stdin parser — the rule that sat mid-prompt and was the one being ignored (T primes
+    shipped `[8]` / `["NO"]` and scored 0/150 in all three languages). A concrete pair to
+    copy is both shorter and the instruction shape the model never violates."""
+    pairs = verified_contract_pairs(io_contract)
+    if not pairs:
+        return ""
+    lines = ["(I/O FORMAT — VERIFIED: these pairs were produced by RUNNING the reference "
+             "solution on",
+             "the description's own Examples. This IS the contract — copy the shape exactly):"]
+    for i, (stdin, stdout) in enumerate(pairs, 1):
+        lines.append(f"  * Case {i} `input` is EXACTLY: {stdin!r}")
+        lines.append(f"  * Case {i} `output` is EXACTLY: {stdout!r}")
+    lines.append("  * Produce EVERY case in this shape: same line layout, same token order, "
+                 "same trailing newline.")
+    lines.append("  * `output` is byte-for-byte what the reference solution PRINTS to stdout "
+                 "for that `input` — never a described return value, never a Python literal "
+                 "like `[3, 3]`, never `name = value` assignments.")
+    return "\n".join(lines)
+
+
+def _mandatory_example_block(description: str, io_contract=None) -> str:
     """Prompt block requiring order 1-2 cases to mirror description examples."""
-    try:
-        from benchmark_suite import extract_example_io
-        pairs = extract_example_io(description or "")
-    except Exception:
-        pairs = []
+    pairs = verified_contract_pairs(io_contract)
+    if not pairs:
+        try:
+            from benchmark_suite import extract_example_io
+            pairs = extract_example_io(description or "")
+        except Exception:
+            pairs = []
     if not pairs:
         return """
 (MANDATORY PUBLIC EXAMPLES):
 The first 2 test cases (`order` 1 and `order` 2) MUST reproduce Example 1 and Example 2 from the problem description exactly (same `input` and `output` fields). Tag both with scenario tag `example`. These are the public sample cases users see first.
 """
+    source = ("VERIFIED against the reference solution"
+              if verified_contract_pairs(io_contract) else "copied verbatim from the description")
     lines = [
         "(MANDATORY PUBLIC EXAMPLES):",
-        "The first 2 test cases (`order` 1 and `order` 2) MUST use EXACTLY these IO pairs copied verbatim from the description (tag both `example`):",
+        f"The first 2 test cases (`order` 1 and `order` 2) MUST use EXACTLY these IO pairs, {source} (tag both `example`):",
     ]
     for i, (inp, out) in enumerate(pairs[:2], 1):
         lines.append(f"  Example {i} input:\n{inp!r}")
@@ -210,6 +253,7 @@ def get_testcases_prompt(
     problem_type=None,
     is_function=True,
     signature_params=None,
+    io_contract=None,
 ):
     """
     Build (system_prompt, user_prompt) for v4 generation.
@@ -308,7 +352,12 @@ Every case carries subtask structure and per-case weights.
     # non-function problems use line-based STDIN/STDOUT. Keeping this in lock-step
     # with descriptionPrompt.py's _function_example_format_addon is what stops the
     # generated `input`/`output` from drifting away from the statement.
-    if is_function:
+    # A verified contract outranks both prose branches: it was produced by executing the
+    # reference, so there is nothing left for the model to infer.
+    frozen_io_block = _frozen_io_block(io_contract)
+    if frozen_io_block:
+        io_format_block = frozen_io_block
+    elif is_function:
         params_note = ""
         if signature_params:
             params_note = (
@@ -401,7 +450,7 @@ Inputs:
 6. Distribution mode: `{distribution_preset}`.
 {oracle_block}
 {scoring_block}
-{_mandatory_example_block(description)}
+{_mandatory_example_block(description, io_contract)}
 
 (SIZE DISTRIBUTION — CORRECTNESS-HEAVY, FEW HIGH-VALUE STRESS — CRITICAL):
 Like real judges (LeetCode): MANY cheap small/edge correctness cases, FEW large

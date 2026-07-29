@@ -19,6 +19,7 @@ from Prompts.testcasesprompt_v4 import (
     size_tag,
     subtask_tag,
     tier_from_tags,
+    verified_contract_pairs,
 )
 
 SIZE_TAG_PREFIX = "size_"
@@ -268,15 +269,23 @@ def dedupe_tags(tags: list) -> list:
     return out
 
 
-def sync_example_testcases(test_cases: list, description: str) -> int:
-    """Force order-1 and order-2 cases to match description Examples 1 & 2."""
-    if not test_cases or not description:
+def sync_example_testcases(test_cases: list, description: str, io_contract=None) -> int:
+    """Force order-1 and order-2 cases to match description Examples 1 & 2.
+
+    A verified `io_contract` wins over the description text: its pairs were produced by
+    running the reference solution, so they are raw stdin even when the description shows
+    the named-variable display form (`N = 2763`) that `extract_example_io` cannot use."""
+    if not test_cases:
         return 0
-    try:
-        from benchmark_suite import extract_example_io
-    except ImportError:
-        return 0
-    pairs = extract_example_io(description)
+    pairs = verified_contract_pairs(io_contract)
+    if not pairs:
+        if not description:
+            return 0
+        try:
+            from benchmark_suite import extract_example_io
+        except ImportError:
+            return 0
+        pairs = extract_example_io(description)
     if not pairs:
         return 0
     cases = [tc for tc in test_cases if isinstance(tc, dict)]

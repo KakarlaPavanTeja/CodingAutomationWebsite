@@ -1096,11 +1096,9 @@ def extract_example_inputs(description: str) -> list[str]:
     return out
 
 
-def extract_example_io(description: str) -> list[tuple[str, str]]:
-    """Pair each `**Input:**` block with the `**Output:**` block that follows it,
-    yielding [(stdin, expected_stdout), ...] straight from the description. These
-    are the problem's GROUND TRUTH: the optimal solution must reproduce them, and a
-    failure here is brute-independent evidence the optimal is buggy."""
+def _paired_example_blocks(description: str) -> list[tuple[str, str]]:
+    """[(input_block, output_block), ...] — each `**Input:**` block paired with the
+    `**Output:**` block that follows it. Blocks are returned verbatim, unfiltered."""
     text = description or ""
     ins = [(m.start(), m.group(1).strip("\n")) for m in _EXAMPLE_INPUT_RE.finditer(text)]
     outs = [(m.start(), m.group(1).strip("\n")) for m in _EXAMPLE_OUTPUT_RE.finditer(text)]
@@ -1108,15 +1106,139 @@ def extract_example_io(description: str) -> list[tuple[str, str]]:
     for pos, inp in ins:
         if not inp.strip():
             continue
-        # Named-variable example inputs are display-only (function-based problems) and
-        # cannot be piped to the solution as stdin — skip so we never false-flag the
-        # optimal as "buggy" or copy them into the graded token test cases.
-        if is_named_var_example_block(inp):
-            continue
         expected = next((o for (opos, o) in outs if opos > pos), None)
         if expected is not None and expected.strip():
-            pairs.append((inp + "\n", expected))
+            pairs.append((inp, expected))
     return pairs
+
+
+def extract_example_io(description: str) -> list[tuple[str, str]]:
+    """Pair each `**Input:**` block with the `**Output:**` block that follows it,
+    yielding [(stdin, expected_stdout), ...] straight from the description. These
+    are the problem's GROUND TRUTH: the optimal solution must reproduce them, and a
+    failure here is brute-independent evidence the optimal is buggy.
+
+    Named-variable example inputs are display-only (function-based problems) and cannot
+    be piped to the solution as stdin, so they are skipped here — never false-flag the
+    optimal as "buggy" or copy that form into the graded token test cases. Use
+    `extract_named_var_example_io` + `named_var_stdin_candidates` to convert them."""
+    return [
+        (inp + "\n", out)
+        for inp, out in _paired_example_blocks(description)
+        if not is_named_var_example_block(inp)
+    ]
+
+
+def extract_named_var_example_io(description: str) -> list[tuple[str, str]]:
+    """The blocks `extract_example_io` skips: [(named_var_block, stated_output), ...].
+
+    Returned RAW (not stdin): the caller must run them through
+    `named_var_stdin_candidates` and pick a layout by running the reference solution."""
+    return [
+        (inp, out)
+        for inp, out in _paired_example_blocks(description)
+        if is_named_var_example_block(inp)
+    ]
+
+
+_NAMED_VAR_ASSIGN_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s*=\s*(.+?)\s*$")
+
+
+def _scalar_token(val) -> str:
+    return "null" if val is None else str(val)
+
+
+def _render_named_var_value(raw: str) -> list[str]:
+    """One display-form value -> the stdin line(s) it becomes.
+
+    `[1, 2, 3]` -> ["1 2 3"];  `[[1,2],[3,4]]` -> ["1 2", "3 4"];  `"abc"` -> ["abc"];
+    `5` -> ["5"]. Space-separated tokens, no brackets, no quotes, one line per matrix
+    row: the layout the reference `main()` in this pipeline reads."""
+    try:
+        val = ast.literal_eval(raw)
+    except (ValueError, SyntaxError):
+        return [raw.strip().strip("\"'")]
+    if isinstance(val, (list, tuple)):
+        if val and all(isinstance(x, (list, tuple)) for x in val):
+            return [" ".join(_scalar_token(x) for x in row) for row in val]
+        return [" ".join(_scalar_token(x) for x in val)]
+    return [_scalar_token(val)]
+
+
+def parse_named_var_block(block: str) -> list[tuple[str, list[str]]]:
+    """[(variable_name, stdin_lines), ...] in the order the block declares them."""
+    out: list[tuple[str, list[str]]] = []
+    for ln in (block or "").splitlines():
+        m = _NAMED_VAR_ASSIGN_RE.match(ln)
+        if m:
+            out.append((m.group(1), _render_named_var_value(m.group(2))))
+    return out
+
+
+def _var_length(lines: list[str]) -> int | None:
+    """The size a solution would read for this variable, or None for a plain scalar."""
+    if len(lines) > 1:
+        return len(lines)                       # matrix: row count
+    toks = lines[0].split()
+    return len(toks) if len(toks) > 1 else None
+
+
+def named_var_stdin_candidates(block: str) -> list[str]:
+    """Candidate raw-stdin serializations of a named-variable example block.
+
+    The display form (`n = 4` / `a = [1, 5, 2, 1]`) is what every function-type
+    description shows; the reference solution reads raw tokens. The forms differ only in
+    how the SIZES are laid out — whether the block declared them, and whether the
+    solution reads them — and that is not knowable from the block alone. So emit the
+    plausible layouts in likelihood order and let the caller pick the one that actually
+    reproduces the stated output when piped to the reference. The reference's stdin
+    parser is the only source of truth; guessing from the block is what let `N = 2763`
+    ship as a graded input on 2026-07-29."""
+    variables = parse_named_var_block(block)
+    if not variables:
+        return []
+
+    verbatim: list[str] = []                    # 1. exactly as declared
+    for _, lines in variables:
+        verbatim.extend(lines)
+
+    with_sizes: list[str] = []                  # 2. size line before every collection
+    prev = None
+    for _, lines in variables:
+        n = _var_length(lines)
+        if n is not None and prev != str(n):
+            with_sizes.append(str(n))
+        with_sizes.extend(lines)
+        prev = lines[0] if _var_length(lines) is None else None
+
+    without_sizes: list[str] = []               # 3. drop sizes the solution may not read
+    for i, (_, lines) in enumerate(variables):
+        if _var_length(lines) is None and i + 1 < len(variables):
+            nxt = _var_length(variables[i + 1][1])
+            if nxt is not None and lines[0].strip() == str(nxt):
+                continue
+        without_sizes.extend(lines)
+
+    out: list[str] = []
+    for seq in (verbatim, with_sizes, without_sizes):
+        cand = "\n".join(seq) + "\n" if seq else ""
+        if cand.strip() and cand not in out:
+            out.append(cand)
+    return out
+
+
+_DISPLAY_PUNCT = re.compile(r"[\[\]\(\)\{\},\"']+")
+
+
+def display_value_tokens(text: str) -> list[str]:
+    """Tokens for comparing a DESCRIBED return value against PRINTED stdout.
+
+    The description writes what the function returns (`[1, 2]`, `false`, `"NO"`); the
+    solution prints it (`1 2`, `false`, `NO`). Brackets, quotes and commas exist only in
+    the display form, so drop them and fold case before comparing. This comparison only
+    picks WHICH candidate stdin layout is right — the pair that gets frozen afterwards is
+    the reference's real stdout, byte for byte."""
+    return _DISPLAY_PUNCT.sub(" ", text or "").lower().split()
 
 
 def optimal_example_failures(

@@ -8,11 +8,11 @@ re-derive it independently, so they disagree silently. "T primes" shipped `[8]` 
 `verify_io_contract` runs the reference solution on the description's own Examples and
 compares stdout byte-for-byte. Two subprocess runs, at the cheapest point in the pipeline.
 
-KNOWN LIMITATION, pinned by test_named_var_examples_are_not_yet_convertible below:
-`benchmark_suite.extract_example_io` deliberately skips named-variable example blocks
-(`N = 2763`), which is the form EVERY function-type description uses — so for those the
-checkpoint reports "skipped" instead of verifying. Converting that display form into raw
-stdin is the missing piece, and it is exactly the conversion nobody in the pipeline owns.
+Named-variable example blocks (`N = 2763`) — the form EVERY function-type description
+uses — used to make the checkpoint report "skipped", because `extract_example_io` drops
+them as display-only. They are now CONVERTED: `named_var_stdin_candidates` proposes the
+plausible raw-stdin layouts and the reference solution picks the winner by reproducing the
+stated answer. That conversion is the piece nobody in the pipeline owned.
 """
 
 import importlib.util
@@ -112,15 +112,49 @@ class TestVerifyIoContract(unittest.TestCase):
         _m.verify_io_contract(RAW_DESC, ref, outputs_dir=self.out)
         self.assertTrue(os.path.exists(os.path.join(self.out, "io_contract.json")))
 
-    def test_named_var_examples_are_not_yet_convertible(self):
-        """Pins the gap: `N = 2763` is display-only, so extract_example_io skips it and
-        the checkpoint has nothing to verify. Converting it to raw stdin is the missing
-        piece — when that lands, this test should assert `verified` instead."""
-        ref = self.script("import sys" + NL + "sys.stdin.read()" + NL + "print('false')" + NL)
+    def test_named_var_example_is_converted_to_raw_stdin(self):
+        """The 2026-07-29 gap, now closed: `N = 2763` / `C = 0` is display-only, but the
+        checkpoint derives the stdin the reference actually reads and freezes the pair."""
+        ref = self.script(
+            "import sys" + NL
+            + "n, c = map(int, sys.stdin.read().split())" + NL
+            + "print('false' if c == 0 else 'true')" + NL
+        )
+        contract = _m.verify_io_contract(NAMED_VAR_DESC, ref, outputs_dir=self.out)
+        self.assertTrue(contract["verified"], contract)
+        self.assertEqual(contract["pairs"][0]["stdin"], "2763\n0\n")
+        self.assertEqual(contract["pairs"][0]["stdout"], "false")
+        self.assertEqual(contract["pairs"][0]["converted_from"], "named-variable block")
+
+    def test_named_var_conversion_picks_the_layout_the_solution_reads(self):
+        """A solution that reads a length line the block did not declare still resolves:
+        candidate 2 inserts the size, and only that candidate reproduces the answer."""
+        desc = NL.join([
+            "## Example 1", "**Input:**", FENCE, "values = [4, 1, 7]", FENCE,
+            "**Output:**", FENCE, "[12]", FENCE, "",
+        ])
+        ref = self.script(
+            "import sys" + NL
+            + "d = sys.stdin.read().split()" + NL
+            + "n = int(d[0])" + NL
+            + "print(sum(map(int, d[1:1 + n])))" + NL
+        )
+        contract = _m.verify_io_contract(desc, ref, outputs_dir=self.out)
+        self.assertTrue(contract["verified"], contract)
+        self.assertEqual(contract["pairs"][0]["stdin"], "3\n4 1 7\n")
+        self.assertEqual(contract["pairs"][0]["stdout"], "12")
+
+    def test_named_var_conversion_failure_is_reported_not_silent(self):
+        """No candidate layout reproduces the stated answer -> a loud NOT VERIFIED with
+        the layouts tried, never a silent pass that ships `N = 2763` as a graded input."""
+        ref = self.script("import sys" + NL + "sys.stdin.read()" + NL + "print('MAYBE')" + NL)
         contract = _m.verify_io_contract(NAMED_VAR_DESC, ref, outputs_dir=self.out)
         self.assertFalse(contract["verified"])
         self.assertEqual(contract["pairs"], [])
-        self.assertIn("Example", contract["reason"])
+        self.assertEqual(contract["mismatches"][0]["got"], _m.UNCONVERTIBLE)
+        self.assertIn("MAYBE", contract["mismatches"][0]["detail"])
+        report = _m.format_io_contract(contract)
+        self.assertIn("could not derive the raw stdin", report)
 
     def test_no_examples_reports_a_reason_and_does_not_crash(self):
         ref = self.script("print('x')" + NL)

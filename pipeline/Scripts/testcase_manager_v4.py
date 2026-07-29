@@ -306,6 +306,35 @@ def _load_testcases_from(out_path: str) -> list[dict]:
     return []
 
 
+UNCONVERTIBLE = "<no candidate stdin layout reproduced the stated output>"
+
+
+def _resolve_named_var_example(optimal_path: str, block: str, expected: str, timeout: float):
+    """Convert one display-form example block into the raw stdin the reference reads.
+
+    The block alone is ambiguous (did it declare the size line? does the solution read
+    it?), so try each candidate layout and keep the first whose stdout matches the stated
+    expected output under token comparison — the description states the function's RETURN
+    value (`[1, 2]`, `false`) while the solution PRINTS it (`1 2`, `false`), so an exact
+    compare would reject every candidate. Returns (stdin, reference_stdout, detail); the
+    frozen stdout is the reference's own bytes, not the description's display form.
+    """
+    from benchmark_suite import display_value_tokens, named_var_stdin_candidates
+
+    want = display_value_tokens(expected)
+    tried: list[str] = []
+    for cand in named_var_stdin_candidates(block):
+        got, status = _run_reference_on_input(optimal_path, cand, timeout)
+        if status != "ok":
+            tried.append(f"{cand!r} -> <{status}>")
+            continue
+        got = _normalize_output(got)
+        if display_value_tokens(got) == want:
+            return cand, got, None
+        tried.append(f"{cand!r} -> {got[:60]!r}")
+    return None, None, "; ".join(tried)
+
+
 def verify_io_contract(description: str, optimal_path: str, outputs_dir: str = "Outputs") -> dict:
     """CHECKPOINT: freeze the I/O contract from the description's own Examples, verified
     against the reference solution, BEFORE any testcase is generated.
@@ -321,18 +350,25 @@ def verify_io_contract(description: str, optimal_path: str, outputs_dir: str = "
     subprocess runs, at the cheapest point in the pipeline. A mismatch here is a real
     defect in the description or the solution, and it is a two-minute fix at this point.
 
+    Function-type descriptions show their Examples as named-variable assignments
+    (`N = 2763` / `C = 0`) rather than raw stdin, which is why this used to report
+    "skipped" for every function problem. Those blocks are now CONVERTED: each candidate
+    stdin layout is piped to the reference and the one that reproduces the stated answer
+    wins, so the contract covers both description forms.
+
     Writes `io_contract.json` so downstream steps can quote a VERIFIED concrete pair
     instead of prose describing a format. Returns the contract dict.
     """
-    from benchmark_suite import extract_example_io
+    from benchmark_suite import extract_example_io, extract_named_var_example_io
 
     contract = {"verified": False, "pairs": [], "mismatches": [], "reason": ""}
     try:
         pairs = extract_example_io(description) or []
+        named = extract_named_var_example_io(description) or []
     except Exception as e:
         contract["reason"] = f"could not parse Examples from the description ({e})"
-        pairs = []
-    if not pairs:
+        pairs, named = [], []
+    if not pairs and not named:
         contract["reason"] = contract["reason"] or "the description states no parseable Examples"
         return contract
 
@@ -352,6 +388,21 @@ def verify_io_contract(description: str, optimal_path: str, outputs_dir: str = "
             entry["stdout"] = want          # the verified pair, byte for byte
             contract["pairs"].append(entry)
 
+    # Display-form Examples: derive the stdin, then freeze what the reference prints.
+    for block, out in named[: max(0, 2 - len(pairs))]:
+        idx = len(contract["pairs"]) + len(contract["mismatches"]) + 1
+        want = _normalize_output(out)
+        stdin_str, stdout, detail = _resolve_named_var_example(
+            optimal_path, block, out, timeout)
+        if stdin_str is None:
+            contract["mismatches"].append({
+                "example": idx, "stdin": _normalize_output(block), "expected": want,
+                "got": UNCONVERTIBLE, "detail": (detail or "")[:300]})
+        else:
+            contract["pairs"].append({
+                "example": idx, "stdin": stdin_str, "stdout": stdout,
+                "expected": want, "converted_from": "named-variable block"})
+
     contract["verified"] = bool(contract["pairs"]) and not contract["mismatches"]
     try:
         os.makedirs(outputs_dir, exist_ok=True)
@@ -366,17 +417,30 @@ def format_io_contract(contract: dict) -> str:
     """Human report for the generate_testcases log."""
     if contract.get("verified"):
         pairs = contract["pairs"]
+        converted = sum(1 for p in pairs if p.get("converted_from"))
+        note = f" ({converted} converted from the named-variable display form)" if converted else ""
         lines = [f"I/O CONTRACT verified against the reference solution "
-                 f"({len(pairs)} example(s)):"]
+                 f"({len(pairs)} example(s)){note}:"]
         for p in pairs:
             lines.append(f"    example {p['example']}: stdin={p['stdin']!r} "
                          f"stdout={p['stdout']!r}")
         return "\n".join(lines)
     if contract.get("mismatches"):
+        mism = contract["mismatches"]
+        if all(m.get("got") == UNCONVERTIBLE for m in mism):
+            # Distinct failure: the reference may be fine, we just could not work out the
+            # stdin layout its parser wants from the display-form block.
+            lines = ["I/O CONTRACT NOT VERIFIED — could not derive the raw stdin the "
+                     "reference solution reads from the description's named-variable "
+                     "Examples. Check the Input Format against the solution's parser:"]
+            for m in mism:
+                lines.append(f"    example {m['example']}: block={m['stdin']!r} "
+                             f"expected={m['expected']!r} tried={m.get('detail')!r}")
+            return "\n".join(lines)
         lines = ["I/O CONTRACT NOT VERIFIED — the reference solution does not reproduce "
                  "the description's own Examples. Testcases built on this will not match "
                  "the platform driver:"]
-        for m in contract["mismatches"]:
+        for m in mism:
             lines.append(f"    example {m['example']}: stdin={m['stdin']!r} "
                          f"expected={m['expected']!r} got={m.get('got')!r}")
         return "\n".join(lines)
@@ -543,7 +607,7 @@ def _print_size_audit(audit: dict, prefix: str = "Size distribution") -> None:
     print(f"{prefix}: " + ", ".join(parts) + f"  (n={audit.get('total', 0)})")
 
 
-def _reformat_and_audit(out_path: str, description: str) -> dict:
+def _reformat_and_audit(out_path: str, description: str, io_contract=None) -> dict:
     """Load the suite, sync size + subtask tags, reorder, save, and return a size audit."""
     with open(out_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -564,7 +628,7 @@ def _reformat_and_audit(out_path: str, description: str) -> dict:
     # Force the public example cases (order 1 & 2) to match description Examples 1 & 2
     # exactly and tag them `example`. Mutates the case dicts in place (they are the same
     # objects inside `data`), so the changes persist when `data` is written below.
-    examples_fixed = sync_example_testcases(tcs, description) if tcs else 0
+    examples_fixed = sync_example_testcases(tcs, description, io_contract) if tcs else 0
     # Reorder AFTER subtask tags exist so the subtask-aware sort applies.
     did_reorder = reorder_testcases_json_root(data)
     with open(out_path, "w", encoding="utf-8") as f:
@@ -798,7 +862,8 @@ def main():
     # 4b. CHECKPOINT — freeze and verify the I/O contract before generating anything.
     #     Two subprocess runs; catches a description/solution disagreement here rather
     #     than as a 0/150 execute_tests result three steps later.
-    print(format_io_contract(verify_io_contract(description, optimal_path)))
+    io_contract = verify_io_contract(description, optimal_path)
+    print(format_io_contract(io_contract))
 
     # 5. Prompt
     system_prompt, user_prompt = get_testcases_prompt(
@@ -812,6 +877,7 @@ def main():
         problem_type=problem_type,
         is_function=is_function,
         signature_params=signature_params,
+        io_contract=io_contract,
     )
     # Repair calls (crash-retry, grounding-fix, size-fix) reuse this so they keep the
     # same contract instead of shipping a bare "fix this script" instruction.
@@ -862,7 +928,7 @@ def main():
         #    re-prompt the LLM to regenerate the script with a proper size ladder
         #    (bounded by TESTCASE_SIZE_FIX_ROUNDS; degrades safely on any failure).
         try:
-            audit = _reformat_and_audit(out_path, description)
+            audit = _reformat_and_audit(out_path, description, io_contract)
             _print_size_audit(audit, "Realized size distribution")
             # A pool far above target means the script enumerated its input space
             # instead of sampling it (e.g. `for N in range(1, MAX_N + 1)`). Harmless
@@ -885,7 +951,7 @@ def main():
                       f"Regeneration attempt {attempt}/{rounds}.")
                 if not _regenerate_for_size(output_script_path, out_path, description, audit, attempt):
                     break
-                audit = _reformat_and_audit(out_path, description)
+                audit = _reformat_and_audit(out_path, description, io_contract)
                 _print_size_audit(audit, f"After size-fix round {attempt}")
             if audit["ok"]:
                 print("Size distribution within tolerance of targets.")
@@ -914,7 +980,7 @@ def main():
                     output_script_path, out_path, optimal_solution, failures
                 )
                 if repaired:
-                    _reformat_and_audit(out_path, description)
+                    _reformat_and_audit(out_path, description, io_contract)
                     failures = _ground_against_reference(out_path, optimal_path)
                 if failures:
                     print(
