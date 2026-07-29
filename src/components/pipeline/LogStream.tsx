@@ -61,7 +61,10 @@ export function LogStream({ logs, maxHeight = "300px" }: LogStreamProps) {
   const isNearBottomRef = useRef(true);
   const fillHeight = maxHeight === "100%";
 
-  const baseTs = useMemo(() => logs[0]?.ts ?? Date.now(), [logs]);
+  // No `Date.now()` fallback: reading the clock during render is impure, and the fallback
+  // was unreachable anyway — empty `logs` returns the placeholder below before baseTs is
+  // ever formatted.
+  const baseTs = useMemo(() => logs[0]?.ts ?? 0, [logs]);
   const displayEntries = useMemo(() => groupLogLinesForDisplay(logs), [logs]);
 
   const handleScroll = useCallback(() => {

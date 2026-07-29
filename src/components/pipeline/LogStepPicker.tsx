@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useResetOnChange } from "@/lib/use-reset-on-change";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import {
@@ -54,10 +55,11 @@ export function LogStepPicker({
     return order;
   }, [groups]);
 
-  useEffect(() => {
-    if (!open) return;
-    setExpandedSections(new Set(sectionOrder));
-  }, [open, sectionOrder]);
+  // Expand every section whenever the menu opens (or its sections change while open).
+  // Keyed to null while closed so the next open re-expands even if the order is unchanged.
+  useResetOnChange(open ? sectionOrder.join("|") : null, () => {
+    if (open) setExpandedSections(new Set(sectionOrder));
+  });
 
   useEffect(() => {
     if (!open) return;

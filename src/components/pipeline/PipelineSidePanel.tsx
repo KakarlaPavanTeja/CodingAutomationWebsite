@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useResetOnChange } from "@/lib/use-reset-on-change";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { StepLogPane } from "./StepLogPane";
@@ -178,13 +179,16 @@ export function PipelineSidePanel({
 
   const selectedKeyStr = stepKeyStr(selectedKey);
 
-  useEffect(() => {
+  // Snap back to the steps tab when the selection changes, unless the change came from
+  // this panel itself (skipStepsTabRef). During render rather than in an effect, so the
+  // panel never paints one frame of the old tab against the new selection.
+  useResetOnChange(selectedKeyStr, () => {
     if (skipStepsTabRef.current) {
       skipStepsTabRef.current = false;
       return;
     }
     setTab("steps");
-  }, [selectedKeyStr]);
+  });
 
   useEffect(() => {
     if (tab !== "steps") return;

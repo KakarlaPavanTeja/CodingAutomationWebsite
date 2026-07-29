@@ -113,21 +113,19 @@ export function PipelineSplitLayout({
 }: PipelineSplitLayoutProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [focus, setFocus] = useState<PanelFocus>("split");
-  const [splitPercent, setSplitPercent] = useState(DEFAULT_SPLIT);
+  // Restore the stored split in the initializer, not a mount effect: the effect version
+  // laid the panes out at the default and jumped to the saved width on the next frame.
+  const [splitPercent, setSplitPercent] = useState(() => {
+    if (typeof window === "undefined") return DEFAULT_SPLIT;
+    try {
+      const n = Number(localStorage.getItem(SPLIT_STORAGE_KEY));
+      return !Number.isNaN(n) && n >= 25 && n <= 75 ? n : DEFAULT_SPLIT;
+    } catch {
+      return DEFAULT_SPLIT;
+    }
+  });
   const [isDragging, setIsDragging] = useState(false);
   const splitBeforeMaxRef = useRef(DEFAULT_SPLIT);
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(SPLIT_STORAGE_KEY);
-      if (stored) {
-        const n = Number(stored);
-        if (!Number.isNaN(n) && n >= 25 && n <= 75) setSplitPercent(n);
-      }
-    } catch {
-      /* ignore */
-    }
-  }, []);
 
   const persistSplit = useCallback((value: number) => {
     try {

@@ -8,9 +8,15 @@ export function useLiveClock(active: boolean): number {
 
   useEffect(() => {
     if (!active) return;
-    setNow(Date.now());
+    // The immediate catch-up runs on a 0ms timer rather than inline: `now` can be stale by
+    // however long the panel sat idle before this step started running, but a synchronous
+    // setState here would cascade an extra render on every activation.
+    const catchUp = setTimeout(() => setNow(Date.now()), 0);
     const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(catchUp);
+      clearInterval(id);
+    };
   }, [active]);
 
   return now;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useResetOnChange } from "@/lib/use-reset-on-change";
 import { parsePipelineLogContent } from "@/lib/pipeline-log-parse";
 import type { LogLine } from "@/types/pipeline";
 
@@ -56,9 +57,9 @@ export function useStepLogs(
     }
   }, [problemId, logStepId, canFetch, activeRunId, isRunning]);
 
-  useEffect(() => {
-    setDiskLogs([]);
-  }, [logStepId, activeRunId]);
+  // Clear during render, not in an effect: the effect painted the PREVIOUS step's logs
+  // under the newly selected step's heading for one frame.
+  useResetOnChange(`${logStepId}|${activeRunId ?? ""}`, () => setDiskLogs([]));
 
   useEffect(() => {
     if (!canFetch) return;

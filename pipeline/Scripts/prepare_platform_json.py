@@ -917,6 +917,12 @@ def build_practice_json(lua, container, difficulty, node_based, enabled_langs=No
         if owner_total_score is not None
         else practice_calculate_total_score(parsed_test_cases)
     )
+    # Scale the per-case weights onto total_score, exactly as the exam path does.
+    # Without this an owner score is applied to the header only: once selection has
+    # trimmed the pool the generated weights sum to less than the declared total, so
+    # a fully correct submission can never reach it. A no-op when no owner score is
+    # set, because total_score is then the sum of these same weights.
+    _scale_weights_to_total(parsed_test_cases, total_score)
 
     def sec(start, end):
         return parse_section(lua, start, end)

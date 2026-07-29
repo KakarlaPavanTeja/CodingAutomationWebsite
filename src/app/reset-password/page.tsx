@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useToast } from "@/components/ui/toast";
@@ -25,8 +25,6 @@ export default function ResetPasswordPage() {
 }
 
 function ResetPasswordContent() {
-  const [mode, setMode] = useState<"request" | "update">("request");
-  const [token, setToken] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -36,14 +34,11 @@ function ResetPasswordContent() {
   const searchParams = useSearchParams();
   const { toast } = useToast();
 
-  useEffect(() => {
-    const m = searchParams.get("mode");
-    const t = searchParams.get("token");
-    if (m === "update" && t) {
-      setMode("update");
-      setToken(t);
-    }
-  }, [searchParams]);
+  // Derived, not synced. The URL is the source of truth; the old effect committed one
+  // render in "request" mode with a token already present before correcting itself.
+  const token = searchParams.get("token") ?? "";
+  const mode: "request" | "update" =
+    searchParams.get("mode") === "update" && token ? "update" : "request";
 
   const handleBlur = (field: string) => {
     setTouched((prev) => ({ ...prev, [field]: true }));

@@ -1,16 +1,22 @@
 "use client";
 
 import { useTheme } from "@/components/theme-provider";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
+
+/** Never emits — "have we hydrated yet" only ever changes once, at hydration. */
+const subscribeToNothing = () => () => {};
 
 export function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  // The icon depends on the client's theme, so it must not render until after hydration.
+  // `useSyncExternalStore` gives that gate with a server snapshot of `false`, instead of a
+  // setState-in-effect that cascades a second render on every mount.
+  const mounted = useSyncExternalStore(
+    subscribeToNothing,
+    () => true,
+    () => false
+  );
 
   if (!mounted) return <Button variant="ghost" size="icon" className="w-9 h-9" />;
 

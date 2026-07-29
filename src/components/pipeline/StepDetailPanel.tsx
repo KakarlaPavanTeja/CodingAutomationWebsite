@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useResetOnChange } from "@/lib/use-reset-on-change";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StepProgress } from "./StepProgress";
@@ -95,26 +96,30 @@ export function StepDetailPanel({
     }
   }, [problemId, progressStepId, canFetchLogs]);
 
-  useEffect(() => {
-    setDiskLogs([]);
-  }, [progressStepId, subStepId, stepState.id]);
+  // Clear during render, not in an effect: the effect showed the PREVIOUS step's logs under
+  // the newly selected step's heading for one frame.
+  useResetOnChange(`${progressStepId}|${subStepId ?? ""}|${stepState.id}`, () =>
+    setDiskLogs([])
+  );
 
   useEffect(() => {
     if (!canFetchLogs) return;
-    fetchDiskLogs();
-    const intervalMs = isRunning ? 5000 : tab === "raw" ? 8000 : null;
-    if (!intervalMs) return;
-    const id = setInterval(() => {
+    const poll = () => {
       // Skip while the tab is backgrounded — cuts idle DB/network traffic.
       if (typeof document !== "undefined" && document.hidden) return;
       fetchDiskLogs();
-    }, intervalMs);
+    };
+    poll();
+    const intervalMs = isRunning ? 5000 : tab === "raw" ? 8000 : null;
+    if (!intervalMs) return;
+    const id = setInterval(poll, intervalMs);
     return () => clearInterval(id);
   }, [canFetchLogs, isRunning, tab, fetchDiskLogs]);
 
-  useEffect(() => {
+  // Jump to the raw log when the step starts running.
+  useResetOnChange(isRunning ? "running" : null, () => {
     if (isRunning) setTab("raw");
-  }, [isRunning]);
+  });
 
   return (
     <Card className="border-dashed h-full flex flex-col shadow-none">

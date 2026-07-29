@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
+import { useResetOnChange } from "@/lib/use-reset-on-change";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { PipelineWaveList } from "./PipelineWaveList";
 import { PipelineSidePanel } from "./PipelineSidePanel";
@@ -88,45 +89,34 @@ export function PipelineWaveFlow({
     kind: "sub",
     id: "description",
   });
-  const runningSelectionRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    let next: PipelineStepKey | null = null;
-
+  // Which step is running right now, if any. A pure function of the run state, so it
+  // belongs in render — the effect that used to compute it mirrored the answer into a ref
+  // purely to detect changes, which is exactly what `useResetOnChange` does with state.
+  // Not memoized: it is a scan of a few dozen steps, and the React Compiler cannot preserve
+  // a useMemo whose body reads through optional chains and a Map.
+  function findRunningKey(): PipelineStepKey | null {
     if (gqState?.subStepRuns) {
       for (const [id, run] of Object.entries(gqState.subStepRuns)) {
-        if (run?.status === "running") {
-          next = { kind: "sub", id: id as QuestionSubStepId };
-          break;
-        }
+        if (run?.status === "running") return { kind: "sub", id: id as QuestionSubStepId };
       }
     }
-
-    if (!next) {
-      for (const id of workflowSteps) {
-        const state = stepStates.get(id);
-        if (state?.status === "running") {
-          next = { kind: "step", id };
-          break;
-        }
-        if (state?.languageSubRuns) {
-          for (const [langId, run] of Object.entries(state.languageSubRuns)) {
-            if (run?.status === "running") {
-              next = { kind: "lang", stepId: id, langId };
-              break;
-            }
-          }
-          if (next) break;
-        }
+    for (const id of workflowSteps) {
+      const state = stepStates.get(id);
+      if (state?.status === "running") return { kind: "step", id };
+      for (const [langId, run] of Object.entries(state?.languageSubRuns ?? {})) {
+        if (run?.status === "running") return { kind: "lang", stepId: id, langId };
       }
     }
+    return null;
+  }
 
-    const nextStr = next ? stepKeyStr(next) : null;
-    if (nextStr === runningSelectionRef.current) return;
+  const runningKey = findRunningKey();
 
-    runningSelectionRef.current = nextStr;
-    if (next) setSelectedKey(next);
-  }, [gqState?.subStepRuns, stepStates, workflowSteps]);
+  // Follow the running step. Keyed on its identity, so a step that STAYS running does not
+  // keep overriding a selection the user made by hand.
+  useResetOnChange(runningKey ? stepKeyStr(runningKey) : null, () => {
+    if (runningKey) setSelectedKey(runningKey);
+  });
 
   function getItemStatus(item: PipelineWaveItem): StepStatus {
     if (item.kind === "sub") return getSubStatus(item.id as QuestionSubStepId);

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useAuth } from "@/lib/auth-context";
+import { useResetOnChange } from "@/lib/use-reset-on-change";
 import { useToast } from "@/components/ui/toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,11 +24,11 @@ export default function SettingsPage() {
   const [pwErrors, setPwErrors] = useState<Record<string, string>>({});
   const [changingPassword, setChangingPassword] = useState(false);
 
-  useEffect(() => {
-    if (profile?.display_name) {
-      setDisplayName(profile.display_name);
-    }
-  }, [profile]);
+  // Seed the editable field from the loaded profile without an effect — the effect
+  // rendered one frame with an empty input after the profile had already arrived.
+  useResetOnChange(profile?.display_name ?? null, () => {
+    if (profile?.display_name) setDisplayName(profile.display_name);
+  });
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();

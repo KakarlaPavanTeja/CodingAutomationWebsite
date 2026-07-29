@@ -61,16 +61,21 @@ function readStoredTheme(): Theme {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>("system");
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("light");
+  // Read the stored theme in the initializer, not in a mount effect: the effect version
+  // committed a render claiming "system"/"light" and re-rendered every consumer to correct
+  // it. Consumers that paint theme-dependent markup (ThemeToggle) gate on hydration
+  // themselves, so the server/client difference here never reaches the DOM.
+  const [theme, setThemeState] = useState<Theme>(() =>
+    typeof window === "undefined" ? "system" : readStoredTheme()
+  );
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
+    typeof window === "undefined" ? "light" : resolveTheme(readStoredTheme())
+  );
 
+  // Side effect only — no setState, so no cascading render.
   useEffect(() => {
-    const stored = readStoredTheme();
-    const resolved = resolveTheme(stored);
-    setThemeState(stored);
-    setResolvedTheme(resolved);
-    applyTheme(resolved);
-  }, []);
+    applyTheme(resolvedTheme);
+  }, [resolvedTheme]);
 
   useEffect(() => {
     if (theme !== "system") return;
