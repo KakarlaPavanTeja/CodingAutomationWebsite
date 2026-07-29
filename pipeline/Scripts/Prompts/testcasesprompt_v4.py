@@ -715,7 +715,11 @@ HOW TO FIX (do ALL of these):
 2. Build an explicit SIZE LADDER and assign every case a target bucket BEFORE building it:
    Every boundary below is a FRACTION of THIS problem's own MAX_N — never a fixed
    number — and is exactly how the B3 gate buckets your cases:
-     * size_edge   (~{SIZE_CATEGORY_TARGETS['edge']}%): degenerate / min sizes (n <= 1: singleton, empty, minimum legal input).
+     * size_edge   (~{SIZE_CATEGORY_TARGETS['edge']}%): DEGENERATE cases — set `is_edge: true` and the
+       tag follows automatically: n = min, empty, singleton, all-same, already-satisfying,
+       infeasible/impossible, overflow boundary. Do NOT rely on n <= 1 to fill this bucket — when the
+       alphabet is tiny (a binary string has exactly TWO inputs of length 1) there are not enough
+       distinct minimum-size inputs to reach the target, so flag SMALL degenerate cases instead.
      * size_small  (~{SIZE_CATEGORY_TARGETS['small']}%): 1 < n <= {SMALL_FRAC:g}*MAX_N, hand-traceable at the low end.
      * size_medium (~{SIZE_CATEGORY_TARGETS['medium']}%): {SMALL_FRAC:g}*MAX_N < n < {LARGE_FRAC:g}*MAX_N (keep thin).
      * size_large  (~{SIZE_CATEGORY_TARGETS['large']}%): n >= {LARGE_FRAC:g}*MAX_N, pushed toward MAX_N — REAL stress sizes, NOT small.
