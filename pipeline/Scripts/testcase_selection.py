@@ -31,13 +31,45 @@ CASE_FLOOR = 25
 
 
 def bucket_size(size_metric: int, max_n: int) -> str:
-    """Bucket a case by its model-declared size_metric against MAX_N."""
+    """Bucket a case by its model-declared size_metric against MAX_N.
+
+    Size-only view. Prefer `bucket_case`, which also honours a case's `is_edge`
+    flag — the edge bucket is about degeneracy, which size alone cannot express.
+    """
     n = max(0, int(size_metric))
     m = max(1, int(max_n))
     if n <= 1:
         return "edge"
     if n >= LARGE_FRAC * m:
         return "large"
+    if n <= SMALL_FRAC * m:
+        return "small"
+    return "medium"
+
+
+def bucket_case(case, max_n, size_kind=None) -> str:
+    """THE bucket rule for one case — size fractions plus declared degeneracy.
+
+    `edge` counts degenerate/boundary cases (n = min, empty, all-same, singleton,
+    overflow boundary) — what the generator's `is_edge` flag marks, and what the
+    edge distribution target was written for. Defining edge as n <= 1 alone makes
+    that target unreachable whenever a problem has almost no distinct
+    minimum-size inputs: a binary string has exactly two ("0" and "1"), so a
+    150-case suite could never hold more than 2 edge cases however it was built.
+
+    Stress size still wins: a case at >= LARGE_FRAC * MAX_N is `large` even when
+    flagged degenerate, so marking cases as edge can never quietly drain the
+    stress bucket.
+    """
+    if size_kind == "none":
+        return "flat"
+    case = case if isinstance(case, dict) else {}
+    n = max(0, int(case.get("size_metric") or 0))
+    m = max(1, int(max_n))
+    if n >= LARGE_FRAC * m:
+        return "large"
+    if n <= 1 or bool(case.get("is_edge")):
+        return "edge"
     if n <= SMALL_FRAC * m:
         return "small"
     return "medium"
@@ -80,49 +112,76 @@ def _add(sel, seen_ids, c):
         sel.append(c)
 
 
-def guarantee_pass(cases, wrong_ids):
-    """Must-haves: all edges, all TLE cases, one case per slot, then greedy
-    set-cover so every wrong solution is killed. Deterministic (id-ordered)."""
+def guarantee_pass(cases, wrong_ids, cap=CASE_CAP):
+    """Must-haves in priority order, BOUNDED BY `cap`. Deterministic (id-ordered).
+
+    The order only matters once the cap bites: public examples (the platform ships
+    them as Examples 1 & 2), verified TLE, wrong-solution kill cover, slot
+    coverage, then edges. Edges come LAST because they are the one UNBOUNDED
+    category — a generator that flags most of its pool `is_edge` must not be able
+    to push the suite past the cap. A suite that catches every wrong solution and
+    covers every slot beats one padded with degenerate cases.
+    """
     wrong_ids = set(wrong_ids)
     ordered = sorted(cases, key=lambda c: c["id"])
     sel, seen = [], set()
 
-    for c in ordered:                       # 1. all edges
-        if c.get("is_edge"):
-            _add(sel, seen, c)
-    for c in ordered:                       # 2. all TLE
+    def add(c, forced=False):
+        """Add unless the cap is already reached. `forced` bypasses it (examples)."""
+        if len(sel) >= cap and not forced:
+            return
+        _add(sel, seen, c)
+
+    for c in ordered:                       # 1. public examples — never dropped
+        if c.get("scenario") == "example":
+            add(c, forced=True)
+    for c in ordered:                       # 2. verified TLE
         if c.get("is_tle"):
-            _add(sel, seen, c)
+            add(c)
 
-    slots_needed = {_slot(c) for c in ordered}      # 3. slot coverage
-    covered = {_slot(c) for c in sel}
-    for slot in sorted(slots_needed - covered):
-        cands = [c for c in ordered if _slot(c) == slot]
-        best = sorted(cands, key=lambda c: (-len(c["kills"]), -c["size_metric"], c["id"]))[0]
-        _add(sel, seen, best)
-        covered.add(slot)
-
-    killed = set().union(*[c["kills"] for c in sel]) if sel else set()   # 4. kill cover
+    killed = set().union(*[c["kills"] for c in sel]) if sel else set()   # 3. kill cover
     remaining = [c for c in ordered if c["id"] not in seen]
-    while wrong_ids - killed:
+    while (wrong_ids - killed) and len(sel) < cap:
         need = wrong_ids - killed
         ranked = sorted(remaining,
                         key=lambda c: (-len(c["kills"] & need), -c["size_metric"], c["id"]))
         if not ranked or not (ranked[0]["kills"] & need):
             break
         pick = ranked[0]
-        _add(sel, seen, pick)
+        add(pick)
         killed |= pick["kills"]
         remaining = [c for c in remaining if c["id"] != pick["id"]]
 
+    slots_needed = {_slot(c) for c in ordered}      # 4. slot coverage
+    covered = {_slot(c) for c in sel}
+    for slot in sorted(slots_needed - covered):
+        if len(sel) >= cap:
+            break
+        cands = [c for c in ordered if _slot(c) == slot]
+        best = sorted(cands, key=lambda c: (-len(c["kills"]), -c["size_metric"], c["id"]))[0]
+        add(best)
+        covered.add(slot)
+
+    edges = [c for c in ordered if c.get("is_edge")]     # 5. edges — bounded
+    for c in edges:
+        if len(sel) >= cap:
+            break
+        add(c)
+
+    # Recomputed over the FINAL selection: cases taken for slot/edge coverage kill
+    # wrong solutions too, so counting them can only improve the reported cover.
+    killed = set().union(*[c["kills"] for c in sel]) if sel else set()
     report = {
         "slots_total": len(slots_needed),
         "slots_filled": len({_slot(c) for c in sel}),
         "edges": sum(1 for c in sel if c.get("is_edge")),
+        "edges_total": len(edges),
         "tle": sum(1 for c in sel if c.get("is_tle")),
         "kills_total": len(wrong_ids),
         "kills_covered": len(wrong_ids & killed),
         "uncatchable": sorted(wrong_ids - killed),
+        # The must-haves alone filled the cap — say so rather than truncate silently.
+        "capped": len(sel) >= cap,
     }
     return sel, report
 
@@ -165,10 +224,10 @@ def select_suite(cases, wrong_ids, max_n, cap=CASE_CAP, floor=CASE_FLOOR,
     Returns (selected_cases, report)."""
     generated = len(cases)
     for c in cases:
-        c["bucket"] = "flat" if size_kind == "none" else bucket_size(c["size_metric"], max_n)
+        c["bucket"] = bucket_case(c, max_n, size_kind)
         c["kills"] = set(c.get("kills") or set())
     unique, _dropped = dedup_by_input(cases)
-    selected, report = guarantee_pass(unique, wrong_ids)
+    selected, report = guarantee_pass(unique, wrong_ids, cap=cap)
     seen = {c["id"] for c in selected}
     remaining = [c for c in unique if c["id"] not in seen]
     selected = _fill_pass(selected, seen, remaining, cap)
@@ -199,6 +258,8 @@ def format_funnel(report):
     flags = []
     if report.get("uncatchable"):
         flags.append("uncatchable: " + ", ".join(report["uncatchable"]))
+    if report.get("capped") and report.get("edges_total", 0) > report.get("edges", 0):
+        flags.append(f"CAPPED: kept {report['edges']}/{report['edges_total']} edge(s)")
     if report.get("exhaustive_complete"):
         flags.append(f"exhaustive: complete {report['selected']}/{report['unique']}")
     if report.get("below_floor"):

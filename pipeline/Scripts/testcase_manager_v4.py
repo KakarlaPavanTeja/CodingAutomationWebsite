@@ -48,8 +48,12 @@ def _sanitize_generated_script(content: str) -> str:
     if text.startswith("```"):
         first_nl = text.find("\n")
         text = text[first_nl + 1:] if first_nl != -1 else text[3:]
-        if text.rstrip().endswith("```"):
-            text = text.rstrip()[:-3]
+    # A LONE trailing fence (no opening one — the model emitted raw Python then
+    # signed off with ```) is a SyntaxError on the last line, so strip it
+    # unconditionally, not only when an opening fence was found.
+    text = text.rstrip()
+    if text.endswith("```"):
+        text = text[:-3]
     return text.strip()
 
 
@@ -755,6 +759,17 @@ def main():
         try:
             audit = _reformat_and_audit(out_path, description)
             _print_size_audit(audit, "Realized size distribution")
+            # A pool far above target means the script enumerated its input space
+            # instead of sampling it (e.g. `for N in range(1, MAX_N + 1)`). Harmless
+            # for correctness — select_testcases caps the suite — but the kill and
+            # mutation phases then run over thousands of cases, so name it here
+            # instead of leaving it to be discovered in the select log.
+            pool_n = audit.get("total", 0)
+            if pool_n > 3 * POOL_TARGET_MAX:
+                print(f"WARNING: generator produced {pool_n} cases for a "
+                      f"~{POOL_TARGET_MIN}-{POOL_TARGET_MAX} target pool — it likely "
+                      f"enumerated the input space rather than sampling it. "
+                      f"select_testcases will trim to {CASE_CAP}.")
             rounds = _size_fix_rounds()
             attempt = 0
             while not audit["ok"] and attempt < rounds:

@@ -99,6 +99,57 @@ class TestGuaranteePass(unittest.TestCase):
         self.assertEqual(rep["uncatchable"], ["w2"])
 
 
+class TestCapIsACeiling(unittest.TestCase):
+    """A pool where (almost) every case is a must-keep must still respect the cap.
+
+    Regression: a mis-derived `size_edge` tag once marked all 10531 generated cases
+    `is_edge`, and the unbounded guarantee pass shipped every one of them.
+    """
+
+    def _all_edge_pool(self, n):
+        # `bucket` is left in place so guarantee_pass can be called directly;
+        # select_suite recomputes it either way.
+        pool = []
+        for i in range(n):
+            c = mk(f"c{i:04d}", "S1", "small", f"s{i % 7}", is_edge=True)
+            c["input"] = c["id"]
+            pool.append(c)
+        return pool
+
+    def test_guarantee_pass_never_exceeds_cap(self):
+        sel, rep = guarantee_pass(self._all_edge_pool(500), wrong_ids=set(), cap=150)
+        self.assertEqual(len(sel), 150)
+        self.assertEqual(rep["edges_total"], 500)
+        self.assertTrue(rep["capped"])
+
+    def test_select_suite_never_exceeds_cap(self):
+        selected, rep = select_suite(self._all_edge_pool(500), set(), max_n=100, cap=150)
+        self.assertEqual(len(selected), 150)
+        self.assertEqual(rep["selected"], 150)
+
+    def test_examples_survive_the_cap(self):
+        pool = self._all_edge_pool(500)
+        pool[400]["scenario"] = "example"      # not first in id order
+        selected, _rep = select_suite(pool, set(), max_n=100, cap=10)
+        self.assertIn("c0400", {c["id"] for c in selected})
+        self.assertEqual(len(selected), 10)
+
+    def test_kill_cover_wins_over_edges_under_cap(self):
+        # Only one case kills w1, and it is NOT an edge — it must still be selected
+        # even though 500 edges are competing for a cap of 5.
+        pool = self._all_edge_pool(500)
+        killer = mk("z999", "S1", "small", "s0", kills=("w1",), is_edge=False)
+        killer["input"] = killer["id"]
+        selected, rep = select_suite(pool + [killer], {"w1"}, max_n=100, cap=5)
+        self.assertIn("z999", {c["id"] for c in selected})
+        self.assertEqual(rep["kills_covered"], 1)
+
+    def test_truncation_is_reported_not_silent(self):
+        _sel, rep = guarantee_pass(self._all_edge_pool(500), wrong_ids=set(), cap=150)
+        rep.update({"generated": 500, "unique": 500, "selected": 150})
+        self.assertIn("CAPPED: kept 150/500 edge(s)", format_funnel(rep))
+
+
 class TestSelectSuite(unittest.TestCase):
     def _pool(self, n):
         pool = []

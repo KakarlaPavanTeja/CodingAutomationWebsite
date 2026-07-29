@@ -37,6 +37,11 @@ POOL_TARGET_MIN = 150
 POOL_TARGET_MAX = 250
 CASE_CAP = 150                              # mirrors testcase_selection.CASE_CAP
 
+# Bucket boundaries as fractions of the problem's own MAX_N. Imported from the
+# selector so the prompt states the SAME rule the B3 gate enforces — the bands
+# must never be written as fixed numbers here.
+from testcase_selection import LARGE_FRAC, SMALL_FRAC  # noqa: E402
+
 # Size-category distribution targets (count %, enforced by B3 in benchmark_suite).
 # Philosophy (matches real judges like LeetCode): the suite is dominated by cheap
 # small/edge CORRECTNESS cases; large/stress cases are FEW but high-value. You don't
@@ -527,6 +532,10 @@ If the statement says "exactly one solution" / "guaranteed unique":
 
 (SOLUTION EMBED + EXEC — avoid the classic NameError):
   * Embed OPTIMAL_CODE {"and BRUTE_CODE " if has_brute else ""}VERBATIM. Do not refactor.
+  * MANDATORY: assign it as a RAW triple-quoted string — OPTIMAL_CODE = r'''...'''.
+    A non-raw triple-quoted string escape-processes the solution's own "\\n" into a
+    REAL newline, and the exec'd source then dies with
+    "SyntaxError: unterminated string literal". Always use the r prefix.
   * Do NOT exec the solutions yourself — the harness below runs the source string for
     you (fresh single namespace per call, so imports and functions share scope).
   * IO HARNESS — MANDATORY, do NOT write your own stdin/stdout capture. A file
@@ -704,10 +713,12 @@ HOW TO FIX (do ALL of these):
 1. Parse the constraint maximum N from the problem (call it MAX_N). If several sizes
    exist (n, m, q...), scale the dominant one.
 2. Build an explicit SIZE LADDER and assign every case a target bucket BEFORE building it:
-     * size_edge   (~{SIZE_CATEGORY_TARGETS['edge']}%): degenerate / min sizes (n = min, singleton, all-equal, boundary).
-     * size_small  (~{SIZE_CATEGORY_TARGETS['small']}%): n in [2, 20], hand-traceable.
-     * size_medium (~{SIZE_CATEGORY_TARGETS['medium']}%): n in [21, 0.5*MAX_N] (keep thin).
-     * size_large  (~{SIZE_CATEGORY_TARGETS['large']}%): n in [0.8*MAX_N, MAX_N] — REAL stress sizes, NOT small.
+   Every boundary below is a FRACTION of THIS problem's own MAX_N — never a fixed
+   number — and is exactly how the B3 gate buckets your cases:
+     * size_edge   (~{SIZE_CATEGORY_TARGETS['edge']}%): degenerate / min sizes (n <= 1: singleton, empty, minimum legal input).
+     * size_small  (~{SIZE_CATEGORY_TARGETS['small']}%): 1 < n <= {SMALL_FRAC:g}*MAX_N, hand-traceable at the low end.
+     * size_medium (~{SIZE_CATEGORY_TARGETS['medium']}%): {SMALL_FRAC:g}*MAX_N < n < {LARGE_FRAC:g}*MAX_N (keep thin).
+     * size_large  (~{SIZE_CATEGORY_TARGETS['large']}%): n >= {LARGE_FRAC:g}*MAX_N, pushed toward MAX_N — REAL stress sizes, NOT small.
 3. For deficient buckets, ADD cases constructed at the right n. For size_large you MUST
    generate inputs with n near MAX_N (fill with constraint-legal values; keep the
    brute-force cross-check guarded by its own size cap so large cases are validated by the

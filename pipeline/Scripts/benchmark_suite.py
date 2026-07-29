@@ -40,10 +40,12 @@ from Prompts.testcasesprompt_v4 import (  # noqa: E402
     tier_from_tags,
 )
 from testcase_helpers import (
+    bucket_for_case,
     detect_problem_type,
     derive_size_bucket,
     parse_constraint_max_n,
     parse_primary_n,
+    resolve_size_context,
     size_tag_from_bucket,
     tag_size_bucket,
 )
@@ -774,13 +776,15 @@ def audit_coverage_shape(
             elif cnt > math.ceil(total / subtask_n) + 2:
                 warnings.append(f"subtask_{tier} count {cnt} above average")
 
-    max_n = parse_constraint_max_n(description)
+    # Buckets scale to THIS problem's size dimension: the constraint bound when
+    # the description states one, else the largest size the suite itself contains.
+    kind, max_n = resolve_size_context(None, description, test_cases)
     bucket_counts = {b: 0 for b in SIZE_BUCKETS}
     mislabeled = 0
     for tc in test_cases:
-        inp = tc.get("input", "")
-        n = parse_primary_n(inp)
-        bucket = derive_size_bucket(n, max_n, inp)
+        bucket = bucket_for_case(tc, max_n, kind)
+        if bucket is None:
+            continue
         bucket_counts[bucket] += 1
         declared = tag_size_bucket(tc.get("tags") or [])
         if declared and declared != bucket:

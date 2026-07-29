@@ -69,9 +69,12 @@ def _scenario_of(tags: list) -> str:
 
 
 def _is_edge_of(tags: list) -> bool:
-    # Legacy: size_edge cases and the public examples are always-keep literals —
-    # exactly the "must include unconditionally" semantics of an EDGE case.
-    return ("size_edge" in tags) or ("example" in tags)
+    # Public examples only. `size_edge` is deliberately NOT an edge signal: it is a
+    # DISTRIBUTION label (B3 targets ~20% of the suite), not a keep-me marker.
+    # Treating it as one let a mis-derived size tag mark 10531/10531 cases must-keep
+    # and ship the entire generated pool. The generator's explicit `is_edge` field
+    # is the edge signal; the cap in guarantee_pass bounds it either way.
+    return "example" in tags
 
 
 def load_cases(testcases_json_path: str, description: str = "") -> tuple[list, int]:
@@ -380,7 +383,9 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
         f"({dropped} exact-input duplicate(s) removed):")
     log("      " + format_funnel(report))
     # Human-readable verdict lines so the log states plainly what was achieved.
-    log(f"      · edges kept          {report['edges']}")
+    log(f"      · edges kept          {report['edges']}"
+        + (f" of {report['edges_total']}  (cap {cap or 150} reached)"
+           if report.get("edges_total", 0) > report["edges"] else ""))
     log(f"      · verified brute TLE  {tle_n}"
         + ("" if (brute and size_kind != "none") else "  (N/A)"))
     log(f"      · slot coverage       {report['slots_filled']}/{report['slots_total']}")

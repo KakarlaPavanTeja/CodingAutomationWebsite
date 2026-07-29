@@ -6,6 +6,8 @@ import re
 
 import math
 
+from testcase_selection import bucket_case, bucket_size
+
 from Prompts.testcasesprompt_v4 import (
     MAX_CASES_PER_SUBTASK,
     MAX_SUBTASKS,
@@ -54,7 +56,12 @@ def detect_problem_type(description: str) -> str:
 
 
 def parse_primary_n(inp: str) -> int | None:
-    """Parse primary size n from first line/token of stdin."""
+    """Parse primary size n from the first line/token of stdin.
+
+    Only meaningful when that token really is a count. Prefer `case_size_metric`
+    / `measure_input_size`, which fall back to this but also recognise inputs
+    whose first token is DATA (a binary string, an id) rather than a size.
+    """
     if not inp or not inp.strip():
         return None
     first_line = inp.strip().split("\n", 1)[0].strip()
@@ -67,52 +74,165 @@ def parse_primary_n(inp: str) -> int | None:
         return None
 
 
+def _bound_value(expr: str) -> int | None:
+    """Evaluate a constraint bound: "200000", "10^5", "2 × 10^5", "2*10^5"."""
+    text = re.sub(r"\s+", "", expr or "")
+    if not text:
+        return None
+    total = 1
+    for factor in re.split(r"[×x*·]", text, flags=re.IGNORECASE):
+        base, _, power = factor.partition("^")
+        try:
+            total *= int(base) ** int(power) if power else int(base)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return total
+
+
+# A bound written any of the usual ways: "200000", "10^5", "2 × 10^5", "2*10^5".
+_BOUND_EXPR = r"(\d+(?:\s*\^\s*\d+)?(?:\s*[×x*·]\s*\d+(?:\s*\^\s*\d+)?)*)"
+
+# A bound stated against a SIZE noun, whatever the variable is called:
+# "1 ≤ n ≤ 2 × 10^5", "length of logData ≤ 2 × 10^5", "|s| <= 10^5",
+# "number of rows ≤ 1000". Noun-based rather than name-based, so a problem does
+# not have to call its size "n" to be measured correctly.
+_SIZE_NOUN_BOUND = re.compile(
+    r"(?:\|\s*\w+\s*\|"
+    r"|\b(?:n|m|k|q|len|length|size|count|rows?|cols?|columns?)\b)"
+    r"[^\n≤<]{0,40}?(?:≤|<=)\s*" + _BOUND_EXPR,
+    re.IGNORECASE,
+)
+
+
 def parse_constraint_max_n(description: str) -> int | None:
-    """Best-effort parse of max n from constraints section."""
+    """Best-effort parse of MAX_N from the constraints section.
+
+    Fallback only — a generator-declared `size_model.max_n` always wins (see
+    `resolve_size_context`). Returns None when the text states no size bound;
+    callers must then derive the bound from the suite rather than assume one.
+    """
     text = description or ""
-    patterns = [
-        r"n\s*≤\s*10\^?(\d+)",
-        r"n\s*<=\s*10\^?(\d+)",
-        r"1\s*≤\s*n\s*≤\s*(\d+)",
-        r"1\s*<=\s*n\s*<=\s*(\d+)",
-        r"n\s*≤\s*(\d+)",
-        r"n\s*<=\s*(\d+)",
-        r"(\d+)\s*≤\s*n",
-        r"(\d+)\s*<=\s*n",
-        r"m\s*≤\s*(\d+)",
-        r"1\s*≤\s*m\s*≤\s*(\d+)",
-    ]
     best = None
-    for pat in patterns:
-        for m in re.finditer(pat, text, re.IGNORECASE):
-            val = m.group(1)
-            try:
-                if "10^" in pat or "10\\^" in pat:
-                    num = 10 ** int(val)
-                else:
-                    num = int(val)
-                if best is None or num > best:
-                    best = num
-            except ValueError:
-                continue
+    for m in _SIZE_NOUN_BOUND.finditer(text):
+        num = _bound_value(m.group(1))
+        if num is not None and (best is None or num > best):
+            best = num
     return best
 
 
+def measure_input_size(inp: str, kind: str | None = None, max_n: int | None = None) -> int | None:
+    """Size of a raw input on the problem's own metric.
+
+    Used only when the generator declared no `size_metric` for the case. The
+    first token counts as a size only when it CAN be one: no leading zeros,
+    within MAX_N, and followed by actual data. Otherwise it is data — the binary
+    string `0100101` parses to 100101, which says nothing about its size — and
+    the input's own character length is the size.
+    """
+    text = (inp or "").strip()
+    if not text:
+        return None
+    lines = text.split("\n")
+    first_parts = lines[0].split()
+    first_tok = first_parts[0] if first_parts else ""
+    as_int = int(first_tok) if first_tok.lstrip("-").isdigit() else None
+
+    # kind == "value": the number itself IS the size (f(n)-style problems).
+    if kind == "value" and as_int is not None:
+        return abs(as_int)
+
+    if as_int is not None:
+        digits = first_tok.lstrip("-")
+        has_leading_zero = len(digits) > 1 and digits.startswith("0")
+        within_bound = max_n is None or abs(as_int) <= max_n
+        has_payload = len(lines) > 1 or len(first_parts) > 1
+        if has_payload and not has_leading_zero and within_bound:
+            return abs(as_int)
+
+    # Data, not a count: measure the widest data line.
+    return max(len(line.strip()) for line in lines)
+
+
+def case_size_metric(tc: dict, kind: str | None = None, max_n: int | None = None) -> int | None:
+    """This case's size on the problem's own metric.
+
+    The generator's declared `size_metric` is authoritative; measuring the raw
+    input is the fallback for legacy suites that carry none.
+    """
+    if not isinstance(tc, dict):
+        return None
+    declared = tc.get("size_metric")
+    if isinstance(declared, int) and not isinstance(declared, bool) and declared >= 0:
+        return declared
+    if isinstance(declared, str) and declared.strip().isdigit():
+        return int(declared.strip())
+    return measure_input_size(tc.get("input", "") or "", kind, max_n)
+
+
+def resolve_size_context(
+    root=None, description: str = "", test_cases: list | None = None
+) -> tuple[str | None, int | None]:
+    """(size_kind, max_n) for THIS problem — never a hardcoded default.
+
+    Precedence: the generator's declared `size_model` (kind + max_n) → the
+    description's constraint bound → the largest size the suite actually
+    contains. The last fallback keeps buckets meaningful for legacy suites
+    without inventing a bound the problem never stated.
+    """
+    declared = root.get("size_model") if isinstance(root, dict) else None
+    kind = None
+    max_n = None
+    if isinstance(declared, dict):
+        if isinstance(declared.get("kind"), str):
+            kind = declared["kind"]
+        raw_max = declared.get("max_n")
+        if isinstance(raw_max, int) and not isinstance(raw_max, bool) and raw_max > 0:
+            max_n = raw_max
+    if max_n is None:
+        max_n = parse_constraint_max_n(description)
+    if max_n is None and test_cases:
+        observed = [
+            m for m in (
+                case_size_metric(tc, kind) for tc in test_cases if isinstance(tc, dict)
+            ) if isinstance(m, int)
+        ]
+        if observed:
+            max_n = max(observed)
+    return kind, (max_n if isinstance(max_n, int) and max_n > 0 else None)
+
+
+def bucket_for_case(tc: dict, max_n: int | None, kind: str | None = None) -> str | None:
+    """Size bucket for one case, scaled to this problem's MAX_N.
+
+    Delegates to `testcase_selection.bucket_case` — the same rule the selector and
+    the B3 gate use — so a case's tag, its selection bucket and its audited bucket
+    can never disagree. Returns None when the problem has no size dimension
+    (`kind == "none"`) or no size could be established; callers then leave the
+    case's tags alone rather than guessing.
+    """
+    if kind == "none":
+        return None
+    n = case_size_metric(tc, kind, max_n)
+    if n is None or max_n is None:
+        return None
+    is_edge = bool(tc.get("is_edge")) if isinstance(tc, dict) else False
+    return bucket_case({"size_metric": n, "is_edge": is_edge}, max_n)
+
+
 def derive_size_bucket(n: int | None, max_n: int | None, inp: str) -> str:
-    """Authoritative size bucket from parsed n vs constraint max N."""
+    """Size bucket for a size `n` against this problem's MAX_N.
+
+    Thin wrapper over the single bucket rule (`testcase_selection.bucket_size`),
+    whose boundaries are fractions of MAX_N — so the same n lands in different
+    buckets for a MAX_N=100 problem and a MAX_N=2*10^5 one, as it should.
+    """
     if n is None:
-        if inp and len(inp.strip()) < 20:
-            return "edge"
-        return "small"
-    if max_n and n >= max(1, int(0.8 * max_n)):
-        return "large"
-    if n <= 1 or (max_n and n == 1):
-        return "edge"
-    if n <= 20:
-        return "small"
-    if max_n and n >= int(0.5 * max_n):
-        return "large"
-    return "medium"
+        n = measure_input_size(inp, None, max_n)
+    if n is None:
+        return "edge" if not (inp or "").strip() else "small"
+    if max_n is None:
+        return "edge" if n <= 1 else "small"
+    return bucket_size(n, max_n)
 
 
 def size_tag_from_bucket(bucket: str) -> str:
@@ -200,17 +320,22 @@ def _strip_size_tags(tags: list) -> list:
     return kept
 
 
-def sync_size_tags(test_cases: list, description: str) -> int:
-    """Rewrite size_* tags from derived input buckets. Returns cases corrected."""
+def sync_size_tags(test_cases: list, description: str, root=None) -> int:
+    """Rewrite size_* tags from each case's size against THIS problem's MAX_N.
+
+    Sizes come from the generator's declared `size_metric`/`size_model` when
+    present (see `resolve_size_context`), so the tags describe the problem's own
+    size dimension instead of whatever the first input token happens to look
+    like. Returns the number of cases corrected.
+    """
     if not test_cases:
         return 0
-    max_n = parse_constraint_max_n(description)
+    kind, max_n = resolve_size_context(root, description, test_cases)
     fixed = 0
     for tc in test_cases:
         if not isinstance(tc, dict):
             continue
-        inp = tc.get("input", "") or ""
-        bucket = derive_size_bucket(parse_primary_n(inp), max_n, inp)
+        bucket = bucket_for_case(tc, max_n, kind)
         if bucket not in SIZE_BUCKETS:
             continue
         declared = tag_size_bucket(tc.get("tags") or [])
@@ -222,10 +347,12 @@ def sync_size_tags(test_cases: list, description: str) -> int:
 
 
 def sync_size_tags_json_root(data, description: str) -> int:
+    """Same as `sync_size_tags`, passing the root through so a declared
+    `size_model` (kind + max_n) is honoured over parsing the description."""
     if isinstance(data, list) and data and isinstance(data[0], dict) and "test_cases" in data[0]:
-        return sync_size_tags(data[0]["test_cases"], description)
+        return sync_size_tags(data[0]["test_cases"], description, data[0])
     if isinstance(data, dict) and "test_cases" in data:
-        return sync_size_tags(data["test_cases"], description)
+        return sync_size_tags(data["test_cases"], description, data)
     return 0
 
 
@@ -259,10 +386,9 @@ def audit_size_distribution(test_cases: list, description: str, tolerance_pp: fl
             "deficient": [],
             "excessive": [],
         }
-    max_n = parse_constraint_max_n(description)
+    kind, max_n = resolve_size_context(None, description, cases)
     for tc in cases:
-        inp = tc.get("input", "") or ""
-        bucket = derive_size_bucket(parse_primary_n(inp), max_n, inp)
+        bucket = bucket_for_case(tc, max_n, kind)
         if bucket in counts:
             counts[bucket] += 1
     realized = {b: 100.0 * counts[b] / total for b in SIZE_BUCKETS}
@@ -374,13 +500,13 @@ def sync_subtask_tags(test_cases: list, description: str) -> int:
     k = max(MIN_SUBTASKS, math.ceil(n / MAX_CASES_PER_SUBTASK))
     k = min(k, MAX_SUBTASKS, n)
 
-    max_n = parse_constraint_max_n(description)
+    kind, max_n = resolve_size_context(None, description, cases)
     rank = {"edge": 0, "small": 1, "medium": 2, "large": 3}
 
     def _difficulty_key(tc: dict):
-        inp = tc.get("input", "") or ""
-        bucket = derive_size_bucket(parse_primary_n(inp), max_n, inp)
-        return (rank.get(bucket, 1), testcase_payload_byte_size(tc), parse_primary_n(inp) or 0)
+        bucket = bucket_for_case(tc, max_n, kind)
+        size = case_size_metric(tc, kind, max_n) or 0
+        return (rank.get(bucket, 1), testcase_payload_byte_size(tc), size)
 
     ordered = sorted(cases, key=_difficulty_key)
 

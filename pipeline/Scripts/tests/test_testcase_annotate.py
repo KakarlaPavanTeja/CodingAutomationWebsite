@@ -35,8 +35,24 @@ class TestLoadCases(unittest.TestCase):
             self.assertTrue(cases[0]["is_edge"])          # example -> always-keep
             self.assertEqual(cases[0]["size_metric"], 3)  # first int of stdin
             self.assertEqual(cases[1]["scenario"], "duplicates")
-            self.assertTrue(cases[1]["is_edge"])          # size_edge tag
+            # A `size_edge` TAG must NOT make a case must-keep: it is a distribution
+            # label, and treating it as a keep marker once shipped a 10531-case suite.
+            self.assertFalse(cases[1]["is_edge"])
             self.assertEqual(max_n, 100000)
+
+    def test_size_edge_tag_is_not_a_keep_marker(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "testcases.json")
+            _write_tc(p, [
+                {"order": 1, "input": "N = 7\nC = 0", "output": "false",
+                 "tags": ["subtask_1", "size_edge"], "size_metric": 7},
+                {"order": 2, "input": "N = 8\nC = 0", "output": "false",
+                 "tags": ["subtask_1", "size_edge"], "size_metric": 8,
+                 "is_edge": True},
+            ])
+            cases, _ = load_cases(p, description="1 <= N <= 10000")
+            self.assertFalse(cases[0]["is_edge"])   # tag alone: not an edge
+            self.assertTrue(cases[1]["is_edge"])    # explicit field: still honored
 
     def test_prefers_declared_size_metric(self):
         with tempfile.TemporaryDirectory() as d:
