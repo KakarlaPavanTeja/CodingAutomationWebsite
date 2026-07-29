@@ -13,7 +13,7 @@ Purpose routing (default reasoning → fallbacks on 429/5xx):
   editorial       dynamic → Gemini 3.1 Pro → GPT-5.5 → Opus 4.8
   harden          medium  → Gemini 3.1 Pro → GPT-5.5
   wrong_solutions medium  → Gemini 3.1 Pro → GPT-5.5
-  brute_force     xhigh   → DeepSeek V4 Flash (naive oracle, trial)
+  brute_force     medium  → DeepSeek V4 Flash (naive oracle, trial)
                             → R1-0528 → Gemini 3.1 Pro → GPT-5.5
   testcases       tiered  → Kimi K2 Thinking (easy/med:medium, hard:high)
                             → GPT-5.4 → Opus 4.8 → Gemini 3.5 Flash → GPT-5.5
@@ -153,9 +153,10 @@ _PURPOSE_CONFIG: dict[str, dict] = {
     # script and it is verified downstream (AST parse, copy-of-optimal heuristic,
     # dual-oracle mismatch abort), so a weak model fails loudly, not silently.
     "brute_force": {
-        # xhigh: the naive oracle is cheap enough at v4-flash rates that max
-        # thinking costs cents, and a wrong oracle aborts the whole testcase run.
-        "default_effort": "xhigh",
+        # Measured on v4-flash: effort is not differentiated above medium (medium
+        # spent MORE reasoning than high, same answer), and xhigh severed the
+        # stream. Raise only if a provider starts honoring the higher tiers.
+        "default_effort": "medium",
         "fallbacks": [
             {"model": _DEEPSEEK_R1, "effort": "high"},
             {"model": _GEMINI_PRO, "effort": "high"},
