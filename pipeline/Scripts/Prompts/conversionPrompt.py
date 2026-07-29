@@ -41,10 +41,14 @@ def get_conversion_prompt(target_language, source_code, question_type, descripti
     desc_rules = ""
     if desc_response:
         desc_rules = f"""
-**CRITICAL - DESCRIPTION I/O FORMAT PRECEDENCE:**
-The output generated MUST parse inputs and print outputs EXACTLY as shown in the Problem Description below. 
-If the original source code expects extra inputs (such as length `n` for an array) that are NOT explicitly provided in the Examples of the problem description, you MUST IGNore those extra variables and derive them dynamically (e.g., read the array directly instead of expecting `n`).
+**CRITICAL - DESCRIPTION I/O FORMAT PRECEDENCE (the description WINS):**
+The output generated MUST parse inputs and print outputs EXACTLY as shown in the Problem Description below.
+Match its worked examples **byte-for-byte**: token order, space vs newline separation, list form, float precision, line breaks and the trailing newline.
+Where the `SOURCE CODE`'s I/O disagrees with the description, the **DESCRIPTION WINS** — write the driver's parsing/printing to match the examples. The language rules above never override this.
+If the original source code expects extra inputs (such as length `n` for an array) that are NOT explicitly provided in the Examples of the problem description, you MUST IGNORE those extra variables and derive them dynamically (e.g., read the array directly instead of expecting `n`).
 The input formatting must strictly mirror the examples in the description!
+
+**AND the `SOURCE CODE` is the only authority on the implementation:** this is a translation, not a re-implementation. Port its algorithm, complexity, iteration order, tie-breaks and rounding decisions as-is; do NOT re-derive the logic from the description's prose and do NOT "improve" it. Every testcase's expected output was produced by that source implementation, so any behavioural divergence surfaces as a failing testcase — even when your version looks more correct.
 
 PROBLEM DESCRIPTION:
 {desc_response}

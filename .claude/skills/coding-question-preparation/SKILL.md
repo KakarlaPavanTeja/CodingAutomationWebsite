@@ -136,6 +136,23 @@ before producing its artifact; produce output in exactly that format.
 | 10 | `prepare_platform_json` | — | `prepare_platform_json.py --mode practice --langs ...` |
 | 11 | `execute_editorial` | — | `editorial_execution_manager.py python cpp java` |
 
+Step 1 solutions (`generatedFullCode/*`, and later `CodeContentFiles/*`) are
+**translations, not re-implementations**. For every language:
+
+- **The description's Input/Output format wins.** Parse and print exactly what
+  `generated_description.md` specifies, matching its examples byte-for-byte —
+  separators, spacing, list form (`[1,2,3]`, no spaces), float precision, line
+  breaks. If the reference reads a token the examples don't show (e.g. a leading
+  `n`), drop it and derive that value instead.
+- **Read `Inputs/solution.py` and follow its implementation.** Same algorithm,
+  same complexity, same core-logic variable names, same tie-breaks and
+  output-formatting decisions. Never re-derive the logic from the prose — the
+  reference is the ground truth every expected output came from, so a divergence
+  shows up as a failing testcase, not as a better solution.
+
+`Prompts/conversionPrompt.py` holds the full rule set (language-specific I/O,
+naming, data types); read it before writing these files.
+
 Function-based additionally needs **`split_code`** before step 6: write
 `CodeContentFiles/{Python,Cpp,Java,NodeJS}/{default,driver,solution}.{ext}` per
 the templates in `Prompts/splittingPrompt.py`. Non-function skips it entirely.

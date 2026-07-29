@@ -32,10 +32,14 @@ Use this EXACT structure if defining it:
     desc_rules = ""
     if desc_response:
         desc_rules = f"""
-**CRITICAL - DESCRIPTION I/O FORMAT PRECEDENCE:**
-The output generated MUST parse inputs and print outputs EXACTLY as shown in the Problem Description below. 
+**CRITICAL - DESCRIPTION I/O FORMAT PRECEDENCE (the description WINS):**
+The output generated MUST parse inputs and print outputs EXACTLY as shown in the Problem Description below.
+Match its worked examples **byte-for-byte**: token order, space vs newline separation, list form, float precision, line breaks and the trailing newline.
+Where the `INPUT CODE`'s I/O disagrees with the description, the **DESCRIPTION WINS** — rewrite the driver's parsing/printing to match the examples. The language rules above never override this.
 If the original code expects extra inputs (such as length `n` for an array) that are NOT explicitly provided in the Examples of the problem description, you MUST ignore those extra variables and derive them dynamically.
 The input formatting must strictly mirror the examples in the description!
+
+**AND the `INPUT CODE` remains the only authority on the implementation:** keep its algorithm, complexity, tie-breaks, rounding and result-formatting decisions exactly as written. Normalize I/O, never the logic — every testcase's expected output is produced by this implementation, so changing it silently invalidates them all.
 
 PROBLEM DESCRIPTION:
 {desc_response}
@@ -69,7 +73,7 @@ PROBLEM DESCRIPTION:
 3. **Remove Comments**: Strip all comments
 4. **Compact Code**: Remove excessive blank lines
 5. **Preserve**: Exact logic, I/O format, variable names, algorithm
-6. **CRITICAL - Input Handling**: Read the input exactly as the original user code specifies. Do NOT enforce JSON parsing unless the original code explicitly uses it. Maintain space/line separations as written in the user code.
+6. **CRITICAL - Input Handling**: Read the input in the EXACT format the `PROBLEM DESCRIPTION`'s examples show (space- vs newline-separated, token order, which values are even present). Follow the original user code's reading only where the description is silent. Do NOT enforce JSON parsing unless the description's examples are JSON.
 7. **CRITICAL - Output**: All output (including strings) MUST follow the formatting logic seen in the `USER CODE` and the `PROBLEM DESCRIPTION`. If the source code prints a raw string, the normalization MUST print a raw string.
 8. **CRITICAL - Array Joining**: C++ lacks a native `join(vec, " ")` built-in function for arrays. Do NOT use `join`! If the output requires space-separated values, you MUST manually loop: `for(size_t i=0; i<res.size(); ++i) { cout << res[i] << (i < res.size()-1 ? " " : ""); } cout << "\\n";`
 """
@@ -82,7 +86,7 @@ PROBLEM DESCRIPTION:
 4. **Remove Comments**: Strip all comments
 5. **Compact Code**: Remove excessive blank lines
 6. **Preserve**: Exact logic, I/O format, variable names, algorithm
-7. **CRITICAL - Input Handling**: Read the input exactly as the original user code specifies. Do NOT enforce JSON parsing unless the original code explicitly uses it. Maintain space/line separations as written in the user code.
+7. **CRITICAL - Input Handling**: Read the input in the EXACT format the `PROBLEM DESCRIPTION`'s examples show (space- vs newline-separated, token order, which values are even present). Follow the original user code's reading only where the description is silent. Do NOT enforce JSON parsing unless the description's examples are JSON.
 8. **CRITICAL - Output**: All output (including strings) MUST follow the formatting logic seen in the `USER CODE` and the `PROBLEM DESCRIPTION`. If the source code prints a raw string, the normalization MUST print a raw string.
 9. **CRITICAL - Array Wrapping**: NEVER use `System.out.println(list.toString())` if the description expects space-separated integers! Ensure you iterate over the result or use a `StringBuilder` to format output identically to the examples.
 """
@@ -94,7 +98,7 @@ PROBLEM DESCRIPTION:
 3. **Remove Type Hints**: Strip all type hints like `list[int]`, `-> int`, etc., from function signatures and variable declarations.
 4. **Compact Code**: Remove excessive blank lines
 4. **Preserve logic**: Exact logic, variable names, algorithm.
-5. **CRITICAL - Optimal I/O**: You MUST update the driver code to use fast I/O (`sys.stdin.read().split()` or `sys.stdin.read().splitlines()` as appropriate) that matches the EXACT input format (space-separated vs newline-separated) expected by the original code. Do NOT enforce JSON parsing unless the original code explicitly uses it. Use `sys.stdout.write()` for printing. Match the source code's output formatting logic strictly. Do NOT disturb the inner logic of `class solution`.
+5. **CRITICAL - Optimal I/O**: You MUST update the driver code to use fast I/O (`sys.stdin.read().split()` or `sys.stdin.read().splitlines()` as appropriate) that matches the EXACT input format (space-separated vs newline-separated, token order, which values are even present) shown in the `PROBLEM DESCRIPTION`'s examples — not merely what the original driver happened to read. Do NOT enforce JSON parsing unless the description's examples are JSON. Use `sys.stdout.write()` for printing. Match the source code's output formatting logic strictly. Do NOT disturb the inner logic of `class solution`.
 """
     elif language.lower() in ['javascript', 'node.js', 'nodejs', 'js']:
         lang_rules = """
@@ -103,7 +107,7 @@ PROBLEM DESCRIPTION:
 2. **Remove Comments**: Strip all comments
 3. **Compact Code**: Remove excessive blank lines
 4. **Preserve**: Exact logic, I/O format, variable names, algorithm
-5. **CRITICAL - Input Handling**: Read the input exactly as the original user code specifies. Do NOT enforce JSON parsing unless the original code explicitly uses it. Maintain space/line separations as written in the user code.
+5. **CRITICAL - Input Handling**: Read the input in the EXACT format the `PROBLEM DESCRIPTION`'s examples show (space- vs newline-separated, token order, which values are even present). Follow the original user code's reading only where the description is silent. Do NOT enforce JSON parsing unless the description's examples are JSON.
 6. **CRITICAL - Output**: All output (including strings) MUST follow the formatting logic seen in the `USER CODE` and the `PROBLEM DESCRIPTION`. If the source code prints a raw string, the normalization MUST print a raw string.
 """
     
