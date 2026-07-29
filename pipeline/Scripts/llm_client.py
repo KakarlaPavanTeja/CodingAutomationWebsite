@@ -6,14 +6,15 @@ Quick reference
 Primary model (all purposes): openai/gpt-5.4
 
 Purpose routing (default reasoning → fallbacks on 429/5xx):
+  validate_solutions low   → DeepSeek V4 Flash (advisory) → Gemini 3.5 Flash → GPT-5.4
   chat            high    → Gemini 3.1 Pro → Sonnet 4.6
   code            medium  → Gemini 3.1 Pro → GPT-5.5   (translation, split)
   enrichment      low     → Gemini 3.1 Pro → Sonnet 4.6
   editorial       dynamic → Gemini 3.1 Pro → GPT-5.5 → Opus 4.8
   harden          medium  → Gemini 3.1 Pro → GPT-5.5
   wrong_solutions medium  → Gemini 3.1 Pro → GPT-5.5
-  brute_force     high    → DeepSeek R1-0528 primary (trial, 32K out cap)
-                            → Gemini 3.1 Pro → GPT-5.5   (naive oracle)
+  brute_force     xhigh   → DeepSeek V4 Flash (naive oracle, trial)
+                            → R1-0528 → Gemini 3.1 Pro → GPT-5.5
   testcases       tiered  → Kimi K2 Thinking (easy/med:medium, hard:high)
                             → GPT-5.4 → Opus 4.8 → Gemini 3.5 Flash → GPT-5.5
 
@@ -67,6 +68,7 @@ _OPUS_48 = "anthropic/claude-opus-4.8"
 _KIMI_K2_THINKING = "moonshotai/kimi-k2-thinking"
 # Last release under the R1 name (2025-05-28); DeepSeek moved to V3.x/V4 after.
 _DEEPSEEK_R1 = "deepseek/deepseek-r1-0528"
+_DEEPSEEK_V4_FLASH = "deepseek/deepseek-v4-flash"
 
 # Per-model output-token override. Overrides the shared purpose default so a
 # model can use its own provider ceiling. k2-thinking's provider (Novita) hard-
@@ -93,8 +95,10 @@ _PURPOSE_DEFAULTS: dict[str, str] = {
     "editorial": _GPT_54,
     "harden": _GPT_54,
     "wrong_solutions": _GPT_54,
-    "brute_force": _DEEPSEEK_R1,
-    "validate_solutions": _GEMINI_FLASH,
+    "brute_force": _DEEPSEEK_V4_FLASH,
+    # Advisory-only judge (callers never fail on it), so the cheapest capable
+    # reasoner wins: v4-flash is ~32x cheaper on output than gemini-3.5-flash.
+    "validate_solutions": _DEEPSEEK_V4_FLASH,
 }
 
 # Default reasoning + fallback ladder per purpose (429/5xx only).
@@ -149,8 +153,11 @@ _PURPOSE_CONFIG: dict[str, dict] = {
     # script and it is verified downstream (AST parse, copy-of-optimal heuristic,
     # dual-oracle mismatch abort), so a weak model fails loudly, not silently.
     "brute_force": {
-        "default_effort": "high",
+        # xhigh: the naive oracle is cheap enough at v4-flash rates that max
+        # thinking costs cents, and a wrong oracle aborts the whole testcase run.
+        "default_effort": "xhigh",
         "fallbacks": [
+            {"model": _DEEPSEEK_R1, "effort": "high"},
             {"model": _GEMINI_PRO, "effort": "high"},
             {"model": _GPT_55, "effort": "high"},
         ],
@@ -158,6 +165,7 @@ _PURPOSE_CONFIG: dict[str, dict] = {
     "validate_solutions": {
         "default_effort": "low",
         "fallbacks": [
+            {"model": _GEMINI_FLASH, "effort": "low"},
             {"model": _GPT_54, "effort": "low"},
         ],
     },
@@ -225,6 +233,10 @@ _DEFAULT_TESTCASES_TIMEOUT_SEC = 2700
 # cap is 45 min).
 _DEFAULT_EDITORIAL_TIMEOUT_SEC = 1800
 _DEFAULT_OTHER_TIMEOUT_SEC = 300
+# The naive oracle runs at xhigh on a reasoning model, which streams for minutes;
+# 300s would time out on most non-trivial problems and rotate to fallbacks even
+# though the primary was working. Still well under the run route's 45-min cap.
+_DEFAULT_BRUTE_FORCE_TIMEOUT_SEC = 900
 
 _DEFAULT_MAX_TOKENS: dict[str, int] = {
     # Testcase generator script + reasoning tokens must fit under cap (100K).
@@ -234,7 +246,9 @@ _DEFAULT_MAX_TOKENS: dict[str, int] = {
     # explanation was hitting the cap and truncating the last section (finish=length).
     "chat": 32000,
     "code": 16000,
-    "brute_force": 16000,
+    # Raised from 16K: at xhigh, reasoning tokens eat the same budget as the
+    # script, and a truncated oracle (finish=length) costs a full retry.
+    "brute_force": 48000,
     "enrichment": 16000,
     "editorial": 100000,
     "wrong_solutions": 48000,
@@ -911,6 +925,11 @@ def _resolve_read_timeout_sec(purpose: str) -> int:
         if raw:
             return max(1, int(raw))
         return _DEFAULT_EDITORIAL_TIMEOUT_SEC
+    if p == "brute_force":
+        raw = os.environ.get("OPENAI_BRUTE_FORCE_READ_TIMEOUT_SEC", "").strip()
+        if raw:
+            return max(1, int(raw))
+        return _DEFAULT_BRUTE_FORCE_TIMEOUT_SEC
     return _DEFAULT_OTHER_TIMEOUT_SEC
 
 

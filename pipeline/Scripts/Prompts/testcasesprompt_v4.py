@@ -298,8 +298,9 @@ Every case carries subtask structure and per-case weights.
 - Invariants: weights sum to TOTAL_WEIGHTAGE (±0.01); top subtask holds >= 35% of weight;
   stress/large cases carry ~50% of weight (target 50%) — they are FEW in COUNT but
   high-value, so passing them gates most of the score; all weights > 0. ADJUST weights to
-  reach these shares; do NOT `assert` a share and crash if it is off — only the exact
-  weight-SUM (which you fully control) may be asserted.
+  reach these shares. Do NOT `assert` ANY of this and crash — not a share, and NOT the
+  weight SUM either: the pipeline rescales every weight to the exact total afterwards, so
+  asserting the sum only throws away a working suite. Set weights, write the file, stop.
 """
 
     # I/O representation depends on the problem kind. Function-based problems use
@@ -656,6 +657,18 @@ intentional: large cases are few in count but must gate roughly half the score.
 8. self-checks (CORRECTNESS asserts only) + size/diversity TOP-UP (add short buckets; never assert/exit on distribution or weight shares)
 9. json.dump([{{"test_cases": test_cases, "size_model": {{"kind": SIZE_KIND, "max_n": MAX_N}}, "space_mode": SPACE_MODE}}], open("testcases.json","w"), indent=4, ensure_ascii=False)
    (every case dict must include size_metric/scenario/is_edge; SIZE_KIND/SPACE_MODE are the declared problem size model)
+
+FINAL CHECK — verify these FIVE before you emit a single character. They are the only
+things the pipeline CANNOT fix for you, so nothing else matters if one of them is wrong:
+  1. FORMAT. Every `input` is the raw stdin the description's Input Format specifies, and
+     every `output` is byte-for-byte what the solution PRINTS. Never a Python or JSON
+     literal: `8` not `[8]`, `NO` not `["NO"]`, one token per line via
+     "\\n".join(map(str, xs)) — never str(list) or json.dumps.
+  2. IT PARSES. Valid Python, pure ASCII, imports at the top, no markdown fence.
+  3. IT NEVER CRASHES. No `assert`, no `raise` — except a real optimal-vs-brute oracle
+     mismatch. Weights, order, tags, counts and duplicates are all repaired downstream.
+  4. IT WRITES testcases.json. A run that produces no file is a total loss.
+  5. REAL STRESS. At least some inputs constructed at MAX_N, not just small ones.
 
 Return ONLY the Python script. No markdown fences, no prose outside comments.
 """

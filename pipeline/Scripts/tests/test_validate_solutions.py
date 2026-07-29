@@ -14,10 +14,16 @@ class TestValidateSolutionsRouting(unittest.TestCase):
         for k in ("OPENROUTER_MODEL_VALIDATE_SOLUTIONS", "OPENAI_REASONING_EFFORT_VALIDATE_SOLUTIONS"):
             os.environ.pop(k, None)
 
-    def test_purpose_routes_to_gemini_flash_low(self):
+    def test_purpose_routes_to_v4_flash_low(self):
+        # Advisory judge: cheapest capable reasoner, with the previous model
+        # (gemini-3.5-flash) kept as the first fallback.
         import llm_client as lc
-        self.assertEqual(lc._resolve_model("validate_solutions"), "google/gemini-3.5-flash")
+        self.assertEqual(lc._resolve_model("validate_solutions"), "deepseek/deepseek-v4-flash")
         self.assertEqual(lc._resolve_reasoning_effort("validate_solutions"), "low")
+        self.assertEqual(
+            [e["model"] for e in lc._resolve_fallback_plan("validate_solutions")],
+            ["google/gemini-3.5-flash", "openai/gpt-5.4"],
+        )
 
 
 class TestValidatePrompt(unittest.TestCase):

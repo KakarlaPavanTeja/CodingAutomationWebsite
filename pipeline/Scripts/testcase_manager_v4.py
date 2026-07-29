@@ -27,6 +27,8 @@ from usage_tracker import update_usage
 from testcase_helpers import (
     audit_size_distribution,
     detect_problem_type,
+    format_compliance,
+    repair_suite_json_root,
     sync_size_tags_json_root,
     sync_subtask_tags,
     sync_example_testcases,
@@ -536,6 +538,9 @@ def _reformat_and_audit(out_path: str, description: str) -> dict:
     """Load the suite, sync size + subtask tags, reorder, save, and return a size audit."""
     with open(out_path, "r", encoding="utf-8") as f:
         data = json.load(f)
+    # Repair the mechanical contract FIRST (dupes, missing keys, weights, order) so the
+    # generator never has to assert these — and record what it got wrong.
+    compliance = repair_suite_json_root(data)
     tags_fixed = sync_size_tags_json_root(data, description)
     # Guarantee a valid subtask partition (B3). LLM generator scripts sometimes emit
     # NO subtask_<n> tags despite the prompt, which fails "subtask count outside [3,6]"
@@ -555,6 +560,12 @@ def _reformat_and_audit(out_path: str, description: str) -> dict:
     did_reorder = _reorder_testcases_json_root(data)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
+    violations = format_compliance(compliance)
+    if violations:
+        # Named, not silent: this line is the evidence for which prompt rules to keep.
+        print(f"Contract auto-repaired (model did not comply): {violations}")
+    else:
+        print("Contract compliance: clean (no mechanical repairs needed).")
     if tags_fixed:
         print(f"Corrected size_* tags on {tags_fixed} case(s) from derived input sizes.")
     if subtasks_fixed:

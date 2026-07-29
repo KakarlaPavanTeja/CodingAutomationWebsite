@@ -346,6 +346,105 @@ def sync_size_tags(test_cases: list, description: str, root=None) -> int:
     return fixed
 
 
+_REQUIRED_CASE_KEYS = ("input", "output", "weightage", "tags", "order",
+                       "size_metric", "scenario", "is_edge")
+
+
+def normalize_input_for_dedup(raw: str) -> str:
+    """The same normalization `testcase_selection.dedup_by_input` uses, so a suite
+    deduped here is already deduped there — one notion of "same input", not two."""
+    from testcase_selection import normalize_input
+    return normalize_input(raw)
+
+
+def repair_suite(test_cases: list) -> dict:
+    """Mechanically fix what the generator gets wrong and we can compute ourselves.
+
+    Every repair here already existed LATE in the pipeline: `prepare_platform_json`
+    fills missing keys and `_scale_weights_to_total` fixes the weight sum, and
+    `select_suite` dedups. The problem was ORDERING — the generated script `assert`ed
+    these same invariants and died at GENERATION time, so our fixers never saw the data
+    and we paid an LLM repair round trip for a defect we already knew how to fix.
+    Repairing here is what lets the prompt stop asking the model to be right about them.
+
+    Mutates `test_cases` in place. Returns a report of what was repaired so the caller
+    can log which contract rules the model actually broke.
+    """
+    report = {"duplicate_inputs": 0, "missing_keys": {}, "nonpositive_weights": 0,
+              "reordered": 0, "dropped_unusable": 0}
+    if not test_cases:
+        return report
+
+    seen: set[str] = set()
+    kept: list = []
+    for tc in test_cases:
+        if not isinstance(tc, dict) or not str(tc.get("input") or "").strip():
+            report["dropped_unusable"] += 1      # no input = not a runnable case
+            continue
+        key = normalize_input_for_dedup(tc.get("input", ""))
+        if key in seen:
+            report["duplicate_inputs"] += 1
+            continue
+        seen.add(key)
+        kept.append(tc)
+
+    defaults = {"output": "", "weightage": 1.0, "tags": [], "scenario": "default",
+                "is_edge": False}
+    for idx, tc in enumerate(kept, start=1):
+        for k in _REQUIRED_CASE_KEYS:
+            if tc.get(k) is not None:
+                continue
+            report["missing_keys"][k] = report["missing_keys"].get(k, 0) + 1
+            if k == "order":
+                tc[k] = idx
+            elif k == "size_metric":
+                tc[k] = measure_input_size(tc.get("input", "")) or 0
+            else:
+                tc[k] = defaults.get(k, "")
+        try:
+            if float(tc["weightage"]) <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            tc["weightage"] = 1.0                # every case must score something
+            report["nonpositive_weights"] += 1
+        if tc.get("order") != idx:
+            tc["order"] = idx
+            report["reordered"] += 1
+
+    test_cases[:] = kept
+    return report
+
+
+def repair_suite_json_root(data) -> dict:
+    if isinstance(data, list) and data and isinstance(data[0], dict) and "test_cases" in data[0]:
+        return repair_suite(data[0]["test_cases"])
+    if isinstance(data, dict) and "test_cases" in data:
+        return repair_suite(data["test_cases"])
+    return {}
+
+
+def format_compliance(report: dict) -> str:
+    """One line naming which contract rules the model broke; empty when it was clean.
+
+    Purpose: decide on EVIDENCE which prompt rules earn their tokens. A rule that never
+    shows up here across twenty questions can be deleted from the prompt.
+    """
+    if not report:
+        return ""
+    parts = []
+    if report.get("duplicate_inputs"):
+        parts.append(f"{report['duplicate_inputs']} duplicate input(s)")
+    if report.get("dropped_unusable"):
+        parts.append(f"{report['dropped_unusable']} case(s) with no input")
+    for key, n in sorted((report.get("missing_keys") or {}).items()):
+        parts.append(f"{n} missing `{key}`")
+    if report.get("nonpositive_weights"):
+        parts.append(f"{report['nonpositive_weights']} non-positive weight(s)")
+    if report.get("reordered"):
+        parts.append(f"{report['reordered']} order(s) renumbered")
+    return "; ".join(parts)
+
+
 def sync_size_tags_json_root(data, description: str) -> int:
     """Same as `sync_size_tags`, passing the root through so a declared
     `size_model` (kind + max_n) is honoured over parsing the description."""
