@@ -91,6 +91,10 @@ export function outputGroupForPath(filePath: string): OutputGroupId {
     filePath.startsWith("wrong_solutions/") ||
     filePath.startsWith("s3_blobs/") ||
     name === "testcases.json" ||
+    // The generator's full pre-selection pool, snapshotted by select_testcases.
+    name === "testcases_pool.json" ||
+    // The stdin/stdout pair verified against the reference before generation.
+    name === "io_contract.json" ||
     name === "testcases_generator_script.py" ||
     name.startsWith("test_report") ||
     name.endsWith("_test_results.json")
@@ -99,7 +103,8 @@ export function outputGroupForPath(filePath: string): OutputGroupId {
   }
   if (name === "enrichment.json") return "enrichment";
   if (name === "editorial.md") return "editorial";
-  if (name === "usage_tracker.json") return "internal";
+  // `.lock` is the empty flock sidecar usage_tracker writes next to its JSON.
+  if (name === "usage_tracker.json" || name.endsWith(".lock")) return "internal";
   if (QUESTION_ROOT_FILES.has(name) || QUESTION_ROOT_FILES.has(filePath)) return "question";
 
   return "other";

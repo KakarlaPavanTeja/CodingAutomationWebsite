@@ -82,7 +82,7 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 │   │   ├── llm_client.py       # OpenRouter (proxy gateway) chat-completions wrapper
 │   │   ├── usage_tracker.py    # Token/cost accounting; reports to /api/internal/llm-usage
 │   │   ├── generate_full_question.py
-│   │   ├── testcase_manager.py
+│   │   ├── testcase_manager_v4.py
 │   │   ├── code_splitter.py
 │   │   ├── code_cleaner.py
 │   │   ├── execution_manager_v2.py
@@ -138,7 +138,7 @@ The pipeline turns one input pair (`problem.md` + `solution.py`) into a fully va
 | # | Step ID | Script | What it does |
 |---|---|---|---|
 | 1 | `generate_question` | `generate_full_question.py` | Generates polished MD description, translates solution to all selected languages, predicts difficulty + topics |
-| 2 | `generate_testcases` | `testcase_manager.py` | LLM writes a Python script that *generates* N diverse test cases; runs it; auto-retries on failure |
+| 2 | `generate_testcases` | `testcase_manager_v4.py` | LLM writes a Python script that *generates* N diverse test cases; runs it; auto-retries on failure |
 | 3 | `split_code` | `code_splitter.py` | Splits each language solution into `driver.{ext}`, `solution.{ext}`, `default.{ext}`, `debugger.{ext}` |
 | 4 | `execute_tests` | `execution_manager_v2.py` (or `_nonfunctionbased.py`) | Runs all language solutions against all test cases via external compiler API; records pass/fail |
 | 5 | `enrichment` | `enrichment_manager.py` | Generates hints, follow-up questions, real-world scenarios |
