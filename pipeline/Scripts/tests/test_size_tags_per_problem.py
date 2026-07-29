@@ -16,6 +16,7 @@ SCRIPT_DIR = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, SCRIPT_DIR)
 
 from testcase_helpers import (  # noqa: E402
+    audit_size_distribution,
     bucket_for_case,
     case_size_metric,
     measure_input_size,
@@ -24,6 +25,7 @@ from testcase_helpers import (  # noqa: E402
     sync_size_tags_json_root,
     tag_size_bucket,
 )
+from testcase_selection import bucket_case  # noqa: E402
 
 MAX_N = 200_000
 STRING_DESC = (
@@ -108,6 +110,50 @@ class BucketsScaleWithTheProblemTest(unittest.TestCase):
 
     def test_no_size_dimension_leaves_tags_alone(self):
         self.assertIsNone(bucket_for_case(_string_case(500), MAX_N, "none"))
+
+
+class EdgeBucketIsDegeneracyNotJustSizeTest(unittest.TestCase):
+    """A binary-string problem has exactly two inputs of length 1, so an edge
+    bucket defined as n <= 1 can never reach its 20% target. Degeneracy is
+    declared by the generator's `is_edge` flag, whatever the case's length."""
+
+    def test_flagged_small_case_is_edge(self):
+        case = _string_case(8)
+        case["is_edge"] = True
+        self.assertEqual(bucket_for_case(case, MAX_N, "count"), "edge")
+
+    def test_unflagged_small_case_stays_small(self):
+        self.assertEqual(bucket_for_case(_string_case(8), MAX_N, "count"), "small")
+
+    def test_minimum_size_is_edge_without_any_flag(self):
+        self.assertEqual(bucket_for_case(_string_case(1), MAX_N, "count"), "edge")
+
+    def test_stress_size_wins_over_the_edge_flag(self):
+        # A max-size degenerate case (200k identical chars) is a STRESS case;
+        # flagging cases as edge must never drain the large bucket.
+        case = _string_case(199_270)
+        case["is_edge"] = True
+        self.assertEqual(bucket_for_case(case, MAX_N, "count"), "large")
+
+    def test_edge_target_is_reachable_for_a_two_letter_alphabet(self):
+        # 30 short degenerate cases + 120 ordinary ones -> 20% edge, on target.
+        cases = []
+        for i in range(30):
+            c = _string_case(2 + i % 6)
+            c["is_edge"] = True
+            cases.append(c)
+        cases += [_string_case(100 + i) for i in range(120)]
+        data = _payload(cases)
+        sync_size_tags_json_root(data, STRING_DESC)
+        buckets = [tag_size_bucket(c["tags"]) for c in data[0]["test_cases"]]
+        self.assertEqual(buckets.count("edge"), 30)
+        audit = audit_size_distribution(data[0]["test_cases"], STRING_DESC)
+        self.assertEqual(audit["realized"]["edge"], 20.0)
+        self.assertNotIn("edge", {d["bucket"] for d in audit["deficient"]})
+
+    def test_selector_and_tags_agree_on_the_bucket(self):
+        case = {"size_metric": 8, "is_edge": True, "input": "10000000\n"}
+        self.assertEqual(bucket_case(case, MAX_N), bucket_for_case(case, MAX_N, "count"))
 
 
 class SyncSizeTagsTest(unittest.TestCase):
