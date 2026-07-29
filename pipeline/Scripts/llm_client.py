@@ -12,7 +12,10 @@ Purpose routing (default reasoning → fallbacks on 429/5xx):
   editorial       dynamic → Gemini 3.1 Pro → GPT-5.5 → Opus 4.8
   harden          medium  → Gemini 3.1 Pro → GPT-5.5
   wrong_solutions medium  → Gemini 3.1 Pro → GPT-5.5
-  testcases       tiered  → GPT-5.4 (easy/med:medium, hard:high) → Opus 4.8 → Gemini 3.5 Flash → GPT-5.5
+  brute_force     high    → DeepSeek R1-0528 primary (trial, 32K out cap)
+                            → Gemini 3.1 Pro → GPT-5.5   (naive oracle)
+  testcases       tiered  → Kimi K2 Thinking (easy/med:medium, hard:high)
+                            → GPT-5.4 → Opus 4.8 → Gemini 3.5 Flash → GPT-5.5
 
 Configuration
 -------------
@@ -62,6 +65,8 @@ _GPT_55 = "openai/gpt-5.5"
 _GPT_54 = "openai/gpt-5.4"
 _OPUS_48 = "anthropic/claude-opus-4.8"
 _KIMI_K2_THINKING = "moonshotai/kimi-k2-thinking"
+# Last release under the R1 name (2025-05-28); DeepSeek moved to V3.x/V4 after.
+_DEEPSEEK_R1 = "deepseek/deepseek-r1-0528"
 
 # Per-model output-token override. Overrides the shared purpose default so a
 # model can use its own provider ceiling. k2-thinking's provider (Novita) hard-
@@ -69,6 +74,9 @@ _KIMI_K2_THINKING = "moonshotai/kimi-k2-thinking"
 # so pin at the ceiling rather than above it.
 _MODEL_MAX_TOKENS: dict[str, int] = {
     _KIMI_K2_THINKING: 98304,
+    # R1's visible chain-of-thought counts toward output, so the 16K brute_force
+    # default truncates the script. 32768 is r1-0528's provider ceiling.
+    _DEEPSEEK_R1: 32768,
 }
 
 
@@ -85,6 +93,7 @@ _PURPOSE_DEFAULTS: dict[str, str] = {
     "editorial": _GPT_54,
     "harden": _GPT_54,
     "wrong_solutions": _GPT_54,
+    "brute_force": _DEEPSEEK_R1,
     "validate_solutions": _GEMINI_FLASH,
 }
 
@@ -135,6 +144,17 @@ _PURPOSE_CONFIG: dict[str, dict] = {
             {"model": _GPT_55, "effort": "medium"},
         ],
     },
+    # Split out of "code" so the naive oracle can be pinned to a cheap reasoner
+    # without also routing multi-language translation there. Output is one small
+    # script and it is verified downstream (AST parse, copy-of-optimal heuristic,
+    # dual-oracle mismatch abort), so a weak model fails loudly, not silently.
+    "brute_force": {
+        "default_effort": "high",
+        "fallbacks": [
+            {"model": _GEMINI_PRO, "effort": "high"},
+            {"model": _GPT_55, "effort": "high"},
+        ],
+    },
     "validate_solutions": {
         "default_effort": "low",
         "fallbacks": [
@@ -176,6 +196,7 @@ _ENV_SUFFIX = {
     "editorial": "EDITORIAL",
     "harden": "HARDEN",
     "wrong_solutions": "WRONG_SOLUTIONS",
+    "brute_force": "BRUTE_FORCE",
     "validate_solutions": "VALIDATE_SOLUTIONS",
 }
 
@@ -213,6 +234,7 @@ _DEFAULT_MAX_TOKENS: dict[str, int] = {
     # explanation was hitting the cap and truncating the last section (finish=length).
     "chat": 32000,
     "code": 16000,
+    "brute_force": 16000,
     "enrichment": 16000,
     "editorial": 100000,
     "wrong_solutions": 48000,

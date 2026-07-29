@@ -562,7 +562,30 @@ post-processing strips extra text.
   3. NO markdown fences (no ``` or ```python). No markdown anywhere.
   4. Human commentary lives ONLY in `#` comments or docstrings.
 
-(IMPORT CORRECTNESS):
+(NEVER CRASH — REPAIR INSTEAD. THE SCRIPT MUST ALWAYS WRITE testcases.json):
+A script that raises is a total loss: no suite, and a wasted repair round trip. Every
+failure below is one you can FIX IN CODE with information you already have, so fix it —
+do NOT `assert` it and do NOT `raise`. The ONLY permitted abort is an optimal-vs-brute
+ORACLE MISMATCH (a real correctness bug, which must stop the run).
+  * Weight sum off (`AssertionError: Weight sum 20.22 != 20`): RENORMALIZE — scale every
+    weight by TOTAL/current_sum, then put the rounding remainder on the last case so the
+    sum is exact. Never assert a sum you can compute and correct.
+  * Duplicate input: `add_case` returns False and the caller moves on. Never assert on it.
+  * A scenario runs dry, or you cannot reach a target count or size %: accept fewer cases
+    and continue. The downstream selector owns the final count and distribution.
+  * A required key is missing on a case: SET it (sensible default) instead of raising.
+  * Do not paper over it with bare `try/except: pass` either — fix the cause, keep the case.
+
+(SOURCE MUST BE PURE ASCII):
+Every character in the file — code AND comments — must be ASCII. One typographic character
+is a hard SyntaxError. Write `-` not en/em dashes, `'` not curly quotes, `"` not curly
+double quotes, `<=` not the comparison glyph, `->` not an arrow, `...` not an ellipsis
+character. Never paste text from the problem statement into source without transliterating.
+
+(IMPORT CORRECTNESS — every import at the TOP of the file, before any other statement):
+  * `import sys` is REQUIRED if you touch `sys` anywhere (including a `sys.stderr` progress
+    print). A missing `import sys` is the single most common crash.
+  * Define every function before the code that calls it. No forward references.
   * Only import names that exist. `round`/`abs`/`min`/`max`/`sum`/`pow`/`divmod` are
     BUILT-INS — never `from math import round`; use directly.
   * From `math` only real members (floor, ceil, sqrt, gcd, log, factorial, inf, pi), or

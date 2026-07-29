@@ -96,7 +96,7 @@ def _retry_fix(description: str, optimal_solution: str, failed_code: str, error:
         f"### Previous brute force:\n```python\n{failed_code}\n```\n\n"
         f"Return the corrected brute-force Python script."
     )
-    return call_llm(retry_system, retry_user, purpose="code", reasoning_effort="high")
+    return call_llm(retry_system, retry_user, purpose="brute_force", reasoning_effort="high")
 
 
 def _write_crosscheck_marker(status: str, reason: str = "", mismatches: list | None = None) -> None:
@@ -316,7 +316,7 @@ def main():
         if extra_nudge:
             usr_p = usr_p + f"\n\n### Regeneration nudge:\n{extra_nudge}\n"
         print("Calling LLM to generate the brute-force oracle solution...")
-        content, usage = call_llm(sys_p, usr_p, purpose="code", reasoning_effort="high")
+        content, usage = call_llm(sys_p, usr_p, purpose="brute_force", reasoning_effort="high")
         print("LLM call completed.")
         content = _sanitize_generated_script(content)
         update_usage(

@@ -54,7 +54,45 @@ def _sanitize_generated_script(content: str) -> str:
     text = text.rstrip()
     if text.endswith("```"):
         text = text[:-3]
-    return text.strip()
+    return _asciify_punctuation(text.strip())
+
+
+# Typographic characters a model slips into SOURCE (not just comments): an en-dash
+# inside an expression is `SyntaxError: invalid character '–' (U+2013)`, which cost
+# a full repair round trip today. Deterministically fixable, so fix it here rather
+# than spend an LLM call on it.
+_PUNCTUATION_FIXES = {
+    "–": "-", "—": "-", "−": "-",        # en dash, em dash, minus sign
+    "‘": "'", "’": "'",                       # curly single quotes
+    "“": '"', "”": '"',                       # curly double quotes
+    "…": "...", " ": " ", "→": "->",     # ellipsis, nbsp, arrow
+    "≤": "<=", "≥": ">=", "×": "*",      # comparison / times signs
+}
+
+
+def _asciify_punctuation(source: str) -> str:
+    for bad, good in _PUNCTUATION_FIXES.items():
+        source = source.replace(bad, good)
+    return source
+
+
+def _syntax_error_of(source: str) -> str | None:
+    """A formatted SyntaxError for `source`, or None when it parses.
+
+    Running a script that cannot parse, just to read the traceback back off stderr,
+    burns a subprocess and hands the repair model a stack trace instead of a
+    location. 5 of 12 repairs today were pure syntax (unterminated string literal,
+    mismatched brace, non-ASCII character), so parse first and report precisely.
+    """
+    import ast
+    try:
+        ast.parse(source)
+        return None
+    except SyntaxError as e:
+        where = f"line {e.lineno}" + (f", offset {e.offset}" if e.offset else "")
+        snippet = (e.text or "").rstrip()
+        return (f"SyntaxError: {e.msg} ({where})"
+                + (f"\n    {snippet}" if snippet else ""))
 
 
 # --------------------------------------------------------------------------- #
@@ -181,6 +219,16 @@ def _ensure_harness(script_path: str) -> None:
 def _run_generator(script_path: str):
     timeout_sec = _script_timeout_sec()
     _ensure_harness(script_path)
+    # Pre-flight: every path that writes a generated script (primary, retry,
+    # grounding-fix, size-fix) runs it through here, so one parse check covers all
+    # four. A non-parsing script gets a precise location instead of a traceback.
+    with open(script_path, "r", encoding="utf-8") as f:
+        syntax_err = _syntax_error_of(f.read())
+    if syntax_err:
+        print(f"Generator script does not parse — skipping execution.\n{syntax_err}")
+        return subprocess.CompletedProcess(
+            args=[script_path], returncode=1, stdout="", stderr=syntax_err,
+        )
     try:
         return subprocess.run(
             [_python_executable(), script_path],
@@ -191,13 +239,34 @@ def _run_generator(script_path: str):
         sys.exit(1)
 
 
+# The primary call's system prompt (~6.4k tokens: I/O format, size ladder, metadata
+# spec, output hygiene). Every REPAIR call used to ship a ~294-token stub instead, so a
+# repair was free to drift off the contract while fixing an unrelated crash. Stashed at
+# build time and prepended to every repair prompt.
+_PRIMARY_SYSTEM_PROMPT = ""
+
+
+def _repair_system_prompt(instructions: str) -> str:
+    """A repair system prompt that still carries the full generation contract."""
+    if not _PRIMARY_SYSTEM_PROMPT:
+        return instructions
+    return (
+        "The ORIGINAL CONTRACT you must keep obeying while repairing follows. Every rule "
+        "in it still applies to the script you return — the I/O format, the size ladder, "
+        "the per-case metadata, and the output hygiene rules.\n\n"
+        f"{_PRIMARY_SYSTEM_PROMPT}\n\n"
+        "=== REPAIR TASK ===\n"
+        f"{instructions}"
+    )
+
+
 def _retry_fix_script(script_path: str, first_error: str) -> None:
     """Ask the LLM to fix a script that crashed, save, and re-run. Exits on failure."""
     print("\n--- Retrying: calling LLM to fix the generator script ---")
     with open(script_path, "r") as f:
         failed_script = f.read()
 
-    retry_system = (
+    retry_system = _repair_system_prompt(
         "You are a Python expert. The user gave you a test case generator script that failed. "
         "Fix the script so it runs without errors and produces the same output format and the "
         "same dual-oracle / scoring behavior. Return ONLY the corrected Python script, no explanations. "
@@ -369,7 +438,7 @@ def _repair_from_grounding(script_path: str, out_path: str, optimal_solution: st
         _cleanup(backup)
         return False
 
-    retry_system = (
+    retry_system = _repair_system_prompt(
         "You are a Python expert fixing a test-case generator script. The generated `input` "
         "strings are in the WRONG FORMAT: when piped to the reference solution on STANDARD INPUT, "
         "the solution crashes or prints a different answer than the stored `output`. The reference "
@@ -529,6 +598,7 @@ def _regenerate_for_size(script_path: str, out_path: str, description: str,
     with open(script_path, "r", encoding="utf-8") as f:
         current_script = f.read()
     system_prompt, user_prompt = get_size_fix_prompt(current_script, description, audit)
+    system_prompt = _repair_system_prompt(system_prompt)
     print(f"--- Size-diversity round {round_no}: re-prompting LLM to regenerate for size targets ---")
     try:
         content, usage = call_llm(system_prompt, user_prompt, purpose="testcases_size_fix")
@@ -712,6 +782,10 @@ def main():
         is_function=is_function,
         signature_params=signature_params,
     )
+    # Repair calls (crash-retry, grounding-fix, size-fix) reuse this so they keep the
+    # same contract instead of shipping a bare "fix this script" instruction.
+    global _PRIMARY_SYSTEM_PROMPT
+    _PRIMARY_SYSTEM_PROMPT = system_prompt
 
     # 6. LLM -> script
     print("Calling LLM to generate test case generator script...")
