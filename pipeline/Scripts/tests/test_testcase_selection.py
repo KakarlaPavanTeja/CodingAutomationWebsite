@@ -2,9 +2,12 @@ import copy
 import unittest
 
 from testcase_selection import (
+    CASE_CAP,
+    CASE_FLOOR,
     bucket_size,
     normalize_input,
     dedup_by_input,
+    fill_target,
     guarantee_pass,
     select_suite,
     format_funnel,
@@ -160,10 +163,25 @@ class TestSelectSuite(unittest.TestCase):
             pool.append(c)
         return pool
 
-    def test_fills_up_to_cap(self):
-        selected, rep = select_suite(self._pool(300), wrong_ids=set(), max_n=100, cap=150)
-        self.assertEqual(len(selected), 150)
-        self.assertEqual(rep["selected"], 150)
+    def test_fills_up_to_the_difficulty_target_not_the_cap(self):
+        # Regression: the fill pass used to run to `cap`, so EVERY suite with a pool
+        # of 150+ shipped exactly 150 cases regardless of problem or difficulty.
+        for difficulty, expected in (("easy", 60), ("medium", 100), ("hard", 150)):
+            selected, rep = select_suite(self._pool(300), wrong_ids=set(), max_n=100,
+                                         cap=150, difficulty=difficulty)
+            self.assertEqual(len(selected), expected, difficulty)
+            self.assertEqual(rep["target"], expected, difficulty)
+
+    def test_unknown_difficulty_routes_to_medium(self):
+        _sel, rep = select_suite(self._pool(300), set(), max_n=100, difficulty="brutal")
+        self.assertEqual(rep["target"], fill_target("medium"))
+
+    def test_cap_overrides_the_target(self):
+        # An explicit --cap must win over both the target and the floor.
+        selected, rep = select_suite(self._pool(300), set(), max_n=100, cap=30,
+                                     difficulty="hard")
+        self.assertEqual(len(selected), 30)
+        self.assertEqual(rep["target"], 30)
 
     def test_dedup_before_select(self):
         a = mk("a", "S1", "small", "x"); a["input"] = "same"; a.pop("bucket")
@@ -172,9 +190,14 @@ class TestSelectSuite(unittest.TestCase):
         self.assertEqual(rep["unique"], 1)
         self.assertEqual(len(selected), 1)
 
-    def test_below_floor_flagged(self):
+    def test_thin_pool_is_complete_not_a_shortfall(self):
+        # Some problems have only a handful of legal inputs. Selection cannot invent
+        # more, so all 3 available cases ARE the suite — reported, never flagged.
         selected, rep = select_suite(self._pool(3), wrong_ids=set(), max_n=100, cap=150, floor=25)
-        self.assertTrue(rep["below_floor"])
+        self.assertEqual(len(selected), 3)
+        self.assertTrue(rep["small_space"])
+        self.assertFalse(rep["below_floor"])
+        self.assertIn("pool under floor 25: shipped all 3", format_funnel(rep))
 
     def test_deterministic(self):
         pool = self._pool(200)
@@ -211,16 +234,32 @@ class TestExhaustive(unittest.TestCase):
         self.assertFalse(rep["below_floor"])         # not a shortfall
         self.assertTrue(rep["exhaustive_complete"])
 
-    def test_sampled_below_floor_still_flags(self):
+    def test_undeclared_tiny_pool_is_also_complete(self):
+        # Same 8-case reality, but the generator never declared space_mode. The pool
+        # size is the evidence: you cannot select cases that do not exist.
         cases = []
-        for i in range(5):
+        for i in range(8):
             c = mk(f"c{i}", "S1", "small", f"s{i}")
             c["input"] = c["id"]
             c.pop("bucket")
             cases.append(c)
         selected, rep = select_suite(cases, set(), max_n=100, floor=25,
                                      space_mode="sampled")
-        self.assertTrue(rep["below_floor"])
+        self.assertEqual(len(selected), 8)
+        self.assertTrue(rep["small_space"])
+        self.assertFalse(rep["below_floor"])
+
+
+class TestBounds(unittest.TestCase):
+    def test_default_bounds(self):
+        self.assertEqual((CASE_FLOOR, CASE_CAP), (60, 150))
+
+    def test_target_stays_inside_the_bounds(self):
+        for d in ("easy", "medium", "hard", None, "nonsense"):
+            self.assertTrue(CASE_FLOOR <= fill_target(d) <= CASE_CAP, d)
+
+    def test_target_clamped_when_cap_is_below_the_floor(self):
+        self.assertEqual(fill_target("hard", cap=10, floor=60), 10)
 
 
 class TestFunnel(unittest.TestCase):

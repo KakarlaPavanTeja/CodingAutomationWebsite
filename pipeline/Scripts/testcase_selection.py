@@ -26,8 +26,33 @@ SMALL_FRAC = 0.2
 LARGE_FRAC = 0.5
 
 # Selection bounds (callers may override from env).
+#
+# Two different numbers, often confused:
+#   CASE_CAP   — the hard CEILING. Not even the guarantee pass may cross it.
+#   CASE_FLOOR — the lowest suite size we consider a full one. A pool that cannot
+#                reach it is not a failure (see `small_space` below) — you cannot
+#                select cases that do not exist.
 CASE_CAP = 150
-CASE_FLOOR = 25
+CASE_FLOOR = 60
+
+# Where the FILL pass stops, per difficulty, inside [CASE_FLOOR, CASE_CAP]. Filling
+# blindly to the cap made every suite exactly CASE_CAP cases: the guarantee pass has
+# already covered every slot and every catchable wrong solution, so padding past this
+# target buys size spread and nothing else. An easy problem does not need 150 cases.
+# Unknown or absent difficulty routes to medium.
+TARGET_BY_DIFFICULTY = {"easy": CASE_FLOOR, "medium": 100, "hard": CASE_CAP}
+DEFAULT_DIFFICULTY = "medium"
+
+
+def fill_target(difficulty=None, cap=CASE_CAP, floor=CASE_FLOOR) -> int:
+    """Suite size the fill pass aims for, clamped into [floor, cap].
+
+    Clamping is what keeps a caller-supplied cap authoritative: `--cap 10` yields a
+    target of 10, never a floor-driven 60.
+    """
+    d = str(difficulty or DEFAULT_DIFFICULTY).strip().lower()
+    target = TARGET_BY_DIFFICULTY.get(d, TARGET_BY_DIFFICULTY[DEFAULT_DIFFICULTY])
+    return max(min(target, cap), min(floor, cap))
 
 
 def bucket_size(size_metric: int, max_n: int) -> str:
@@ -211,15 +236,17 @@ def _fill_pass(selected, seen, remaining, cap):
 
 
 def select_suite(cases, wrong_ids, max_n, cap=CASE_CAP, floor=CASE_FLOOR,
-                 size_kind="count", space_mode="sampled"):
-    """Full pipeline: bucket -> dedup -> guarantee pass -> fill to cap.
+                 size_kind="count", space_mode="sampled", difficulty=None):
+    """Full pipeline: bucket -> dedup -> guarantee pass -> fill to the target.
 
     size_kind: "count"|"value"|"grid"|"multi" use size_metric bucketing;
         "none" (no size dimension) puts every case in a single "flat" bucket so
         coverage is driven by subtask x scenario only.
-    space_mode: "sampled" (huge input space, target the cap) or "exhaustive"
-        (small input space enumerated in full — a below-cap count is COMPLETE,
+    space_mode: "sampled" (huge input space, target the fill target) or "exhaustive"
+        (small input space enumerated in full — a below-target count is COMPLETE,
         never a shortfall).
+    difficulty: "easy"|"medium"|"hard" — picks the fill target (see `fill_target`).
+        None routes to medium.
 
     Returns (selected_cases, report)."""
     generated = len(cases)
@@ -230,17 +257,33 @@ def select_suite(cases, wrong_ids, max_n, cap=CASE_CAP, floor=CASE_FLOOR,
     selected, report = guarantee_pass(unique, wrong_ids, cap=cap)
     seen = {c["id"] for c in selected}
     remaining = [c for c in unique if c["id"] not in seen]
-    selected = _fill_pass(selected, seen, remaining, cap)
+    # Fill to the difficulty target, not the cap. The guarantee pass may already sit
+    # above it (must-haves win) — then this adds nothing, which is correct.
+    target = fill_target(difficulty, cap, floor)
+    selected = _fill_pass(selected, seen, remaining, target)
     exhaustive = space_mode == "exhaustive"
+    # A pool thinner than the floor cannot be padded — those cases do not exist. Some
+    # problems have a genuinely tiny legal input space (a handful of distinct inputs),
+    # so shipping all 8 or 10 of them IS the complete suite, not a shortfall. Selection
+    # never invents inputs, so a short pool is a generation-side fact, reported as such
+    # rather than judged here: this flag says "the pool was smaller than the floor",
+    # NOT "the input space is provably that small". Only the generator's declared
+    # `space_mode: exhaustive` claims the stronger thing.
+    small_space = len(unique) < floor
     report.update({
         "generated": generated,
         "unique": len(unique),
         "selected": len(selected),
         "size_kind": size_kind,
         "space_mode": space_mode,
+        "difficulty": (difficulty or DEFAULT_DIFFICULTY),
+        "cap": cap,
+        "floor": floor,
+        "target": target,
         "exhaustive_complete": exhaustive,
-        # A short SAMPLED suite is a shortfall; an exhaustive one is complete.
-        "below_floor": (not exhaustive) and (len(selected) < floor),
+        "small_space": small_space,
+        # Only a MISCONFIGURED cap can now land a full pool under the floor.
+        "below_floor": (not exhaustive) and (not small_space) and (len(selected) < floor),
     })
     return selected, report
 
@@ -250,8 +293,9 @@ def format_funnel(report):
     line = " → ".join([
         f"generated {report['generated']}",
         f"unique {report['unique']}",
-        f"selected {report['selected']} "
-        f"(edges {report['edges']}, tle {report['tle']}, "
+        f"selected {report['selected']}"
+        + (f"/{report['target']}" if report.get("target") else "")
+        + f" (edges {report['edges']}, tle {report['tle']}, "
         f"slots {report['slots_filled']}/{report['slots_total']}, "
         f"kills {report['kills_covered']}/{report['kills_total']})",
     ])
@@ -262,6 +306,9 @@ def format_funnel(report):
         flags.append(f"CAPPED: kept {report['edges']}/{report['edges_total']} edge(s)")
     if report.get("exhaustive_complete"):
         flags.append(f"exhaustive: complete {report['selected']}/{report['unique']}")
+    elif report.get("small_space"):
+        flags.append(f"pool under floor {report.get('floor', CASE_FLOOR)}: "
+                     f"shipped all {report['selected']} available")
     if report.get("below_floor"):
         flags.append("BELOW FLOOR")
     if flags:

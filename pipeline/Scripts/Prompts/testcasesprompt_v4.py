@@ -35,12 +35,17 @@ MIN_TESTCASES = 25                          # raised from 20 — LeetCode Easy f
 # leave the final count/size%/weights to the selector. These bound the candidate POOL.
 POOL_TARGET_MIN = 150
 POOL_TARGET_MAX = 250
-CASE_CAP = 150                              # mirrors testcase_selection.CASE_CAP
 
-# Bucket boundaries as fractions of the problem's own MAX_N. Imported from the
-# selector so the prompt states the SAME rule the B3 gate enforces — the bands
-# must never be written as fixed numbers here.
-from testcase_selection import LARGE_FRAC, SMALL_FRAC  # noqa: E402
+# Bucket boundaries as fractions of the problem's own MAX_N, plus the selection
+# bounds. Imported from the selector so the prompt states the SAME rules the B3 gate
+# enforces — never re-written as fixed numbers here (a stale mirror of CASE_CAP would
+# have the prompt promise a trim the selector does not perform).
+from testcase_selection import (  # noqa: E402
+    CASE_CAP,
+    CASE_FLOOR,
+    LARGE_FRAC,
+    SMALL_FRAC,
+)
 
 # Size-category distribution targets (count %, enforced by B3 in benchmark_suite).
 # Philosophy (matches real judges like LeetCode): the suite is dominated by cheap
@@ -227,8 +232,11 @@ def _count_hint(difficulty, problem_type, num_testcases):
     type_note = TYPE_COUNT_HINT.get((problem_type or "generic").strip().lower(),
                                     TYPE_COUNT_HINT["generic"])
     overflow = (f"OVER-GENERATE toward a pool of ~{POOL_TARGET_MIN}-{POOL_TARGET_MAX} DISTINCT "
-                f"cases — the downstream selector dedups and trims to {CASE_CAP}, so more is "
-                f"better and there is NO tight per-subtask cap.")
+                f"cases — the downstream selector dedups and trims to {CASE_FLOOR}-{CASE_CAP} "
+                f"(by difficulty), so more is better and there is NO tight per-subtask cap. "
+                f"The ONE exception: if the problem's legal input space is genuinely tiny "
+                f"(a handful of distinct inputs), enumerate ALL of it, set "
+                f"space_mode=\"exhaustive\", and stop — do not pad it with duplicates.")
     if num_testcases is not None:
         floor = max(num_testcases, MIN_TESTCASES)
         return (f"at least {floor} (hard minimum {MIN_TESTCASES}). {overflow} "
@@ -392,10 +400,12 @@ Every case carries subtask structure and per-case weights.
   * Handle newlines and trailing spaces per spec. Both fields are STDIN/STDOUT strings."""
 
     overgenerate_block = f"""
-(OVER-GENERATE — a downstream SELECTOR dedups, verifies TLE, scores kills, and trims to {CASE_CAP}):
+(OVER-GENERATE — a downstream SELECTOR dedups, verifies TLE, scores kills, and trims to
+{CASE_FLOOR}-{CASE_CAP} cases):
 This suite is NO LONGER the final suite. A deterministic selector runs AFTER you: it removes
 exact-input duplicates, buckets by size, times the brute force for TLE, scores which cases catch
-wrong solutions, and keeps the strongest ~{CASE_CAP}. So:
+wrong solutions, and keeps the strongest {CASE_FLOOR}-{CASE_CAP} (easy problems land near
+{CASE_FLOOR}, hard ones near {CASE_CAP}). So:
   * Aim HIGH: emit a LARGE pool of DISTINCT cases (target ~{POOL_TARGET_MIN}-{POOL_TARGET_MAX}). More
     distinct, well-labeled cases is strictly better. Do NOT minimize the count or stop early.
   * You are NOT responsible for the final count, the exact size %, or the final weights — the

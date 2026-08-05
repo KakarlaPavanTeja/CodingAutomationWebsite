@@ -305,6 +305,24 @@ def load_testcases(path: str | None = None) -> list[dict]:
     return []
 
 
+def load_suite_complete(path: str | None = None) -> bool:
+    """Root-level `suite_complete` flag stamped by testcase selection.
+
+    True means the suite holds the WHOLE available input space — a problem with only
+    a handful of legal inputs ships a handful of cases, and that is finished work, not
+    a thin suite. `load_testcases` returns just the case list and drops this, so the
+    minimum-count gate has to read it separately. Missing/unparseable => False, which
+    keeps the gate strict for every ordinary suite."""
+    path = path or os.path.join("Outputs", "testcases.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    root = data[0] if isinstance(data, list) and data else data
+    return bool(isinstance(root, dict) and root.get("suite_complete"))
+
+
 def load_text(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
@@ -748,6 +766,7 @@ def audit_coverage_shape(
     problem_type: str | None = None,
     brute_code: str | None = None,
     advisory_size: bool = False,
+    suite_complete: bool = False,
 ) -> dict[str, Any]:
     issues: list[str] = []
     warnings: list[str] = []
@@ -755,8 +774,14 @@ def audit_coverage_shape(
 
     total = len(test_cases)
     if total < MIN_TESTCASES:
-        issues.append(f"total cases {total} < MIN_TESTCASES ({MIN_TESTCASES})")
-        hard_fail = True
+        # A complete suite over a tiny input space cannot reach the minimum — there are
+        # no more legal inputs to add. Note it, never fail it.
+        if suite_complete:
+            warnings.append(f"total cases {total} < MIN_TESTCASES ({MIN_TESTCASES}) "
+                            f"— accepted: suite covers the whole input space")
+        else:
+            issues.append(f"total cases {total} < MIN_TESTCASES ({MIN_TESTCASES})")
+            hard_fail = True
 
     subtask_counts = _subtask_counts(test_cases)
     subtask_n = len(subtask_counts)
@@ -1444,7 +1469,8 @@ def run_benchmark(
     print("[B3] Coverage-shape audit", flush=True)
     _log_detail("Checking subtask count, size distribution, and scenario tags…")
     report.b3 = audit_coverage_shape(
-        test_cases, description, brute_code=brute_code, advisory_size=advisory_size
+        test_cases, description, brute_code=brute_code, advisory_size=advisory_size,
+        suite_complete=load_suite_complete(testcases_path),
     )
     report.warnings.extend(report.b3.get("warnings", []))
     if report.b3.get("hard_fail"):

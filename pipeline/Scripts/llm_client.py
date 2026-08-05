@@ -190,21 +190,21 @@ _PURPOSE_CONFIG: dict[str, dict] = {
 # Trial: kimi-k2-thinking primary → gpt-5.4 first fallback → existing ladder.
 _TESTCASES_TIER_DEFAULTS: dict[str, dict[str, str]] = {
     "easy": {
-        "model": _KIMI_K2_THINKING,
+        "model": _GPT_54,
         "effort": "medium",
-        "fallbacks": f"{_GPT_54},{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
+        "fallbacks": f"{_KIMI_K2_THINKING},{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
         "fallback_efforts": "medium,medium,medium,medium",
     },
     "medium": {
-        "model": _KIMI_K2_THINKING,
+        "model": _GPT_54,
         "effort": "medium",
-        "fallbacks": f"{_GPT_54},{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
+        "fallbacks": f"{_KIMI_K2_THINKING},{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
         "fallback_efforts": "medium,medium,medium,medium",
     },
     "hard": {
-        "model": _KIMI_K2_THINKING,
+        "model": _GPT_54,
         "effort": "high",
-        "fallbacks": f"{_GPT_54},{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
+        "fallbacks": f"{_KIMI_K2_THINKING},{_OPUS_48},{_GEMINI_FLASH},{_GPT_55}",
         "fallback_efforts": "high,high,high,high",
     },
 }

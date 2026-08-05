@@ -26,7 +26,14 @@ import json
 import os
 import time
 
-from testcase_selection import bucket_size, select_suite, format_funnel
+from testcase_selection import (
+    CASE_CAP,
+    CASE_FLOOR,
+    bucket_size,
+    fill_target,
+    format_funnel,
+    select_suite,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -221,11 +228,17 @@ def annotate_tle(cases: list, brute_code, tle_batch_runner, max_n: int,
 # --------------------------------------------------------------------------- #
 # Write back — rebuild testcases.json from the selected records, shape preserved
 # --------------------------------------------------------------------------- #
-def write_selected(testcases_json_path: str, selected: list) -> None:
+def write_selected(testcases_json_path: str, selected: list,
+                   suite_complete: bool = False) -> None:
     """Overwrite testcases.json keeping only the selected cases, in order.
 
     The stored dict (`_raw`) is reused verbatim so tags/weightage/output survive;
-    `order` is renumbered 1..N over the selected suite."""
+    `order` is renumbered 1..N over the selected suite.
+
+    `suite_complete` records that a below-floor suite is the WHOLE available input
+    space, not a shortfall. Selection is the only step that sees the candidate pool,
+    so downstream count gates (benchmark B3) cannot work this out for themselves.
+    """
     with open(testcases_json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -237,14 +250,14 @@ def write_selected(testcases_json_path: str, selected: list) -> None:
 
     # Stamp `selected` so a re-run of select can tell this file is a trimmed suite
     # (and should reload the raw pool) rather than a fresh generator pool.
+    stamp = {"test_cases": new_cases, "selected": True,
+             "suite_complete": bool(suite_complete)}
     if isinstance(data, list) and data and isinstance(data[0], dict):
-        data[0]["test_cases"] = new_cases
-        data[0]["selected"] = True
+        data[0].update(stamp)
     elif isinstance(data, dict):
-        data["test_cases"] = new_cases
-        data["selected"] = True
+        data.update(stamp)
     else:
-        data = {"test_cases": new_cases, "selected": True}
+        data = dict(stamp)
 
     with open(testcases_json_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
@@ -260,6 +273,27 @@ def _read(path: str) -> str | None:
     return None
 
 
+def _resolve_difficulty(outputs_dir: str):
+    """(difficulty, source) using the pipeline's own precedence.
+
+    Delegates to llm_client so this step can never route on a different difficulty
+    than the rest of the pipeline. That module pulls in the LLM SDK, which selection
+    otherwise has no use for — so an import failure degrades to the same
+    owner-env > generated_difficulty.txt precedence rather than killing the step over
+    a lookup whose only job is choosing a suite size.
+    """
+    try:
+        from llm_client import resolve_pipeline_difficulty
+        return resolve_pipeline_difficulty(outputs_dir)
+    except Exception:
+        owner = os.environ.get("PIPELINE_OWNER_DIFFICULTY", "").strip().lower()
+        if owner:
+            return owner, "owner"
+        generated = (_read(os.path.join(outputs_dir, "generated_difficulty.txt")) or "")
+        generated = generated.strip().lower()
+        return (generated, "llm") if generated else (None, "default")
+
+
 def _discover_wrong_solutions(wrong_dir: str):
     import glob
     out = []
@@ -270,7 +304,8 @@ def _discover_wrong_solutions(wrong_dir: str):
     return out
 
 
-def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = None):
+def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = None,
+                   difficulty: str = None):
     """Full annotation over the on-disk pipeline outputs, then select + write.
 
     Returns the selection report. Uses benchmark_suite's real runners; the pure
@@ -301,7 +336,19 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
     def log(msg):
         print(msg, flush=True)
 
-    log("=== SELECT TEST CASES (dedup → annotate → select ≤" f"{cap or 150}) ===")
+    # Difficulty picks the fill target inside [floor, cap]. Reuses the pipeline's own
+    # precedence (owner override > generated_difficulty.txt > medium) so this step can
+    # never disagree with the difficulty the rest of the pipeline routed on.
+    diff_source = "explicit"
+    if not difficulty:
+        difficulty, diff_source = _resolve_difficulty(outputs_dir)
+
+    eff_cap = cap or CASE_CAP
+    eff_floor = floor if floor is not None else CASE_FLOOR
+    target = fill_target(difficulty, eff_cap, eff_floor)
+    log(f"=== SELECT TEST CASES (dedup → annotate → select ≤{eff_cap}) ===")
+    log(f"      bounds: floor {eff_floor} · target {target} · cap {eff_cap}  "
+        f"(difficulty={difficulty or 'medium'} via {diff_source})")
 
     # Raw-pool preservation: select overwrites testcases.json with the trimmed suite,
     # so snapshot the generator's FULL pool once (testcases_pool.json) and always select
@@ -367,7 +414,8 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
         log(f"[3/4] Brute-force TLE: N/A ({why})")
     tle_n = annotate_tle(cases, brute, tle_batch_runner, max_n, size_kind, log=log)
 
-    kwargs = {"size_kind": size_kind, "space_mode": space_mode}
+    kwargs = {"size_kind": size_kind, "space_mode": space_mode,
+              "difficulty": difficulty}
     if cap is not None:
         kwargs["cap"] = cap
     if floor is not None:
@@ -376,7 +424,9 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
     report["tle_verified"] = tle_n
     report["reference_present"] = bool(reference)
 
-    write_selected(tc_path, selected)
+    write_selected(tc_path, selected,
+                   suite_complete=bool(report.get("exhaustive_complete")
+                                       or report.get("small_space")))
 
     dropped = report["generated"] - report["unique"]
     log(f"[4/4] Selected {report['selected']} of {report['unique']} unique "
@@ -384,7 +434,7 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
     log("      " + format_funnel(report))
     # Human-readable verdict lines so the log states plainly what was achieved.
     log(f"      · edges kept          {report['edges']}"
-        + (f" of {report['edges_total']}  (cap {cap or 150} reached)"
+        + (f" of {report['edges_total']}  (cap {eff_cap} reached)"
            if report.get("edges_total", 0) > report["edges"] else ""))
     log(f"      · verified brute TLE  {tle_n}"
         + ("" if (brute and size_kind != "none") else "  (N/A)"))
@@ -394,9 +444,16 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
     if report.get("exhaustive_complete"):
         log(f"      ✓ exhaustive: shipped the complete input space "
             f"({report['selected']} case(s))")
+    elif report.get("small_space"):
+        # Stated, not warned about: expected when the problem's legal input space is
+        # genuinely tiny (8-10 distinct inputs IS the whole suite). The same line covers
+        # a merely thin pool, so it names the number to look at instead of guessing why.
+        log(f"      · pool of {report['unique']} is under the floor of {eff_floor} — "
+            f"shipped all {report['selected']} case(s); accepted as complete. Expected "
+            f"for a small input space; if the space is large, raise the generator count.")
     elif report.get("below_floor"):
-        log(f"      ⚠ BELOW FLOOR: only {report['selected']} case(s) — the generator "
-            f"pool was too small; consider raising the candidate count.")
+        log(f"      ⚠ BELOW FLOOR: {report['selected']} case(s) from a pool of "
+            f"{report['unique']} — floor is {eff_floor}; check the cap/floor settings.")
     log(f"Wrote {report['selected']} case(s) → {tc_path}")
 
     # Merged benchmark: report-only mutation/coverage/fuzz on the SELECTED suite.
@@ -446,5 +503,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Annotate + select the final testcase suite")
     ap.add_argument("--cap", type=int, default=None)
     ap.add_argument("--floor", type=int, default=None)
+    ap.add_argument("--difficulty", default=None,
+                    help="easy|medium|hard — picks the fill target; "
+                         "default resolves owner > generated_difficulty.txt > medium")
     args = ap.parse_args()
-    run_annotation(cap=args.cap, floor=args.floor)
+    run_annotation(cap=args.cap, floor=args.floor, difficulty=args.difficulty)
