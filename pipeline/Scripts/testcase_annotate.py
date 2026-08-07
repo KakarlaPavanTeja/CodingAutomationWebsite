@@ -305,7 +305,7 @@ def _discover_wrong_solutions(wrong_dir: str):
 
 
 def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = None,
-                   difficulty: str = None):
+                   difficulty: str = None, count: int = None):
     """Full annotation over the on-disk pipeline outputs, then select + write.
 
     Returns the selection report. Uses benchmark_suite's real runners; the pure
@@ -343,12 +343,21 @@ def run_annotation(outputs_dir: str = "Outputs", cap: int = None, floor: int = N
     if not difficulty:
         difficulty, diff_source = _resolve_difficulty(outputs_dir)
 
+    # An explicit user count is authoritative: the owner asked for exactly N cases, so
+    # it collapses the [floor, cap] window onto N and `fill_target` lands on it. Without
+    # this the suite would still be sized by difficulty and the owner's number would only
+    # ever have influenced the GENERATOR's pool, never the shipped suite.
+    count_override = bool(count and count > 0)
+    if count_override:
+        cap = floor = count
+
     eff_cap = cap or CASE_CAP
     eff_floor = floor if floor is not None else CASE_FLOOR
     target = fill_target(difficulty, eff_cap, eff_floor)
     log(f"=== SELECT TEST CASES (dedup → annotate → select ≤{eff_cap}) ===")
     log(f"      bounds: floor {eff_floor} · target {target} · cap {eff_cap}  "
-        f"(difficulty={difficulty or 'medium'} via {diff_source})")
+        + (f"(owner-requested count={count})" if count_override
+           else f"(difficulty={difficulty or 'medium'} via {diff_source})"))
 
     # Raw-pool preservation: select overwrites testcases.json with the trimmed suite,
     # so snapshot the generator's FULL pool once (testcases_pool.json) and always select
@@ -506,5 +515,10 @@ if __name__ == "__main__":
     ap.add_argument("--difficulty", default=None,
                     help="easy|medium|hard — picks the fill target; "
                          "default resolves owner > generated_difficulty.txt > medium")
+    ap.add_argument("--count", type=int, default=None,
+                    help="Owner-requested suite size. Overrides --cap/--floor and the "
+                         "difficulty-scaled target: the suite is exactly this many cases "
+                         "(fewer only if the deduped pool holds fewer)")
     args = ap.parse_args()
-    run_annotation(cap=args.cap, floor=args.floor, difficulty=args.difficulty)
+    run_annotation(cap=args.cap, floor=args.floor, difficulty=args.difficulty,
+                   count=args.count)

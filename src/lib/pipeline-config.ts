@@ -72,7 +72,7 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     id: "select_testcases",
     label: "Validate & Benchmark Test Cases",
     description:
-      "Dedups exact-input duplicates, verifies brute-force TLE, scores wrong-solution kills, and selects the strongest suite (60–150 cases: easy ≈60, medium ≈100, hard ≈150; a problem whose input space holds fewer ships complete) — then benchmarks it (injects bugs to measure kill rate, coverage, and fuzz) in the same pass. Read-only benchmark: reports a score, never changes the selected suite.",
+      "Dedups exact-input duplicates, verifies brute-force TLE, scores wrong-solution kills, and selects the strongest suite (the Test cases count if you set one, else 60–150: easy ≈60, medium ≈100, hard ≈150; a problem whose input space holds fewer ships complete) — then benchmarks it (injects bugs to measure kill rate, coverage, and fuzz) in the same pass. Read-only benchmark: reports a score, never changes the selected suite.",
     script: "Scripts/testcase_annotate.py",
     subSteps: [],
     hasLanguageSelector: false,
@@ -339,6 +339,9 @@ export function buildCommand(
     const floor = process.env.TESTCASE_CASE_FLOOR;
     if (cap) args.push("--cap", cap);
     if (floor) args.push("--floor", floor);
+    // The owner's testcase count sizes the SHIPPED suite too, not just the generator's
+    // pool — otherwise asking for 30 still ships the difficulty-scaled ~100.
+    if (testcaseCount) args.push("--count", testcaseCount.toString());
   }
 
   let script = config.script;

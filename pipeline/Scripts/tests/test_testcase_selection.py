@@ -183,6 +183,17 @@ class TestSelectSuite(unittest.TestCase):
         self.assertEqual(len(selected), 30)
         self.assertEqual(rep["target"], 30)
 
+    def test_owner_count_collapses_the_bounds_onto_itself(self):
+        # How run_annotation applies an owner-supplied --count: cap = floor = count.
+        # The suite must then be EXACTLY that many cases, whether the number sits
+        # below the floor (30 < 60) or above the difficulty target (200 > 150).
+        for count, difficulty in ((30, "hard"), (200, "easy")):
+            selected, rep = select_suite(self._pool(300), set(), max_n=100,
+                                         cap=count, floor=count, difficulty=difficulty)
+            self.assertEqual(len(selected), count, count)
+            self.assertEqual(rep["target"], count, count)
+            self.assertFalse(rep["below_floor"], count)
+
     def test_dedup_before_select(self):
         a = mk("a", "S1", "small", "x"); a["input"] = "same"; a.pop("bucket")
         b = mk("b", "S1", "small", "x"); b["input"] = "same"; b.pop("bucket")
