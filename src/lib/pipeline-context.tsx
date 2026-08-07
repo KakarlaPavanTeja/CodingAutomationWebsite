@@ -585,27 +585,36 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   const loadProblemState = useCallback(async (problemId: string) => {
     // Claim a generation token; a later load supersedes this one.
     const generation = ++loadGenerationRef.current;
+    const switchingProblem = currentProblemIdRef.current !== problemId;
     setStateLoading(true);
     setCurrentProblemId(problemId);
 
     // Stop any pollers / run tracking / queued work / pending save left over
     // from a previously-viewed problem so they can't write into the new
     // problem's state.
-    for (const timer of pollRefs.current.values()) clearInterval(timer);
-    pollRefs.current.clear();
-    for (const timer of stopRevertTimersRef.current.values()) clearTimeout(timer);
-    stopRevertTimersRef.current.clear();
-    runningStepsRef.current.clear();
-    launchingStepsRef.current.clear();
-    runningSubStepsRef.current.clear();
-    runningLangStepsRef.current.clear();
-    pendingPollsRef.current = [];
-    setRunAllQueue([]);
-    setLegacyPipelineNotice(null);
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
+    //
+    // ONLY on a real problem switch. This function also re-runs whenever the
+    // pipeline tab remounts (switching to Outputs/Editorial and back, or a
+    // refresh) with the SAME id — tearing everything down there cancelled an
+    // in-flight Run All, so the pipeline stopped dead after whatever step was
+    // running and every following step needed another click.
+    if (switchingProblem) {
+      for (const timer of pollRefs.current.values()) clearInterval(timer);
+      pollRefs.current.clear();
+      for (const timer of stopRevertTimersRef.current.values()) clearTimeout(timer);
+      stopRevertTimersRef.current.clear();
+      runningStepsRef.current.clear();
+      launchingStepsRef.current.clear();
+      runningSubStepsRef.current.clear();
+      runningLangStepsRef.current.clear();
+      pendingPollsRef.current = [];
+      setRunAllQueue([]);
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
     }
+    setLegacyPipelineNotice(null);
 
     try {
       // Fetch both pipeline state and problem record (for question_type/mode)
@@ -851,8 +860,18 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           }
         }
       } else {
-        // No saved state — start fresh
-        const steps = getAllTrackedStepIds("function", "practice");
+        // No saved state — start fresh. The provider lives above the router and
+        // never unmounts, so every global value here still holds the previously
+        // viewed problem's data; reset it or the autosave persists that problem's
+        // title/tags/languages onto this one.
+        setGlobalLanguagesRaw(LANGUAGES.filter((l) => l.defaultEnabled).map((l) => l.id));
+        setGlobalTestcaseCount(0);
+        ownerTitleRef.current = "";
+        setOwnerTitleRaw("");
+        setGenerateTitleWithAiRaw(false);
+        setDefaultTagNamesRaw("");
+
+        const steps = getAllTrackedStepIds(qt, m);
         const map = new Map<StepId, StepState>();
         steps.forEach((id) => map.set(id, createInitialStepState(id)));
         setStepStates(map);
@@ -973,7 +992,12 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           ? languageSubStepLogKey(stepId, langId)
           : stepId;
 
+      // One tick at a time: a poll slower than the 4s interval used to let ticks
+      // pile up into concurrent status+log reads, making every poll slower still.
+      let inFlight = false;
       const poll = async () => {
+        if (inFlight) return;
+        inFlight = true;
         try {
           const statusRes = await fetch(`/api/pipeline/run/status?runId=${encodeURIComponent(runId)}`);
 
@@ -1108,8 +1132,16 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
             }
           }
 
-          const pid = currentProblemIdRef.current;
-          if (pid) {
+          // Logs are synced AFTER the status handling below. A step's log can be
+          // multiple MB and this fetch reads it out of Postgres on every 4s tick;
+          // when it was slow (or threw, landing in the outer catch) it delayed or
+          // entirely swallowed the terminal-status update that follows — and the
+          // Run All driver only advances on that state change, so the run looked
+          // like it "stopped" after each completed step, for longer the bigger
+          // the step's log was.
+          const syncLogs = async () => {
+            const pid = currentProblemIdRef.current;
+            if (!pid) return;
             const logsRes = await fetch(
               `/api/pipeline/run/logs?problemId=${encodeURIComponent(pid)}&stepId=${encodeURIComponent(logStepId)}&runId=${encodeURIComponent(runId)}&tail=2000`
             );
@@ -1149,7 +1181,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
                 });
               }
             }
-          }
+          };
 
           if (
             (run.status === "completed" || run.status === "failed") &&
@@ -1243,8 +1275,18 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
             stopPolling(stepId, subStepId, langId);
             savePipelineState();
           }
+
+          // Best-effort, and last: never let the log fetch hold up the status
+          // update that unblocks the next step.
+          try {
+            await syncLogs();
+          } catch {
+            // logs land on the next tick (or the tile keeps the ones it has)
+          }
         } catch {
           // retry on next interval
+        } finally {
+          inFlight = false;
         }
       };
 
@@ -2019,7 +2061,12 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     const queued = new Set(runAllQueue);
 
     const gqState = stepStates.get("generate_question");
-    const questionPhaseComplete = isQuestionPhaseComplete(gqState, questionType, gqContext());
+    const questionPhaseComplete = isQuestionPhaseComplete(
+      gqState,
+      questionType,
+      gqContext(),
+      stepStates.get("generate_brute_force")
+    );
 
     for (const id of runAllQueue) {
       const state = stepStates.get(id);

@@ -96,7 +96,7 @@ export function GlobalConfig({
               disabled={disabled}
             />
             {!compact && (
-              <span className="text-xs text-muted-foreground">Leave blank to auto-scale by difficulty (min 25)</span>
+              <span className="text-xs text-muted-foreground">Leave blank to auto-scale by difficulty (easy 80 · medium 110 · hard 150; fewer when the input space is smaller)</span>
             )}
           </div>
         </div>

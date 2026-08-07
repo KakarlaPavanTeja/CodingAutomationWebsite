@@ -8,6 +8,7 @@ from testcase_annotate import (
     determine_size_model,
     annotate_kills,
     annotate_tle,
+    ship_order,
     write_selected,
 )
 
@@ -209,8 +210,38 @@ class TestWriteSelected(unittest.TestCase):
             tcs = data[0]["test_cases"]
             self.assertEqual(len(tcs), 2)
             self.assertEqual([t["order"] for t in tcs], [1, 2])   # renumbered
-            self.assertEqual([t["input"] for t in tcs], ["c", "a"])  # selection order
-            self.assertEqual(tcs[0]["tags"], ["subtask_2"])          # tags preserved
+            # Written in SHIPPING order (subtask tier ascending), not the order the
+            # selector happened to pick them in.
+            self.assertEqual([t["input"] for t in tcs], ["a", "c"])
+            self.assertEqual(tcs[0]["tags"], ["subtask_1"])          # tags preserved
+
+
+class TestShipOrder(unittest.TestCase):
+    """Selection order is a keep-argument, not a reading order — see `ship_order`."""
+
+    def _case(self, inp, tags, out="x"):
+        return {"input": inp, "output": out, "tags": list(tags), "weightage": 5}
+
+    def test_examples_lead_then_subtask_tiers_ascend(self):
+        # Selection order here is the real one: a big kill-cover case first (that pass
+        # ranks by DESCENDING size), then the example, then slot coverage.
+        cases = [
+            self._case("stress", ["subtask_3"]),
+            self._case("ex1", ["subtask_1", "example"]),
+            self._case("mid", ["subtask_2"]),
+        ]
+        self.assertEqual([c["input"] for c in ship_order(cases)], ["ex1", "mid", "stress"])
+
+    def test_falls_back_to_payload_size_without_subtask_tags(self):
+        cases = [self._case("longer input", []), self._case("s", [])]
+        self.assertEqual([c["input"] for c in ship_order(cases)], ["s", "longer input"])
+
+    def test_example_is_never_demoted_out_of_the_public_slots(self):
+        # is_hidden is positional (order > 2), so an example sorted into tier 3 by
+        # payload size would silently vanish from the problem statement.
+        big_example = self._case("x" * 500, ["subtask_3", "example"])
+        cases = [self._case("a", ["subtask_1"]), big_example, self._case("b", ["subtask_1"])]
+        self.assertIs(ship_order(cases)[0], big_example)
 
 
 if __name__ == "__main__":

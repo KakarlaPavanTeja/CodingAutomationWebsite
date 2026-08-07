@@ -33,14 +33,14 @@ LARGE_FRAC = 0.5
 #                reach it is not a failure (see `small_space` below) — you cannot
 #                select cases that do not exist.
 CASE_CAP = 150
-CASE_FLOOR = 60
+CASE_FLOOR = 80
 
 # Where the FILL pass stops, per difficulty, inside [CASE_FLOOR, CASE_CAP]. Filling
 # blindly to the cap made every suite exactly CASE_CAP cases: the guarantee pass has
 # already covered every slot and every catchable wrong solution, so padding past this
 # target buys size spread and nothing else. An easy problem does not need 150 cases.
 # Unknown or absent difficulty routes to medium.
-TARGET_BY_DIFFICULTY = {"easy": CASE_FLOOR, "medium": 100, "hard": CASE_CAP}
+TARGET_BY_DIFFICULTY = {"easy": CASE_FLOOR, "medium": 110, "hard": CASE_CAP}
 DEFAULT_DIFFICULTY = "medium"
 
 
@@ -162,7 +162,7 @@ def _add(sel, seen_ids, c):
         sel.append(c)
 
 
-def guarantee_pass(cases, wrong_ids, cap=CASE_CAP):
+def guarantee_pass(cases, wrong_ids, cap=CASE_CAP, target=None):
     """Must-haves in priority order, BOUNDED BY `cap`. Deterministic (id-ordered).
 
     The order only matters once the cap bites: public examples (the platform ships
@@ -171,8 +171,16 @@ def guarantee_pass(cases, wrong_ids, cap=CASE_CAP):
     category — a generator that flags most of its pool `is_edge` must not be able
     to push the suite past the cap. A suite that catches every wrong solution and
     covers every slot beats one padded with degenerate cases.
+
+    `target` (the difficulty-scaled size, see `fill_target`) bounds the two
+    POOL-SIZED passes — slot coverage and edges — while examples/TLE/kill cover
+    keep the full `cap`. Without it the difficulty target was dead in practice:
+    slots are (subtask, bucket, scenario), and generators that name every case
+    uniquely produce as many slots as cases, so slot coverage alone ran to the cap
+    and EVERY suite shipped exactly CASE_CAP regardless of the problem.
     """
     wrong_ids = set(wrong_ids)
+    pad_cap = min(cap, target) if target else cap
     ordered = sorted(cases, key=lambda c: c["id"])
     sel, seen = [], set()
 
@@ -205,7 +213,7 @@ def guarantee_pass(cases, wrong_ids, cap=CASE_CAP):
     slots_needed = {_slot(c) for c in ordered}      # 4. slot coverage
     covered = {_slot(c) for c in sel}
     for slot in _slots_round_robin(slots_needed - covered):
-        if len(sel) >= cap:
+        if len(sel) >= pad_cap:
             break
         cands = [c for c in ordered if _slot(c) == slot]
         best = sorted(cands, key=lambda c: (-len(c["kills"]), -c["size_metric"], c["id"]))[0]
@@ -214,7 +222,7 @@ def guarantee_pass(cases, wrong_ids, cap=CASE_CAP):
 
     edges = [c for c in ordered if c.get("is_edge")]     # 5. edges — bounded
     for c in edges:
-        if len(sel) >= cap:
+        if len(sel) >= pad_cap:
             break
         add(c)
 
@@ -279,12 +287,12 @@ def select_suite(cases, wrong_ids, max_n, cap=CASE_CAP, floor=CASE_FLOOR,
         c["bucket"] = bucket_case(c, max_n, size_kind)
         c["kills"] = set(c.get("kills") or set())
     unique, _dropped = dedup_by_input(cases)
-    selected, report = guarantee_pass(unique, wrong_ids, cap=cap)
+    # Fill to the difficulty target, not the cap. The guarantee pass may already sit
+    # above it (examples/TLE/kills win) — then the fill adds nothing, which is correct.
+    target = fill_target(difficulty, cap, floor)
+    selected, report = guarantee_pass(unique, wrong_ids, cap=cap, target=target)
     seen = {c["id"] for c in selected}
     remaining = [c for c in unique if c["id"] not in seen]
-    # Fill to the difficulty target, not the cap. The guarantee pass may already sit
-    # above it (must-haves win) — then this adds nothing, which is correct.
-    target = fill_target(difficulty, cap, floor)
     selected = _fill_pass(selected, seen, remaining, target)
     exhaustive = space_mode == "exhaustive"
     # A pool thinner than the floor cannot be padded — those cases do not exist. Some

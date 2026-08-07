@@ -282,13 +282,25 @@ export function canRunBruteForce(state: StepState, questionType: QuestionType): 
   return state.subStepRuns?.[prereq]?.status === "completed";
 }
 
-/** GQ complete for downstream gates — BF is excluded (non-blocking). */
+/**
+ * GQ complete for downstream gates. Brute force runs in the same wave as the
+ * translate sub-steps, but the phase used to flip to complete the moment the
+ * last translation landed — so generate_testcases launched while BF was still
+ * in flight, found no brute force file, and silently degraded to SINGLE-ORACLE
+ * mode. An IN-FLIGHT brute force therefore holds the phase open.
+ *
+ * Only "running" blocks, never "pending": a pending BF that nobody will launch
+ * (legacy problems predating the step) would stall Run All forever, and those
+ * problems already degrade to SINGLE-ORACLE by design.
+ */
 export function isQuestionPhaseComplete(
   gqState: StepState | undefined,
   questionType: QuestionType,
-  ctx?: GQSubStepContext
+  ctx?: GQSubStepContext,
+  bruteForceState?: StepState
 ): boolean {
   if (!gqState) return false;
+  if (bruteForceState?.status === "running") return false;
   return isGenerateQuestionComplete(gqState, questionType, ctx);
 }
 

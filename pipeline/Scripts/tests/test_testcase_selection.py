@@ -169,7 +169,9 @@ class TestCapIsACeiling(unittest.TestCase):
         self.assertTrue(rep["capped"])
 
     def test_select_suite_never_exceeds_cap(self):
-        selected, rep = select_suite(self._all_edge_pool(500), set(), max_n=100, cap=150)
+        # `hard` targets the cap, so this asserts the ceiling itself, not the target.
+        selected, rep = select_suite(self._all_edge_pool(500), set(), max_n=100, cap=150,
+                                     difficulty="hard")
         self.assertEqual(len(selected), 150)
         self.assertEqual(rep["selected"], 150)
 
@@ -209,11 +211,25 @@ class TestSelectSuite(unittest.TestCase):
     def test_fills_up_to_the_difficulty_target_not_the_cap(self):
         # Regression: the fill pass used to run to `cap`, so EVERY suite with a pool
         # of 150+ shipped exactly 150 cases regardless of problem or difficulty.
-        for difficulty, expected in (("easy", 60), ("medium", 100), ("hard", 150)):
+        for difficulty, expected in (("easy", 80), ("medium", 110), ("hard", 150)):
             selected, rep = select_suite(self._pool(300), wrong_ids=set(), max_n=100,
                                          cap=150, difficulty=difficulty)
             self.assertEqual(len(selected), expected, difficulty)
             self.assertEqual(rep["target"], expected, difficulty)
+
+    def test_target_holds_when_every_case_names_its_own_scenario(self):
+        # Regression: the FILL pass respected the target, but the GUARANTEE pass was
+        # bounded by `cap`. Real generators name each case uniquely ("case_17"), so
+        # slots == pool size and slot coverage alone ran to 150 — every problem, at
+        # every difficulty, shipped exactly the cap and difficulty scaling did nothing.
+        pool = self._pool(300)
+        for i, c in enumerate(pool):
+            c["scenario"] = f"case_{i}"
+            c["is_edge"] = i % 5 == 0
+        for difficulty, expected in (("easy", 80), ("medium", 110), ("hard", 150)):
+            selected, _rep = select_suite(copy.deepcopy(pool), wrong_ids=set(),
+                                          max_n=100, cap=150, difficulty=difficulty)
+            self.assertEqual(len(selected), expected, difficulty)
 
     def test_unknown_difficulty_routes_to_medium(self):
         _sel, rep = select_suite(self._pool(300), set(), max_n=100, difficulty="brutal")
@@ -229,7 +245,7 @@ class TestSelectSuite(unittest.TestCase):
     def test_owner_count_collapses_the_bounds_onto_itself(self):
         # How run_annotation applies an owner-supplied --count: cap = floor = count.
         # The suite must then be EXACTLY that many cases, whether the number sits
-        # below the floor (30 < 60) or above the difficulty target (200 > 150).
+        # below the floor (30 < 80) or above the difficulty target (200 > 150).
         for count, difficulty in ((30, "hard"), (200, "easy")):
             selected, rep = select_suite(self._pool(300), set(), max_n=100,
                                          cap=count, floor=count, difficulty=difficulty)
@@ -306,7 +322,7 @@ class TestExhaustive(unittest.TestCase):
 
 class TestBounds(unittest.TestCase):
     def test_default_bounds(self):
-        self.assertEqual((CASE_FLOOR, CASE_CAP), (60, 150))
+        self.assertEqual((CASE_FLOOR, CASE_CAP), (80, 150))
 
     def test_target_stays_inside_the_bounds(self):
         for d in ("easy", "medium", "hard", None, "nonsense"):

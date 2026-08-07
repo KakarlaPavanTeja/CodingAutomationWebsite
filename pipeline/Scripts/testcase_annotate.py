@@ -244,12 +244,41 @@ def annotate_tle(cases: list, brute_code, tle_batch_runner, max_n: int,
 # --------------------------------------------------------------------------- #
 # Write back — rebuild testcases.json from the selected records, shape preserved
 # --------------------------------------------------------------------------- #
+def ship_order(raw_cases: list) -> list:
+    """The order the suite SHIPS in: examples first, then subtask tier ascending.
+
+    `select_suite` returns cases in selection-PRIORITY order (examples, verified TLE,
+    kill cover, slot coverage, edges, then the greedy fill). That is an argument about
+    which cases to keep, not about how the suite should read: it put the LARGEST stress
+    cases at position 3 (the kill pass ranks by descending size_metric), clumped the
+    edges at the end, and interleaved every subtask tier. Generation already builds the
+    right layout — selection just renumbered `order` over its own pick order and threw
+    that layout away, and nothing downstream re-sorts.
+
+    So reuse generation's own sort. Examples are pinned to the front because
+    `prepare_platform_json` marks visibility positionally (`is_hidden = order > 2`), so
+    a tier sort that demoted an example would hide it from the problem statement.
+    """
+    from testcase_helpers import testcase_payload_byte_size, tier_from_testcase
+
+    examples, rest = [], []
+    for tc in raw_cases:
+        is_example = "example" in (tc.get("tags") or []) or tc.get("scenario") == "example"
+        (examples if is_example else rest).append(tc)
+    # (tier, payload bytes) — the same key generation sorts on, minus its carve-out that
+    # keeps tiers 1-2 in generator order. That carve-out exists to protect the examples,
+    # which are pinned above, and after selection the incoming order inside a tier is
+    # just the selector's pick order. Untagged suites all land in tier 0 and sort by size.
+    rest.sort(key=lambda tc: (tier_from_testcase(tc) or 0, testcase_payload_byte_size(tc)))
+    return examples + rest
+
+
 def write_selected(testcases_json_path: str, selected: list,
                    suite_complete: bool = False) -> None:
-    """Overwrite testcases.json keeping only the selected cases, in order.
+    """Overwrite testcases.json keeping only the selected cases, in shipping order.
 
     The stored dict (`_raw`) is reused verbatim so tags/weightage/output survive;
-    `order` is renumbered 1..N over the selected suite.
+    `ship_order` decides the sequence and `order` is renumbered 1..N over it.
 
     `suite_complete` records that a below-floor suite is the WHOLE available input
     space, not a shortfall. Selection is the only step that sees the candidate pool,
@@ -258,11 +287,9 @@ def write_selected(testcases_json_path: str, selected: list,
     with open(testcases_json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    new_cases = []
-    for i, c in enumerate(selected, start=1):
-        raw = dict(c.get("_raw") or {})
+    new_cases = ship_order([dict(c.get("_raw") or {}) for c in selected])
+    for i, raw in enumerate(new_cases, start=1):
         raw["order"] = i
-        new_cases.append(raw)
 
     # Stamp `selected` so a re-run of select can tell this file is a trimmed suite
     # (and should reload the raw pool) rather than a fresh generator pool.

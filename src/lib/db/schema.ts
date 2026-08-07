@@ -187,7 +187,8 @@ export const pipelineStates = pgTable("pipeline_states", {
   enabledLanguages: text("enabled_languages")
     .array()
     .default(sql`'{Python,C++,Java,Node.js}'::text[]`),
-  testcaseCount: integer("testcase_count").default(48),
+  // No default: unset means "let the pipeline scale the suite by difficulty".
+  testcaseCount: integer("testcase_count"),
   stepConfigs: jsonb("step_configs").default(sql`'{}'::jsonb`),
   stepStatuses: jsonb("step_statuses").default(sql`'{}'::jsonb`),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),

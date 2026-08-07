@@ -73,7 +73,9 @@ def size_tag(bucket: str) -> str:
 # manager passes difficulty + (optional) detected type. Strings/DP skew high.
 # Over-generate: the selector dedups + trims to CASE_CAP, so aim for a large POOL.
 COUNT_BAND_BY_DIFFICULTY = {
-    "easy":   (60, 150),
+    # Lower end must clear CASE_FLOOR — a pool below it is reported as a thin
+    # "small_space" suite, which is wrong when the input space is actually large.
+    "easy":   (100, 180),
     "medium": (120, 220),
     "hard":   (150, 280),
 }

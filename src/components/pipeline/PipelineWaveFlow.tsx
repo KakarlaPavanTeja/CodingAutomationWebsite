@@ -193,7 +193,12 @@ export function PipelineWaveFlow({
 
   // Use the SAME context the orchestrator uses, so titles/difficulty skip rules
   // apply and a complete GQ doesn't render downstream as Locked (P1-H5).
-  const questionPhaseComplete = isQuestionPhaseComplete(gqState, questionType, gqCtx);
+  const questionPhaseComplete = isQuestionPhaseComplete(
+    gqState,
+    questionType,
+    gqCtx,
+    stepStates.get("generate_brute_force")
+  );
 
   const itemByKeyStr = useMemo(() => {
     const map = new Map<string, PipelineWaveItem>();

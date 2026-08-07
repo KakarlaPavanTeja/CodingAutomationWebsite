@@ -74,7 +74,10 @@ export async function POST(request: NextRequest) {
     questionType: questionType || "function",
     mode: mode || "practice",
     enabledLanguages: enabledLanguages || ["Python", "C++", "Java", "Node.js"],
-    testcaseCount: testcaseCount ?? 48,
+    // 0 = "not set" — the box stays blank on a new problem and the pipeline scales the
+    // suite by difficulty. Defaulting to a number here silently pinned every new
+    // problem to a fixed target the owner never asked for.
+    testcaseCount: testcaseCount ?? 0,
     stepConfigs: stepConfigs || {},
     stepStatuses: stepStatuses || {},
     updatedAt: new Date(),
