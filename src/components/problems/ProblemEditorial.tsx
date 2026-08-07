@@ -17,8 +17,10 @@ import {
   Play,
   Square,
   Sparkles,
+  Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { copyToClipboard } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import { StepLogPane } from "@/components/pipeline/StepLogPane";
 import { usePipeline } from "@/lib/pipeline-context";
@@ -309,8 +311,8 @@ function CopyButton({ value }: { value: string }) {
     <button
       type="button"
       title="Copy"
-      onClick={() => {
-        navigator.clipboard.writeText(value);
+      onClick={async () => {
+        if (!(await copyToClipboard(value))) return;
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       }}
@@ -554,6 +556,9 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
     total: RunUsageSummary | null;
   }>({ latest: null, total: null });
   const [prereqCheck, setPrereqCheck] = useState<EditorialPrereqCheck | null>(null);
+  // Free-text change request appended to the editorial prompt (PIPELINE_REFINE_NOTE).
+  const [refineOpen, setRefineOpen] = useState(false);
+  const [refineNote, setRefineNote] = useState("");
 
   const generateState = stepStates.get("generate_editorial");
   const executeState = stepStates.get("execute_editorial");
@@ -794,8 +799,8 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
     }
   };
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(pendingContent);
+  const handleCopy = async () => {
+    if (!(await copyToClipboard(pendingContent))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -824,7 +829,7 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
     !execRunning &&
     executeState?.status !== "running";
 
-  const handleGenerateEditorial = () => {
+  const handleGenerateEditorial = (refineNote?: string) => {
     const state = generateState ?? {
       id: "generate_editorial" as const,
       status: "pending" as const,
@@ -838,7 +843,7 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
       enabledLanguages: [],
       testcaseCount: 0,
     };
-    runStep(state);
+    runStep(state, refineNote);
     onStatusChange?.();
   };
 
@@ -901,7 +906,7 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
                 className="h-8"
                 disabled={generateBlocked}
                 title={generateDisabledReason}
-                onClick={handleGenerateEditorial}
+                onClick={() => handleGenerateEditorial()}
               >
                 <Sparkles className="mr-1.5 h-3.5 w-3.5" />
                 Generate Editorial
@@ -997,17 +1002,30 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
               Stop
             </Button>
           ) : (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8"
-              disabled={generateBlocked}
-              title={generateDisabledReason}
-              onClick={handleGenerateEditorial}
-            >
-              <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-              Generate Editorial
-            </Button>
+            <>
+              <Button
+                variant={refineOpen ? "secondary" : "outline"}
+                size="sm"
+                className="h-8"
+                disabled={generateBlocked}
+                title={generateDisabledReason}
+                onClick={() => setRefineOpen((v) => !v)}
+              >
+                <Wand2 className="mr-1.5 h-3.5 w-3.5" />
+                Refine
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8"
+                disabled={generateBlocked}
+                title={generateDisabledReason}
+                onClick={() => handleGenerateEditorial()}
+              >
+                <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                Generate Editorial
+              </Button>
+            </>
           )}
           {execRunning ? (
             <Button size="sm" variant="destructive" className="h-8" onClick={handleStopExecute}>
@@ -1027,6 +1045,37 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
           )}
         </div>
       </div>
+
+      {refineOpen && !genRunning && (
+        <div className="space-y-1.5 rounded-md border border-border/60 bg-muted/30 p-3">
+          <p className="text-xs text-muted-foreground">
+            Tell the LLM what to change, then regenerate. Unsaved edits to the current
+            editorial will be overwritten.
+          </p>
+          <textarea
+            value={refineNote}
+            onChange={(e) => setRefineNote(e.target.value)}
+            rows={3}
+            maxLength={4000}
+            placeholder="e.g. Add a two-pointer approach and shorten the brute-force intuition"
+            className="w-full resize-y rounded border border-border bg-background px-2 py-1.5 text-xs leading-snug focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              className="h-7 text-xs"
+              disabled={generateBlocked || !refineNote.trim()}
+              onClick={() => {
+                handleGenerateEditorial(refineNote.trim());
+                setRefineOpen(false);
+              }}
+            >
+              <Play className="mr-1.5 h-3 w-3" />
+              Regenerate with changes
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* LLM usage: model, tokens, this-run cost, and running total across re-runs */}
       {(() => {

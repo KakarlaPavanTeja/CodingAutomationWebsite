@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Shield, UserX, UserCheck, AlertTriangle, Clock, KeyRound, Copy } from "lucide-react";
+import { copyToClipboard } from "@/lib/clipboard";
 
 type UserProfile = {
   id: string;
@@ -299,7 +300,7 @@ export default function AdminUsersPage() {
               />
               <button
                 onClick={async () => {
-                  await navigator.clipboard.writeText(resetLink.url);
+                  if (!(await copyToClipboard(resetLink.url))) return;
                   setResetCopied(true);
                   setTimeout(() => setResetCopied(false), 2000);
                 }}
