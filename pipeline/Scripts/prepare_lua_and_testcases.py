@@ -285,12 +285,15 @@ def main():
                 debugger_content,
             )
 
-        # Driver / base64 — skip for non-fn exam (empty repos in JSON)
+        # Driver / base64 — function-based only. Non-function has no driver:
+        # the learner submits a whole program, so this section stays empty and
+        # build_repo drops the repo from the JSON entirely.
         driver_content = ""
-        if os.path.exists(driver_path):
-            driver_content = read_file(driver_path)
-        elif gen_path and os.path.exists(gen_path) and not (non_fn and mode == "exam"):
-            driver_content = read_file(gen_path)
+        if not non_fn:
+            if os.path.exists(driver_path):
+                driver_content = read_file(driver_path)
+            elif gen_path and os.path.exists(gen_path):
+                driver_content = read_file(gen_path)
         if driver_content:
             template_content = replace_tag_content(
                 template_content,

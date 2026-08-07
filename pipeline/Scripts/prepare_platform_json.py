@@ -1017,7 +1017,10 @@ def build_practice_json(lua, container, difficulty, node_based, enabled_langs=No
             {"language": plat, "time_limit_to_execute_in_seconds": cfg["metrics_sec"]}
         )
 
-    solutions = practice_parse_solutions(lua) if not non_fn else []
+    # Both kinds ship solutions: function-based from the split solution files,
+    # non-function from the generated full program. prepare_lua_and_testcases
+    # writes either into SOLUTIONS_<LANG>, so read it the same way for both.
+    solutions = practice_parse_solutions(lua)
     if enabled_langs and solutions:
         allowed = {LANG_PLATFORM[l]["practice"] for l in enabled_langs if l in LANG_PLATFORM}
         sol_default_pref = {"CPP": 0, "PYTHON": 1, "JAVA": 2, "NODE_JS": 3}

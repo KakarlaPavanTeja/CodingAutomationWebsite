@@ -76,10 +76,10 @@ export function isLanguageSubStepUnlocked(
     return false;
   }
 
-  if (
-    parentStepId === "execute_tests_function" ||
-    parentStepId === "execute_tests_nonfunction"
-  ) {
+  // Only the function path splits code first. Non-function executes the full
+  // generated solution as a single main file, and `split_code` isn't even in
+  // its workflow — gating on it left every Execute tile locked forever.
+  if (parentStepId === "execute_tests_function") {
     const splitRun = stepStates.get("split_code")?.languageSubRuns?.[langId];
     return splitRun?.status === "completed";
   }

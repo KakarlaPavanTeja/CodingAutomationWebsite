@@ -150,6 +150,25 @@ class TestPreparePlatformJson(unittest.TestCase):
         self.assertEqual(langs, {"PYTHON"})
         self.assertEqual(sum(1 for cd in code_details if cd["default_code"]), 1)
 
+    def test_nonfunction_practice_ships_solutions_without_repos(self):
+        """Non-function practice: SOLUTIONS_<LANG> (the generated full program)
+        reaches the JSON, and the empty CODE_BASE64 section yields no repos."""
+        os.environ["PIPELINE_QUESTION_TYPE"] = "nonfunction"
+        lua = (
+            MINIMAL_LUA.replace(
+                "----------CODE_BASE64_PYTHON_START----------\nprint(1)\n",
+                "----------CODE_BASE64_PYTHON_START----------\n",
+            )
+            + "\n----------SOLUTIONS_PYTHON_START----------\nprint(input())\n----------SOLUTIONS_PYTHON_END----------\n"
+        )
+        data = ppj.build_practice_json(
+            lua, PRACTICE_CONTAINER, "EASY", node_based=False, enabled_langs=["python"]
+        )
+        sols = data[0]["solutions"]
+        self.assertTrue(sols, "non-function practice must ship solutions")
+        self.assertEqual(sols[0]["code_details"][0]["code_content"], "print(input())")
+        self.assertEqual(data[0]["language_code_repository_details"], [])
+
     def test_function_practice_debug_helper_code(self):
         """Function-based practice surfaces DEBUG_HELPER_CODE_<LANG> (P1-H2)."""
         lua = MINIMAL_LUA + (
