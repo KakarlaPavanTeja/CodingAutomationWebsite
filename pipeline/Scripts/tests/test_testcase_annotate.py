@@ -54,6 +54,27 @@ class TestLoadCases(unittest.TestCase):
             self.assertFalse(cases[0]["is_edge"])   # tag alone: not an edge
             self.assertTrue(cases[1]["is_edge"])    # explicit field: still honored
 
+    def test_example_tag_outranks_a_per_case_declared_scenario(self):
+        """`guarantee_pass` force-keeps on `scenario == "example"` exactly.
+
+        Regression (problem 66f6b0a9): the generator declared per-case names
+        ("example_1", "example_2") alongside the `example` tag. Taking the declared
+        name verbatim made the force-keep miss, and both public examples were dropped
+        from the shipped suite once the cap filled.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "testcases.json")
+            _write_tc(p, [
+                {"order": 1, "input": "4\n7\n10\n1\n29\n", "output": "yes\nno\nno\nyes",
+                 "tags": ["size_small", "example", "example_1"], "scenario": "example_1"},
+                {"order": 2, "input": "5\n2\n9\n97\n100\n49\n",
+                 "output": "yes\nno\nyes\nno\nno",
+                 "tags": ["example", "example_2", "size_medium"], "scenario": "example_2"},
+            ])
+            cases, _ = load_cases(p, description="1 <= T <= 20")
+            self.assertEqual([c["scenario"] for c in cases], ["example", "example"])
+            self.assertTrue(all(c["is_edge"] for c in cases))
+
     def test_prefers_declared_size_metric(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "testcases.json")

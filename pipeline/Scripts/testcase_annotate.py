@@ -75,6 +75,22 @@ def _scenario_of(tags: list) -> str:
     return "default"
 
 
+def _scenario_for(tc, tags: list) -> str:
+    """The scenario key used for slot coverage — an `example` TAG OUTRANKS the declared name.
+
+    `guarantee_pass` force-keeps public examples by matching `scenario == "example"`
+    exactly. Generators routinely declare a per-case name instead ("example_1",
+    "example_2"), and taking that verbatim made the force-keep miss: both examples fell
+    through to the bounded edge pass, which a full cap then dropped, and the shipped
+    suite opened on a stress case instead of the description's Examples 1 & 2.
+    The `example` tag is the reliable signal (`_is_edge_of` already trusts it), so
+    normalize on it first and only then fall back to whatever the generator declared.
+    """
+    if "example" in tags:
+        return "example"
+    return tc.get("scenario") or _scenario_of(tags)
+
+
 def _is_edge_of(tags: list) -> bool:
     # Public examples only. `size_edge` is deliberately NOT an edge signal: it is a
     # DISTRIBUTION label (B3 targets ~20% of the suite), not a keep-me marker.
@@ -126,7 +142,7 @@ def load_cases(testcases_json_path: str, description: str = "") -> tuple[list, i
             "input": inp,
             "output": tc.get("output", "") or "",
             "subtask": tc.get("subtask") or _subtask_of(tc),
-            "scenario": tc.get("scenario") or _scenario_of(tags),
+            "scenario": _scenario_for(tc, tags),
             "is_edge": bool(tc.get("is_edge")) or _is_edge_of(tags),
             "is_tle": bool(tc.get("is_tle")),
             "size_metric": int(size_metric),

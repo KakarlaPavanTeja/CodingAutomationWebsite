@@ -1,5 +1,6 @@
 import copy
 import unittest
+from collections import Counter
 
 from testcase_selection import (
     CASE_CAP,
@@ -100,6 +101,48 @@ class TestGuaranteePass(unittest.TestCase):
         cases = [mk("a", "S1", "small", "x", kills=("w1",))]
         selected, rep = guarantee_pass(cases, wrong_ids={"w1", "w2"})
         self.assertEqual(rep["uncatchable"], ["w2"])
+
+
+class TestTruncatedSlotCoverageStaysSpread(unittest.TestCase):
+    """A slot set larger than the cap must still span every subtask and bucket.
+
+    Regression (problem 66f6b0a9, "Primality Test"): the generator named every case
+    uniquely ("single_value_1" ... "single_value_100000"), so a 160-case pool had 160
+    distinct slots. Slot coverage walked them ALPHABETICALLY, so a cap of 30 was spent
+    entirely inside S1/edge — the shipped suite was 29 single-value T=1 cases with no
+    small, medium or large case at all.
+    """
+
+    def _wide_pool(self):
+        # 4 subtasks x 4 buckets x 10 per-case-unique scenarios = 160 slots.
+        pool = []
+        for si, sub in enumerate(("S1", "S2", "S3", "S4")):
+            for bi, bucket in enumerate(("edge", "small", "medium", "large")):
+                for k in range(10):
+                    cid = f"c{si:01d}{bi:01d}{k:02d}"
+                    c = mk(cid, sub, bucket, f"single_value_{k}", size=10 * (bi + 1))
+                    c["input"] = cid
+                    pool.append(c)
+        return pool
+
+    def test_coverage_spans_all_buckets_and_subtasks(self):
+        sel, rep = guarantee_pass(self._wide_pool(), wrong_ids=set(), cap=30)
+        self.assertEqual(len(sel), 30)
+        self.assertEqual(rep["slots_total"], 160)
+        self.assertEqual({c["bucket"] for c in sel},
+                         {"edge", "small", "medium", "large"})
+        self.assertEqual({c["subtask"] for c in sel}, {"S1", "S2", "S3", "S4"})
+
+    def test_no_single_group_hogs_the_cap(self):
+        sel, _rep = guarantee_pass(self._wide_pool(), wrong_ids=set(), cap=30)
+        counts = Counter((c["subtask"], c["bucket"]) for c in sel)
+        # 16 groups, 30 slots: an even spread is 1-2 each. Alphabetical order gave 30/0/0...
+        self.assertLessEqual(max(counts.values()), 3)
+
+    def test_order_is_deterministic(self):
+        a, _ = guarantee_pass(self._wide_pool(), wrong_ids=set(), cap=30)
+        b, _ = guarantee_pass(self._wide_pool(), wrong_ids=set(), cap=30)
+        self.assertEqual([c["id"] for c in a], [c["id"] for c in b])
 
 
 class TestCapIsACeiling(unittest.TestCase):

@@ -131,6 +131,31 @@ def _slot(c):
     return (c["subtask"], c["bucket"], c["scenario"])
 
 
+def _slots_round_robin(slots):
+    """Order slots so every (subtask, bucket) group is visited once before any repeats.
+
+    Slot coverage used to walk `sorted(slots)`, which is alphabetical by subtask, THEN
+    bucket, THEN scenario. That is only harmless while the pool has fewer slots than the
+    cap. Generators that name every case uniquely ("single_value_7", "single_value_100")
+    make the slot set as large as the pool, and then the alphabetical walk spends the
+    ENTIRE cap inside the first (subtask, bucket) group: a 160-case pool selected at
+    cap 30 shipped 30 `S1`/`edge` cases and never reached small, medium or large at all.
+
+    Interleaving spends the same budget across groups instead, so a truncated coverage
+    pass still spans every subtask and size bucket. Deterministic: groups and the slots
+    inside them stay sorted, only the visit order changes.
+    """
+    groups = {}
+    for s in sorted(slots):
+        groups.setdefault((s[0], s[1]), []).append(s)
+    ordered = []
+    for i in range(max((len(v) for v in groups.values()), default=0)):
+        for key in sorted(groups):
+            if i < len(groups[key]):
+                ordered.append(groups[key][i])
+    return ordered
+
+
 def _add(sel, seen_ids, c):
     if c["id"] not in seen_ids:
         seen_ids.add(c["id"])
@@ -179,7 +204,7 @@ def guarantee_pass(cases, wrong_ids, cap=CASE_CAP):
 
     slots_needed = {_slot(c) for c in ordered}      # 4. slot coverage
     covered = {_slot(c) for c in sel}
-    for slot in sorted(slots_needed - covered):
+    for slot in _slots_round_robin(slots_needed - covered):
         if len(sel) >= cap:
             break
         cands = [c for c in ordered if _slot(c) == slot]
