@@ -752,7 +752,7 @@ The rendered page does NOT support LaTeX/MathJax. Convert all math notation to c
 
 **Output Format**
 - Title: **Output Format** then a blank line. Bullet points describing stdout, consistent with the ORIGINAL examples and `USER CODE`.
-- State explicitly that the result is **printed** to standard output (full-program style). Do NOT start bullets with the word "Print".
+- **MANDATORY — the word "Print" is COMPULSORY here.** Start the output bullet(s) with `Print ...` (e.g. "Print a single integer ...", "Print each result on a new line"). The result is **printed** to standard output (full-program style).
 
 **Constraints**
 - Present the ORIGINAL constraints as bullet points with backticks and normalized notation (e.g. `5 ≤ |s| ≤ 10^5`). Do NOT change any values.
@@ -836,7 +836,7 @@ Use the `USER CODE` below as the absolute source of truth for **Input Format** a
 
 **Input Format / Output Format:**
 - Describe stdin/stdout line-by-line based on USER CODE{_INPUT_LAYOUT_RULE}
-- State explicitly whether output is printed or returned (usually printed for full programs)
+- **MANDATORY — the word "Print" is COMPULSORY in **Output Format**.** Start the output bullet(s) with `Print ...` (e.g. "Print a single integer ...", "Print each result on a new line"), since a full program writes its result to standard output.
 - **DETERMINISTIC ANSWER (CRITICAL):** if the task could admit MORE THAN ONE valid output
   (e.g. indices of a pair summing to k when several pairs qualify, "any valid arrangement",
   multiple shortest paths), the Output Format MUST pin down a SINGLE expected answer with an
