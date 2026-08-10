@@ -750,11 +750,34 @@ def reorder_testcases_by_payload_size(test_cases: list) -> tuple[list, bool]:
 
 def reorder_testcases_json_root(data) -> bool:
     def _reorder_list(test_cases: list) -> bool:
-        if has_subtask_tags(test_cases):
-            _, ok = reorder_testcases_by_subtask(test_cases)
+        # Public examples are POSITIONAL: `sync_example_testcases` has just written
+        # description Examples 1 & 2 into the two lowest-order cases, and
+        # prepare_platform_json marks visibility as `is_hidden = order > 2`. Sorting them
+        # alongside everything else MOVED them — the payload sort swapped Examples 1 & 2
+        # whenever Example 1 had the bigger payload, and the subtask sort demoted an
+        # example tagged subtask_>=3 out of the public slots entirely. So pin them to the
+        # front in their existing (Example 1, Example 2) order and sort only the rest —
+        # the same carve-out `testcase_annotate.ship_order` applies after selection.
+        ex_ids = {id(tc) for tc in test_cases
+                  if isinstance(tc, dict) and "example" in (tc.get("tags") or [])}
+        if not ex_ids:
+            if has_subtask_tags(test_cases):
+                _, ok = reorder_testcases_by_subtask(test_cases)
+                return ok
+            _, ok = reorder_testcases_by_payload_size(test_cases)
             return ok
-        _, ok = reorder_testcases_by_payload_size(test_cases)
-        return ok
+
+        subtasked = has_subtask_tags(test_cases)
+        examples = [tc for tc in test_cases if id(tc) in ex_ids]
+        rest = [tc for tc in test_cases if id(tc) not in ex_ids]
+        if subtasked:
+            _, ok = reorder_testcases_by_subtask(rest)
+        else:
+            _, ok = reorder_testcases_by_payload_size(rest)
+        test_cases[:] = examples + rest
+        for idx, tc in enumerate(test_cases, start=1):
+            tc["order"] = idx
+        return True
 
     if isinstance(data, list) and data and isinstance(data[0], dict):
         if "test_cases" in data[0]:

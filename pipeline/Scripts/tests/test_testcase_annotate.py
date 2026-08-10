@@ -201,7 +201,7 @@ class TestWriteSelected(unittest.TestCase):
                 {"order": 3, "input": "c", "output": "3", "tags": ["subtask_2"], "weightage": 5},
             ])
             selected = [
-                {"_raw": {"order": 3, "input": "c", "output": "3", "tags": ["subtask_2"], "weightage": 5}},
+                {"_raw": {"order": 3, "input": "ccc", "output": "3", "tags": ["subtask_2"], "weightage": 5}},
                 {"_raw": {"order": 1, "input": "a", "output": "1", "tags": ["subtask_1"], "weightage": 5}},
             ]
             write_selected(p, selected)
@@ -210,9 +210,9 @@ class TestWriteSelected(unittest.TestCase):
             tcs = data[0]["test_cases"]
             self.assertEqual(len(tcs), 2)
             self.assertEqual([t["order"] for t in tcs], [1, 2])   # renumbered
-            # Written in SHIPPING order (subtask tier ascending), not the order the
+            # Written in SHIPPING order (payload size ascending), not the order the
             # selector happened to pick them in.
-            self.assertEqual([t["input"] for t in tcs], ["a", "c"])
+            self.assertEqual([t["input"] for t in tcs], ["a", "ccc"])
             self.assertEqual(tcs[0]["tags"], ["subtask_1"])          # tags preserved
 
 
@@ -222,7 +222,7 @@ class TestShipOrder(unittest.TestCase):
     def _case(self, inp, tags, out="x"):
         return {"input": inp, "output": out, "tags": list(tags), "weightage": 5}
 
-    def test_examples_lead_then_subtask_tiers_ascend(self):
+    def test_examples_lead_then_sizes_ascend(self):
         # Selection order here is the real one: a big kill-cover case first (that pass
         # ranks by DESCENDING size), then the example, then slot coverage.
         cases = [
@@ -231,6 +231,16 @@ class TestShipOrder(unittest.TestCase):
             self._case("mid", ["subtask_2"]),
         ]
         self.assertEqual([c["input"] for c in ship_order(cases)], ["ex1", "mid", "stress"])
+
+    def test_size_beats_subtask_tier(self):
+        # A generator's own semantic subtask_<n> tags need not run small -> large, and
+        # grading order must: the smallest case ships first whatever tier it carries.
+        cases = [
+            self._case("x" * 200, ["subtask_1"]),
+            self._case("s", ["subtask_4"]),
+            self._case("x" * 20, ["subtask_2"]),
+        ]
+        self.assertEqual([len(c["input"]) for c in ship_order(cases)], [1, 20, 200])
 
     def test_falls_back_to_payload_size_without_subtask_tags(self):
         cases = [self._case("longer input", []), self._case("s", [])]

@@ -245,7 +245,7 @@ def annotate_tle(cases: list, brute_code, tle_batch_runner, max_n: int,
 # Write back — rebuild testcases.json from the selected records, shape preserved
 # --------------------------------------------------------------------------- #
 def ship_order(raw_cases: list) -> list:
-    """The order the suite SHIPS in: examples first, then subtask tier ascending.
+    """The order the suite SHIPS in: examples first, then ascending input size.
 
     `select_suite` returns cases in selection-PRIORITY order (examples, verified TLE,
     kill cover, slot coverage, edges, then the greedy fill). That is an argument about
@@ -255,21 +255,26 @@ def ship_order(raw_cases: list) -> list:
     right layout — selection just renumbered `order` over its own pick order and threw
     that layout away, and nothing downstream re-sorts.
 
-    So reuse generation's own sort. Examples are pinned to the front because
+    So sort by payload size ascending: the suite reads small -> large, which is also the
+    order a submission should be graded in. Examples are pinned to the front because
     `prepare_platform_json` marks visibility positionally (`is_hidden = order > 2`), so
-    a tier sort that demoted an example would hide it from the problem statement.
+    a size sort that demoted an example would hide it from the problem statement.
     """
-    from testcase_helpers import testcase_payload_byte_size, tier_from_testcase
+    from testcase_helpers import testcase_payload_byte_size
 
     examples, rest = [], []
     for tc in raw_cases:
         is_example = "example" in (tc.get("tags") or []) or tc.get("scenario") == "example"
         (examples if is_example else rest).append(tc)
-    # (tier, payload bytes) — the same key generation sorts on, minus its carve-out that
-    # keeps tiers 1-2 in generator order. That carve-out exists to protect the examples,
-    # which are pinned above, and after selection the incoming order inside a tier is
-    # just the selector's pick order. Untagged suites all land in tier 0 and sort by size.
-    rest.sort(key=lambda tc: (tier_from_testcase(tc) or 0, testcase_payload_byte_size(tc)))
+    # Payload bytes ONLY — a graded run must walk small inputs before big ones, so the
+    # first failure a submission hits is a case a human can read. Tier was the primary
+    # key here, which only tracks size when `sync_subtask_tags` assigned the tiers (it
+    # orders them by size bucket then payload); a generator that emits its OWN semantic
+    # subtask_<n> tags made the shipped suite jump from a 200KB tier-1 stress case to a
+    # 12-byte tier-2 one. Nothing downstream needs the tiers contiguous — B3 checks their
+    # COUNTS, and the platform JSON only reads `order` for `is_hidden` — so sort on the
+    # size the requirement is actually about.
+    rest.sort(key=testcase_payload_byte_size)
     return examples + rest
 
 

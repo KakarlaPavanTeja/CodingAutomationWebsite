@@ -21,6 +21,7 @@ from Prompts.testcasesprompt_v4 import (  # noqa: E402
 )
 from testcase_helpers import (  # noqa: E402
     _valid_subtask_partition,
+    reorder_testcases_json_root,
     sync_subtask_tags,
     tier_from_testcase,
 )
@@ -93,6 +94,40 @@ class SyncSubtaskTagsTest(unittest.TestCase):
     def test_empty_suite(self):
         cases = []
         self.assertEqual(sync_subtask_tags(cases, DESC), 0)
+
+
+class ReorderPinsExamplesTest(unittest.TestCase):
+    """`is_hidden = order > 2`, so the reorder must never move Examples 1 & 2."""
+
+    def _root(self, cases):
+        return [{"test_cases": cases}]
+
+    def test_payload_sort_does_not_swap_examples(self):
+        # Example 1 bigger than Example 2 — the plain payload sort swapped them.
+        ex1 = {"input": "5\n1 2 3 4 5\n", "output": "15", "tags": ["example"], "order": 1}
+        ex2 = {"input": "1\n7\n", "output": "7", "tags": ["example"], "order": 2}
+        big = {"input": "9\n" + " ".join("1" * 40) + "\n", "output": "40", "tags": [], "order": 3}
+        cases = [ex1, ex2, big]
+        self.assertTrue(reorder_testcases_json_root(self._root(cases)))
+        self.assertEqual([c["order"] for c in (ex1, ex2)], [1, 2])
+        self.assertEqual(cases[:2], [ex1, ex2])
+
+    def test_subtask_sort_keeps_examples_in_the_public_slots(self):
+        # An example tagged subtask_3 used to be payload-sorted deep into the suite.
+        ex1 = {"input": "x" * 300, "output": "1", "tags": ["subtask_3", "example"], "order": 1}
+        ex2 = {"input": "y", "output": "2", "tags": ["subtask_1", "example"], "order": 2}
+        rest = [{"input": str(i), "output": str(i), "tags": ["subtask_1"], "order": i + 3}
+                for i in range(5)]
+        cases = [ex1, ex2] + rest
+        self.assertTrue(reorder_testcases_json_root(self._root(cases)))
+        self.assertEqual(cases[:2], [ex1, ex2])
+        self.assertEqual([c["order"] for c in cases], list(range(1, len(cases) + 1)))
+
+    def test_untagged_suite_still_sorts_ascending(self):
+        cases = [{"input": "x" * 50, "output": "", "tags": [], "order": 1},
+                 {"input": "x", "output": "", "tags": [], "order": 2}]
+        self.assertTrue(reorder_testcases_json_root(self._root(cases)))
+        self.assertEqual([len(c["input"]) for c in cases], [1, 50])
 
 
 if __name__ == "__main__":
