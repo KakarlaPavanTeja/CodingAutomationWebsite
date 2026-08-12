@@ -14,7 +14,7 @@ import {
   createTempWorkspace,
   uploadOutputsFromDir,
   uploadLog,
-  syncLogToDb,
+  syncLogToStorage,
   cleanupTempDir,
   startPeriodicSync,
   mirrorInputsFromDir,
@@ -343,8 +343,9 @@ export async function POST(request: NextRequest) {
       try {
         const logContent = await readFile(logFilePath, "utf-8").catch(() => "");
         if (logContent) {
-          // DB only while running — UI polls pipeline_logs. Storage upload runs once on exit.
-          await syncLogToDb(safeProblemId, logStepKey, runId!, logContent);
+          // Storage only — the log viewer reads the same key. Never Postgres:
+          // rewriting a TOASTed column every tick is what filled the DB disk.
+          await syncLogToStorage(safeProblemId, logStepKey, runId!, logContent);
         }
       } catch {
         // Non-fatal

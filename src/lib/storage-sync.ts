@@ -209,39 +209,52 @@ export async function uploadOutputsFromDir(
   return uploadDirToStorage(localOutputsDir, `${problemId}/outputs`);
 }
 
-/** Live run: DB only (UI reads pipeline_logs). Skips object-storage egress. */
-export async function syncLogToDb(
+// Logs live in object storage, never in Postgres. Storing them in a TOASTed
+// text column meant every PIPELINE_LOG_SYNC_MS rewrite left the previous copy
+// behind as dead tuples, which is what filled the database disk.
+export const stepLogKey = (problemId: string, stepId: string) =>
+  `${problemId}/logs/${stepId}.log`;
+export const runLogKey = (problemId: string, stepId: string, runId: string) =>
+  `${problemId}/logs/runs/${stepId}/${runId}.log`;
+
+// A live sync re-uploads the log every few seconds, so sending the whole file
+// each time costs O(n²) bandwidth over a run that reaches tens of MB. The
+// viewer only follows the end of the log, so stream a tail while running; the
+// full log is written once on exit. ponytail: tail cap, switch to multipart
+// append if the viewer ever needs the head of a running step.
+const LIVE_LOG_MAX_BYTES = 256 * 1024;
+
+function liveTail(content: string): string {
+  if (content.length <= LIVE_LOG_MAX_BYTES) return content;
+  const tail = content.slice(-LIVE_LOG_MAX_BYTES);
+  const nl = tail.indexOf("\n");
+  return `[log truncated while running — full log written when the step finishes]\n${
+    nl >= 0 ? tail.slice(nl + 1) : tail
+  }`;
+}
+
+/** Live run: publish the tail so the viewer can follow along. Storage only. */
+export async function syncLogToStorage(
   problemId: string,
   stepId: string,
   runId: string,
   content: string,
 ): Promise<void> {
-  await db
-    .insert(pipelineLogs)
-    .values({
-      problemId,
-      stepId,
-      runId,
-      content,
-    })
-    .onConflictDoUpdate({
-      target: pipelineLogs.runId,
-      set: { content, createdAt: new Date() },
-    });
+  if (!runId) return;
+  await uploadFile(runLogKey(problemId, stepId, runId), liveTail(content));
 }
 
-/** End of run: persist log to object storage + DB. */
+/** End of run: persist the complete log, replacing the live tail. */
 export async function uploadLog(
   problemId: string,
   stepId: string,
   runId: string,
   content: string,
 ): Promise<void> {
-  await uploadFile(`${problemId}/logs/${stepId}.log`, content);
+  await uploadFile(stepLogKey(problemId, stepId), content);
   if (runId) {
-    await uploadFile(`${problemId}/logs/runs/${stepId}/${runId}.log`, content);
+    await uploadFile(runLogKey(problemId, stepId, runId), content);
   }
-  await syncLogToDb(problemId, stepId, runId, content);
 }
 
 // ---------------------------------------------------------------------------
@@ -418,25 +431,48 @@ export async function exportRunLogsFromDb(
   return results;
 }
 
-/** Get log content from pipeline_logs table. */
+/** Read a log from object storage. Missing object -> null. */
+async function getLogFromStorage(key: string): Promise<string | null> {
+  try {
+    return await getObjectString(key);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Logs written before the move to object storage still live in pipeline_logs.
+ * Only read once storage has come up empty; scripts/archive-pipeline-logs.mts
+ * drains these, and this fallback can go once it has run everywhere.
+ */
+async function getLegacyDbLog(
+  problemId: string,
+  stepId: string,
+  runId?: string,
+): Promise<string | null> {
+  const where = runId
+    ? eq(pipelineLogs.runId, runId)
+    : and(eq(pipelineLogs.problemId, problemId), eq(pipelineLogs.stepId, stepId));
+  const rows = await db
+    .select({ content: pipelineLogs.content })
+    .from(pipelineLogs)
+    .where(where)
+    .orderBy(desc(pipelineLogs.createdAt))
+    .limit(1);
+  return rows[0]?.content ?? null;
+}
+
+/** Get log content — object storage, falling back to pre-migration DB rows. */
 export async function getLogContent(
   problemId: string,
   stepId: string,
   runId?: string,
 ): Promise<string | null> {
   if (runId) {
-    const rows = await db
-      .select({ content: pipelineLogs.content })
-      .from(pipelineLogs)
-      .where(
-        and(
-          eq(pipelineLogs.runId, runId),
-          eq(pipelineLogs.problemId, problemId),
-          eq(pipelineLogs.stepId, stepId),
-        ),
-      )
-      .limit(1);
-    return rows[0]?.content ?? null;
+    return (
+      (await getLogFromStorage(runLogKey(problemId, stepId, runId))) ??
+      (await getLegacyDbLog(problemId, stepId, runId))
+    );
   }
 
   // When a step is in-flight, only return that run's log (empty until first sync).
@@ -454,21 +490,17 @@ export async function getLogContent(
     .limit(1);
 
   if (activeRun[0]) {
-    const rows = await db
-      .select({ content: pipelineLogs.content })
-      .from(pipelineLogs)
-      .where(eq(pipelineLogs.runId, activeRun[0].id))
-      .limit(1);
-    return rows[0]?.content ?? "";
+    return (
+      (await getLogFromStorage(runLogKey(problemId, stepId, activeRun[0].id))) ??
+      (await getLegacyDbLog(problemId, stepId, activeRun[0].id)) ??
+      ""
+    );
   }
 
-  const rows = await db
-    .select({ content: pipelineLogs.content })
-    .from(pipelineLogs)
-    .where(and(eq(pipelineLogs.problemId, problemId), eq(pipelineLogs.stepId, stepId)))
-    .orderBy(desc(pipelineLogs.createdAt))
-    .limit(1);
-  return rows[0]?.content ?? null;
+  return (
+    (await getLogFromStorage(stepLogKey(problemId, stepId))) ??
+    (await getLegacyDbLog(problemId, stepId))
+  );
 }
 
 // ---------------------------------------------------------------------------

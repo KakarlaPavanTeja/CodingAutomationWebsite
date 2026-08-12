@@ -74,7 +74,7 @@ mkdir -p "$PIPELINE_BASE_DIR/Inputs"
 cp .claude/skills/coding-question-preparation/topics_list.txt "$PIPELINE_BASE_DIR/Inputs/"
 ```
 
-The topics taxonomy is fixed: `Beginner:` / `Intermediate:` / `Advance:` lines.
+The topics taxonomy is fixed: `Beginner:` / `Intermediate:` / `Advanced:` lines.
 `generated_topics.json` must draw ONLY from it, with exact spelling and casing,
 into keys `beginner_topics`, `intermediate_topics`, `advanced_topics`.
 
