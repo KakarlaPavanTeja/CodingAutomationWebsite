@@ -268,13 +268,6 @@ FILE_MAPPINGS = {
     'nodejs_code': 'NodeJS.js',
 }
 
-NORMALIZED_EXT = {
-    'python': '.py',
-    'c++': '.cpp',
-    'java': '.java',
-    'node.js': '.js',
-}
-
 
 def _current_step_id():
     return os.environ.get("PIPELINE_STEP_ID") or "generate_question"
@@ -306,9 +299,18 @@ def _signature_path():
     return os.path.join(OUTPUT_DIR, 'description_signature.json')
 
 
-def _normalized_source_path(detected_lang):
-    ext = NORMALIZED_EXT.get(detected_lang.lower(), '.txt')
-    return os.path.join(OUTPUT_DIR, f'normalized_source{ext}')
+def _working_code_path(detected_lang):
+    """The single Outputs file holding the reference solution.
+
+    Seeded from Inputs/ before any sub-step runs, rewritten IN PLACE by naming,
+    read back by topics/codes. Naming used to write the same code twice
+    (`Outputs/normalized_source.py` AND `generatedFullCode/PYTHON.py`), so a
+    manual edit had to be made in two places to take effect. Everything
+    downstream (testcases, brute force, split, execute, editorial) already reads
+    generatedFullCode/, so that is the copy that survives.
+    """
+    key = LANG_MAP.get(detected_lang.lower(), 'python_code')
+    return os.path.join(_generated_full_code_dir(), FILE_MAPPINGS[key])
 
 
 def _description_path():
@@ -346,18 +348,29 @@ def _load_signature():
         return None
 
 
-def _save_normalized_source(code, detected_lang):
-    path = _normalized_source_path(detected_lang)
-    with open(path, 'w', encoding='utf-8') as f:
+def _save_working_code(code, detected_lang):
+    with open(_working_code_path(detected_lang), 'w', encoding='utf-8') as f:
         f.write(code)
 
 
-def _load_normalized_source(detected_lang, fallback):
-    path = _normalized_source_path(detected_lang)
+def _load_working_code(detected_lang, fallback):
+    path = _working_code_path(detected_lang)
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f:
             return f.read()
     return fallback
+
+
+def _seed_working_code(user_code, detected_lang):
+    """Copy Inputs/solution.* into Outputs on first touch, so the editable copy
+    exists no matter which sub-step runs first. Never overwrites: a re-run of
+    topics/codes must not clobber the naming step's rename (or a hand edit)."""
+    path = _working_code_path(detected_lang)
+    if os.path.exists(path):
+        return
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(user_code)
+    print(f"✓ Seeded editable solution copy at {os.path.relpath(path, OUTPUT_DIR)}")
 
 
 def _save_solution_file(lang_key, code):
@@ -405,9 +418,11 @@ def run_description_step(problem_name, structure_type, scenario_level, problem_c
 
     _track_llm_usage(desc_usage, f"{problem_name}_description")
     _save_description(desc_response)
-    _save_solution_file('python_code', user_code)
+    # A re-described problem invalidates naming, so reset the editable copy back
+    # to the raw input rather than leaving a rename keyed to the old description.
+    _save_working_code(user_code, detected_lang)
     print(f"✓ Description created and saved to {_description_path()}")
-    print(f"✓ Baseline solution saved to generatedFullCode/PYTHON.py")
+    print(f"✓ Baseline solution saved to {os.path.relpath(_working_code_path(detected_lang), OUTPUT_DIR)}")
 
 
 def run_naming_step(problem_name, structure_type, question_kind, user_code, detected_lang):
@@ -447,9 +462,11 @@ def run_naming_step(problem_name, structure_type, question_kind, user_code, dete
     renamed_code = clean_generated_code(renamed_code, detected_lang)
 
     _save_signature(description_signature)
-    _save_normalized_source(renamed_code, detected_lang)
-    _save_solution_file('python_code', renamed_code)
-    print("✓ Given code updated with description naming and normalization")
+    _save_working_code(renamed_code, detected_lang)
+    print(
+        "✓ Given code updated with description naming and normalization "
+        f"({os.path.relpath(_working_code_path(detected_lang), OUTPUT_DIR)})"
+    )
 
 
 def run_titles_step(problem_name):
@@ -527,7 +544,7 @@ def run_topics_step(problem_name, user_code, detected_lang):
     with open(topics_list_path, 'r', encoding='utf-8') as f:
         topics_list_content = f.read()
 
-    working_code = _load_normalized_source(detected_lang, user_code)
+    working_code = _load_working_code(detected_lang, user_code)
     topics_prompt = get_topics_prompt(desc_response, working_code, topics_list_content)
     topics_response, topics_usage = call_llm(topics_prompt, "", purpose="chat", reasoning_effort="medium")
     _track_llm_usage(topics_usage, f"{problem_name}_topics")
@@ -555,12 +572,12 @@ def run_translate_step(problem_name, structure_type, user_code, detected_lang, s
         print("Error: no description found. Run generate_question (description sub-step) first.")
         sys.exit(1)
 
-    working_code = _load_normalized_source(detected_lang, user_code)
+    working_code = _load_working_code(detected_lang, user_code)
     description_signature = _load_signature()
     user_lang_key = LANG_MAP.get(detected_lang.lower(), 'python_code')
     selected_keys = {LANG_ID_TO_KEY.get(l, '') for l in selected_langs}
 
-    _save_solution_file(user_lang_key, working_code)
+    _save_working_code(working_code, detected_lang)
 
     for key, lang in TARGET_LANGS.items():
         if key == user_lang_key:
@@ -618,6 +635,8 @@ def main():
 
     with open(solution_path, 'r', encoding='utf-8') as f:
         user_code = f.read()
+
+    _seed_working_code(user_code, detected_lang)
 
     if "description" in selected_steps:
         run_description_step(
