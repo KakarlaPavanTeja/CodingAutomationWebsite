@@ -122,12 +122,8 @@ async function runProblemBundle(sql: postgres.Sql, idArg: string, limit: number)
               from pipeline_runs where problem_id = ${pid} order by started_at desc nulls last`,
     limit,
   );
-  printRows(
-    "pipeline_logs (content preview)",
-    await sql`select id, step_id, run_id, left(content, 1500) as content_preview, created_at
-              from pipeline_logs where problem_id = ${pid} order by created_at desc limit 25`,
-    limit,
-  );
+  // No pipeline_logs section: logs live in object storage, never in Postgres.
+  // Read them at {problemId}/logs/{stepId}.log — see docs/postgres-operations.md.
   printRows(
     "llm_usage_summary",
     await sql`select purpose, step_id, model,
@@ -152,7 +148,7 @@ function printHelp() {
   console.log(`db.mts — read-only Postgres query tool
 
 Flags:
-  --problem, -p <uuid|prefix>  dump a problem + its runs/logs/state/usage
+  --problem, -p <uuid|prefix>  dump a problem + its runs/state/usage
   --sql, -q "<query>"          run an arbitrary SELECT (read-only tx)
   --tables, -t                 list tables in the public schema
   --list, -l                   show whether DATABASE_URL is configured

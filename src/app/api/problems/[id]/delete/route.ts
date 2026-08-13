@@ -113,7 +113,7 @@ export async function DELETE(
     // Continue even if storage cleanup fails
   }
 
-  // Hard delete (cascades to pipeline_runs, pipeline_logs)
+  // Hard delete (cascades to pipeline_runs, pipeline_states, problem_access)
   await db.delete(problems).where(eq(problems.id, id));
 
   return NextResponse.json({ success: true });
