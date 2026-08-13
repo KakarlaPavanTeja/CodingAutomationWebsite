@@ -45,7 +45,7 @@ import {
   reconcileLegacyWorkflowSteps,
   downstreamHasProgress,
 } from "@/lib/pipeline-legacy";
-import { parsePipelineLogContent } from "@/lib/pipeline-log-parse";
+import { parsePipelineLogContent, withoutRunLogs } from "@/lib/pipeline-log-parse";
 import { effectiveStepStatus, isRunStillInFlight, isSoftOrphanExitCode } from "@/lib/pipeline-orphan";
 import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
 import {
@@ -490,11 +490,12 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           enabledSubSteps: state.enabledSubSteps,
           enabledLanguages: state.enabledLanguages,
           testcaseCount: state.testcaseCount,
+          // Status/timing only — log lines stay in object storage (withoutRunLogs).
           ...(id === "generate_question" && state.subStepRuns
-            ? { subStepRuns: state.subStepRuns }
+            ? { subStepRuns: withoutRunLogs(state.subStepRuns) }
             : {}),
           ...(PARALLEL_LANG_STEPS.includes(id) && state.languageSubRuns
-            ? { languageSubRuns: state.languageSubRuns }
+            ? { languageSubRuns: withoutRunLogs(state.languageSubRuns) }
             : {}),
         };
         stepStatuses[id] = {
@@ -682,13 +683,17 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
                 : config.enabledSubSteps || initial.enabledSubSteps,
             enabledLanguages: config.enabledLanguages || langs,
             testcaseCount: config.testcaseCount || initial.testcaseCount,
+            // withoutRunLogs on restore too: rows written before logs moved to
+            // object storage still carry them, and restoring them would feed the
+            // blob straight back into the next autosave.
             subStepRuns:
               id === "generate_question"
-                ? (config.subStepRuns as StepState["subStepRuns"]) || initial.subStepRuns
+                ? withoutRunLogs(config.subStepRuns as StepState["subStepRuns"]) ||
+                  initial.subStepRuns
                 : undefined,
             languageSubRuns:
               PARALLEL_LANG_STEPS.includes(id)
-                ? (config.languageSubRuns as StepState["languageSubRuns"]) ||
+                ? withoutRunLogs(config.languageSubRuns as StepState["languageSubRuns"]) ||
                   createEmptyLanguageSubRuns(getLangsForStep(id, langs))
                 : undefined,
             status: effectiveStepStatus((status.status as StepStatus) || "pending", status.exitCode ?? null),
@@ -839,6 +844,38 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
               }
             }
             continue;
+          }
+
+          // Per-language sub-runs: same re-fetch the GQ sub-steps above get.
+          // Their logs are no longer persisted, and the Execute tiles derive
+          // their passed/total badge from them (aggregateTestStats).
+          if (PARALLEL_LANG_STEPS.includes(id) && state.languageSubRuns) {
+            for (const [langId, run] of Object.entries(state.languageSubRuns)) {
+              if (run?.status !== "completed" && run?.status !== "failed") continue;
+              const logKey = languageSubStepLogKey(id, langId);
+              fetch(
+                `/api/pipeline/run/logs?problemId=${encodeURIComponent(problemId)}&stepId=${encodeURIComponent(logKey)}&tail=500`
+              )
+                .then((r) => r.json())
+                .then((logsData) => {
+                  if (loadGenerationRef.current !== generation) return;
+                  if (!logsData.content) return;
+                  const logLines = parsePipelineLogContent(logsData.content);
+                  setStepStates((prev) => {
+                    const next = new Map(prev);
+                    const current = next.get(id);
+                    if (!current?.languageSubRuns) return prev;
+                    const languageSubRuns = { ...current.languageSubRuns };
+                    languageSubRuns[langId] = {
+                      ...(languageSubRuns[langId] ?? createEmptySubStepRun()),
+                      logs: logLines,
+                    };
+                    next.set(id, { ...current, languageSubRuns });
+                    return next;
+                  });
+                })
+                .catch(() => {});
+            }
           }
 
           if (state.status === "completed" || state.status === "failed") {

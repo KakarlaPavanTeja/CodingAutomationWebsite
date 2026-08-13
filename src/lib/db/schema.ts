@@ -203,16 +203,10 @@ export const appSettings = pgTable("app_settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
-export const pipelineLogs = pgTable("pipeline_logs", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  problemId: uuid("problem_id").references(() => problems.id, { onDelete: "cascade" }),
-  stepId: text("step_id").notNull(),
-  runId: uuid("run_id")
-    .unique()
-    .references(() => pipelineRuns.id, { onDelete: "cascade" }),
-  content: text("content").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
-});
+// pipeline_logs is gone: step logs live in object storage under
+// {problemId}/logs/{stepId}.log and {problemId}/logs/runs/{stepId}/{runId}.log.
+// A multi-MB TOASTed text column rewritten on every sync tick filled the
+// database disk — see docs/postgres-operations.md.
 
 export const llmUsage = pgTable(
   "llm_usage",
@@ -285,7 +279,6 @@ export type ProblemAccess = typeof problemAccess.$inferSelect;
 export type NewProblemAccess = typeof problemAccess.$inferInsert;
 export type PipelineRun = typeof pipelineRuns.$inferSelect;
 export type PipelineState = typeof pipelineStates.$inferSelect;
-export type PipelineLog = typeof pipelineLogs.$inferSelect;
 export type LlmUsage = typeof llmUsage.$inferSelect;
 export type AuthAuditLog = typeof authAuditLog.$inferSelect;
 export type RateLimit = typeof rateLimits.$inferSelect;

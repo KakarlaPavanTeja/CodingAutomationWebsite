@@ -75,6 +75,11 @@ export interface PipelineStepConfig {
 
 export interface SubStepRunState {
   status: StepStatus;
+  /**
+   * In-memory only — never persisted. Log lines live in object storage
+   * (`{problemId}/logs/{stepKey}.log`) and are re-fetched from there on load;
+   * `withoutRunLogs()` empties this before the state is saved.
+   */
   logs: LogLine[];
   exitCode: number | null;
   startTime: number | null;

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { db } from "@/lib/db";
-import { problems, pipelineRuns, pipelineLogs, llmUsage } from "@/lib/db/schema";
+import { problems, pipelineRuns, llmUsage } from "@/lib/db/schema";
 import {
   formatPipelineRunStepDisplay,
   resolvePipelineRunStepKey,
@@ -94,11 +94,8 @@ export async function GET(
       finishedAt: pipelineRuns.finishedAt,
       logsSummary: pipelineRuns.logsSummary,
       pid: pipelineRuns.pid,
-      logStepId: pipelineLogs.stepId,
-      logContent: pipelineLogs.content,
     })
     .from(pipelineRuns)
-    .leftJoin(pipelineLogs, eq(pipelineLogs.runId, pipelineRuns.id))
     .where(eq(pipelineRuns.problemId, id))
     .orderBy(desc(pipelineRuns.startedAt));
 
@@ -136,8 +133,9 @@ export async function GET(
   };
 
   const runsOut = runs.map((r) => {
-    const logSnippet = r.logContent?.slice(0, 4000) ?? null;
-    const runStepKey = resolvePipelineRunStepKey(r.stepId, r.logStepId, logSnippet);
+    // pipeline_runs.stepId already holds the composite key (split_code__cpp);
+    // the log-content inference is only for rows written before it did.
+    const runStepKey = resolvePipelineRunStepKey(r.stepId, null, null);
     const display = formatPipelineRunStepDisplay(runStepKey);
     const usage = matchUsageRowsForRun(
       usageRows,

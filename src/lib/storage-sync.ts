@@ -20,7 +20,7 @@ import os from "os";
 import { randomUUID } from "crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { pipelineLogs, pipelineRuns } from "@/lib/db/schema";
+import { pipelineRuns } from "@/lib/db/schema";
 import {
   putObject,
   getObjectBuffer,
@@ -392,41 +392,55 @@ export async function downloadAllOutputs(
 }
 
 /**
- * Every run's log for a problem, read from the pipeline_logs table (one row per
- * run). Object storage keeps only the latest run per step, so the DB is the
- * complete historical record — this lets the export include past runs too.
- * Files are named logs/runs/<step>/<startedAt>__<status>__<runId8>.log so they
- * sort chronologically per step.
+ * Every run's log for a problem, read from object storage.
+ *
+ * `syncLogToStorage`/`uploadLog` write one object per run under
+ * `{problemId}/logs/runs/{stepId}/{runId}.log`, so storage — not the database —
+ * is the complete historical record. `pipeline_runs` is joined only for the
+ * timestamp and status in the file name:
+ * logs/runs/<step>/<startedAt>__<status>__<runId8>.log, which sorts
+ * chronologically per step.
  */
-export async function exportRunLogsFromDb(
+export async function exportRunLogsFromStorage(
   problemId: string,
 ): Promise<{ path: string; buffer: Buffer }[]> {
-  const rows = await db
+  const prefix = `${problemId}/logs/runs/`;
+  const items = await listObjects(prefix);
+  if (items.length === 0) return [];
+
+  const runs = await db
     .select({
-      runId: pipelineLogs.runId,
-      stepId: pipelineLogs.stepId,
-      content: pipelineLogs.content,
+      id: pipelineRuns.id,
       startedAt: pipelineRuns.startedAt,
       status: pipelineRuns.status,
     })
-    .from(pipelineLogs)
-    .leftJoin(pipelineRuns, eq(pipelineLogs.runId, pipelineRuns.id))
-    .where(eq(pipelineLogs.problemId, problemId))
-    .orderBy(pipelineLogs.stepId, desc(pipelineRuns.startedAt));
+    .from(pipelineRuns)
+    .where(eq(pipelineRuns.problemId, problemId));
+  const runById = new Map(runs.map((r) => [r.id, r]));
 
   const results: { path: string; buffer: Buffer }[] = [];
-  for (const r of rows) {
-    if (!r.content) continue;
-    const step = (r.stepId || "unknown").replace(/[^a-zA-Z0-9_.-]/g, "_");
-    const ts = r.startedAt
-      ? new Date(r.startedAt).toISOString().replace(/[:.]/g, "-")
+  for (const item of items) {
+    // "<stepId>/<runId>.log" — stepId itself contains "__" (split_code__cpp),
+    // so anchor on the trailing uuid rather than splitting on the separator.
+    const match = item.name.slice(prefix.length).match(/^(.+)\/([0-9a-fA-F-]{36})\.log$/);
+    if (!match) continue;
+    const [, stepId, runId] = match;
+
+    const run = runById.get(runId);
+    const step = stepId.replace(/[^a-zA-Z0-9_.-]/g, "_");
+    const ts = run?.startedAt
+      ? new Date(run.startedAt).toISOString().replace(/[:.]/g, "-")
       : "unknown-time";
-    const status = r.status || "unknown";
-    const runShort = (r.runId || "no-run").slice(0, 8);
-    results.push({
-      path: `logs/runs/${step}/${ts}__${status}__${runShort}.log`,
-      buffer: Buffer.from(r.content, "utf-8"),
-    });
+    const status = run?.status || "unknown";
+
+    try {
+      results.push({
+        path: `logs/runs/${step}/${ts}__${status}__${runId.slice(0, 8)}.log`,
+        buffer: await getObjectBuffer(item.name),
+      });
+    } catch {
+      // skip unreadable objects
+    }
   }
   return results;
 }
@@ -440,39 +454,14 @@ async function getLogFromStorage(key: string): Promise<string | null> {
   }
 }
 
-/**
- * Logs written before the move to object storage still live in pipeline_logs.
- * Only read once storage has come up empty; scripts/archive-pipeline-logs.mts
- * drains these, and this fallback can go once it has run everywhere.
- */
-async function getLegacyDbLog(
-  problemId: string,
-  stepId: string,
-  runId?: string,
-): Promise<string | null> {
-  const where = runId
-    ? eq(pipelineLogs.runId, runId)
-    : and(eq(pipelineLogs.problemId, problemId), eq(pipelineLogs.stepId, stepId));
-  const rows = await db
-    .select({ content: pipelineLogs.content })
-    .from(pipelineLogs)
-    .where(where)
-    .orderBy(desc(pipelineLogs.createdAt))
-    .limit(1);
-  return rows[0]?.content ?? null;
-}
-
-/** Get log content — object storage, falling back to pre-migration DB rows. */
+/** Get log content. Object storage is the only source — logs never touch Postgres. */
 export async function getLogContent(
   problemId: string,
   stepId: string,
   runId?: string,
 ): Promise<string | null> {
   if (runId) {
-    return (
-      (await getLogFromStorage(runLogKey(problemId, stepId, runId))) ??
-      (await getLegacyDbLog(problemId, stepId, runId))
-    );
+    return getLogFromStorage(runLogKey(problemId, stepId, runId));
   }
 
   // When a step is in-flight, only return that run's log (empty until first sync).
@@ -490,17 +479,10 @@ export async function getLogContent(
     .limit(1);
 
   if (activeRun[0]) {
-    return (
-      (await getLogFromStorage(runLogKey(problemId, stepId, activeRun[0].id))) ??
-      (await getLegacyDbLog(problemId, stepId, activeRun[0].id)) ??
-      ""
-    );
+    return (await getLogFromStorage(runLogKey(problemId, stepId, activeRun[0].id))) ?? "";
   }
 
-  return (
-    (await getLogFromStorage(stepLogKey(problemId, stepId))) ??
-    (await getLegacyDbLog(problemId, stepId))
-  );
+  return getLogFromStorage(stepLogKey(problemId, stepId));
 }
 
 // ---------------------------------------------------------------------------

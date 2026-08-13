@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import archiver from "archiver";
 import { PassThrough } from "stream";
-import { downloadAllOutputs, exportRunLogsFromDb, readStorageFileBuffer } from "@/lib/storage-sync";
+import { downloadAllOutputs, exportRunLogsFromStorage, readStorageFileBuffer } from "@/lib/storage-sync";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { assertSafeProblemId, assertSafeRelativePath } from "@/lib/storage-path";
 
@@ -70,12 +70,11 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Every run's log from the DB (complete history — object storage keeps only
-  // the latest run per step). Non-fatal: a log-read failure must not block the
-  // outputs download.
+  // Every run's log, from object storage (one object per run — the complete
+  // history). Non-fatal: a log-read failure must not block the outputs download.
   let runLogs: { path: string; buffer: Buffer }[] = [];
   try {
-    runLogs = await exportRunLogsFromDb(safeProblemId);
+    runLogs = await exportRunLogsFromStorage(safeProblemId);
   } catch {
     // Non-fatal — proceed with outputs only.
   }

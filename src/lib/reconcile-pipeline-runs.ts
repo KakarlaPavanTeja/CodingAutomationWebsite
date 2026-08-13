@@ -1,6 +1,7 @@
 import { and, eq, or } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { pipelineLogs, pipelineRuns, problems } from "@/lib/db/schema";
+import { pipelineRuns, problems } from "@/lib/db/schema";
+import { getLogContent } from "@/lib/storage-sync";
 import { getProcessPidAsync } from "@/lib/process-registry";
 import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
 import type { StepId } from "@/types/pipeline";
@@ -242,12 +243,10 @@ export async function reconcileStalePipelineRuns(problemId: string): Promise<num
       continue;
     }
 
-    const logRows = await db
-      .select({ content: pipelineLogs.content })
-      .from(pipelineLogs)
-      .where(eq(pipelineLogs.runId, run.id))
-      .limit(1);
-    const content = logRows[0]?.content ?? "";
+    // Object storage, not Postgres: pipeline_logs was drained and truncated, so
+    // this read returned "" for every run — silently disabling both the
+    // exit-code recovery and the "still alive" heartbeat check below.
+    const content = (await getLogContent(run.problemId, run.stepId, run.id)) ?? "";
     const exitFromLog = parseExitFromLog(content);
 
     // Logs still updating (heartbeats, fresh timestamps) → process is alive even

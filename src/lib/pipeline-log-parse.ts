@@ -45,6 +45,37 @@ export function parsePipelineLogContent(content: string, prevLogs?: LogLine[]): 
   return lines;
 }
 
+/**
+ * The same run states with their log lines dropped.
+ *
+ * Log lines belong in object storage (`{problemId}/logs/{stepKey}.log`, written
+ * by the run route) and the UI re-fetches them from there. Round-tripping them
+ * back through `pipeline_states.step_configs` rewrote a multi-MB TOASTed value
+ * on every autosave, which is what filled the database disk — the same failure
+ * mode the `pipeline_logs` table had. Applied both when persisting state and
+ * when restoring a row written before this change.
+ */
+export function withoutRunLogs<T extends { logs: LogLine[] }>(
+  runs: Partial<Record<string, T>> | undefined,
+): Record<string, T> | undefined {
+  if (!runs) return undefined;
+  const stripped: Record<string, T> = {};
+  for (const [key, run] of Object.entries(runs)) {
+    if (run) stripped[key] = { ...run, logs: [] };
+  }
+  return stripped;
+}
+
+/** Render structured log lines back to the `[ISO] line` text object storage holds. */
+export function formatPipelineLogContent(logs: LogLine[]): string {
+  return logs
+    .map(
+      ({ ts, stream, line }) =>
+        `[${new Date(ts).toISOString()}] ${stream === "stderr" ? "[STDERR] " : ""}${line}`,
+    )
+    .join("\n");
+}
+
 export type PipelineLogLineKind =
   | "stderr"
   | "start"
