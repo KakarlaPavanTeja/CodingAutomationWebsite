@@ -104,7 +104,12 @@ One weight per subtask group, applied uniformly to every case in it:
 | `edge` / `small` | 1× |
 | `medium` | 2× |
 | `large` | 4× |
-| any case tagged with a stress scenario | ×1.5 on top |
+| group contains any tag in `STRESS_SCENARIO_TAGS` | ×1.5 on top |
+
+`STRESS_SCENARIO_TAGS` already exists in `Prompts/testcasesprompt_v4.py` (`stress`,
+`max_constraint`, `worst_case_position`, `early_exit_trap`, `answer_at_end`,
+`adversarial`, `tle_trap`) and is reused as-is. Maximum weight is therefore
+`4 × 1.5 = 6.0`, minimum `1.0`.
 
 `prepare_platform_json._scale_weights_to_total` already rescales all weights to sum to
 the total, preserving relative proportions. So:
@@ -163,9 +168,16 @@ reproduces the real stated answer.
 **80–250 cases, sized by the problem.** No pool, no `testcases_pool.json`, no fill pass,
 no trimming.
 
-- The model picks within the band; difficulty is passed as a hint.
+- Difficulty picks the sub-band the prompt states: **easy 80–120 · medium 120–180 ·
+  hard 180–250**. The model chooses inside it based on how large the problem's input
+  space actually is.
 - An explicit owner count (`--count` / the Test cases count field) is passed into the
   prompt as an exact target, since no selector can enforce it afterwards.
+
+**80 is a generation target, not a gate.** The only enforced floor stays B3's
+`MIN_TESTCASES = 25`, unchanged. A suite landing between 25 and 80 is reported in the log
+as short but does not fail — the generator, not a validator, owns the count now, and
+failing the step for 74 cases would cost a full regeneration for no quality reason.
 
 ### Small input spaces
 
@@ -254,7 +266,10 @@ Two classes where textual output comparison misreports:
   different-but-valid answer is scored as *killed* when nothing caught it. Detection
   already exists (`is_open_ended_problem`, currently wired only into B4).
 - **Float / precision outputs** — `normalize` strips whitespace only, so `3.14159` vs
-  `3.141590` mismatches and a *correct* solution reads as killed.
+  `3.141590` mismatches and a *correct* solution reads as killed. Detected by scanning
+  the stored outputs: if any token in any case's `output` parses as a float **and**
+  contains a decimal point, the suite is float-valued. (Integers parse as floats too,
+  hence the decimal-point requirement.)
 
 In both cases B2 prints an explicit "cannot judge this problem" line and does not block.
 Better an honest abstention than a PASS that means nothing.
