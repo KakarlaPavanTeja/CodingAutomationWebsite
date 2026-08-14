@@ -695,23 +695,13 @@ def run_mutation_benchmark(
 # --------------------------------------------------------------------------- #
 # B2 — Wrong-approach gate
 # --------------------------------------------------------------------------- #
-def suite_is_float_valued(test_cases: list) -> bool:
-    """True when any stored output holds a decimal number.
-
-    Output comparison is textual, so `3.14159` vs `3.141590` mismatches and a CORRECT
-    solution reads as killed. Integers parse as floats too, hence the decimal-point
-    requirement.
-    """
-    for tc in test_cases or []:
-        for token in str(tc.get("output") or "").split():
-            if "." not in token:
-                continue
-            try:
-                float(token)
-                return True
-            except ValueError:
-                continue
-    return False
+# There is deliberately NO float-tolerance exception here. It looks like there should
+# be one — `3.14159` vs `3.141590` differs textually, so a "correct" solution reads as
+# killed — but the grading compiler itself compares EXACT TEXT. Probed against
+# nw-compiler on 2026-08-14: `0.30` vs `0.3`, `0.3000000000000001` vs `0.3`,
+# `3` vs `3.0` and a 1e-9 difference all returned INCORRECT. So a solution whose
+# decimals differ from the reference genuinely fails grading, and calling it killed is
+# accurate. Abstaining on decimal suites would only blind B2 to real survivors.
 
 
 def b2_verdict(
@@ -730,9 +720,6 @@ def b2_verdict(
     if description and is_open_ended_problem(description):
         reason = ("this problem accepts multiple valid outputs, so textual "
                   "comparison would misreport")
-    elif suite_is_float_valued(test_cases):
-        reason = ("this suite has decimal outputs, so textual comparison "
-                  "would misreport")
     else:
         reason = ""
     if reason:

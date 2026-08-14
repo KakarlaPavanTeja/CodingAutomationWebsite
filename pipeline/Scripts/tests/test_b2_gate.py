@@ -15,28 +15,32 @@ sys.path.insert(0, SCRIPT_DIR)
 from benchmark_suite import (  # noqa: E402
     b2_verdict,
     run_wrong_approach_gate,
-    suite_is_float_valued,
 )
 
 B2_KEYS = {"skipped", "missing", "cannot_judge", "reason", "wrong_files",
            "failures", "hard_fail"}
 
 
-class TestFloatDetection(unittest.TestCase):
-    def test_decimal_outputs_are_float_valued(self):
-        self.assertTrue(suite_is_float_valued([{"output": "3.14159"}]))
+class TestDecimalSuitesAreJudgedNormally(unittest.TestCase):
+    """Decimal outputs get NO exception, because the grading compiler has none.
 
-    def test_integer_outputs_are_not_float_valued(self):
-        self.assertFalse(suite_is_float_valued([{"output": "42"}, {"output": "7"}]))
+    Probed against nw-compiler on 2026-08-14: `0.30` vs `0.3`,
+    `0.3000000000000001` vs `0.3`, `3` vs `3.0` and a 1e-9 difference all came back
+    INCORRECT. Grading is exact text, so B2's exact-text comparison models it
+    faithfully — a solution whose decimals differ really does fail. Abstaining here
+    would only hide real survivors.
+    """
 
-    def test_non_numeric_outputs_are_not_float_valued(self):
-        self.assertFalse(suite_is_float_valued([{"output": "YES"}]))
+    def test_a_surviving_wrong_solution_still_blocks_on_a_decimal_suite(self):
+        v = b2_verdict(2, [{"file": "w1.py"}], [{"output": "3.14159"}],
+                       "compute the average")
+        self.assertTrue(v["hard_fail"], "decimals must not buy an exemption")
+        self.assertFalse(v["cannot_judge"])
 
-    def test_one_decimal_among_many_is_enough(self):
-        self.assertTrue(suite_is_float_valued([{"output": "1"}, {"output": "2.5"}]))
-
-    def test_a_dotted_non_number_is_not_float_valued(self):
-        self.assertFalse(suite_is_float_valued([{"output": "a.b"}]))
+    def test_a_clean_decimal_suite_passes_on_evidence_not_abstention(self):
+        v = b2_verdict(2, [], [{"output": "2.5"}], "compute the average")
+        self.assertFalse(v["hard_fail"])
+        self.assertFalse(v["cannot_judge"], "this is a real pass, not an abstention")
 
 
 class TestMissingWrongSolutionsBlocks(unittest.TestCase):
@@ -55,13 +59,14 @@ class TestMissingWrongSolutionsBlocks(unittest.TestCase):
         self.assertTrue(result["cannot_judge"])
         self.assertFalse(result["hard_fail"], "abstention must not block")
 
-    def test_float_suite_abstains_instead_of_passing(self):
+    def test_a_decimal_suite_with_no_wrong_solutions_still_blocks(self):
+        """Decimals are not a judgement problem, so they do not excuse a missing folder."""
         with tempfile.TemporaryDirectory() as empty:
             result = run_wrong_approach_gate(
                 [{"input": "1\n", "output": "3.14159"}], wrong_dir=empty,
                 description="Compute the average.")
-        self.assertTrue(result["cannot_judge"])
-        self.assertFalse(result["hard_fail"])
+        self.assertTrue(result["missing"])
+        self.assertTrue(result["hard_fail"])
 
     def test_every_return_path_carries_every_key(self):
         cases = [{"input": "1\n", "output": "1"}]
