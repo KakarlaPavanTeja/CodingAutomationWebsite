@@ -8,8 +8,8 @@ from testcase_annotate import (
     determine_size_model,
     annotate_kills,
     annotate_tle,
+    count_dead_cases,
     ship_order,
-    write_selected,
 )
 
 
@@ -56,12 +56,12 @@ class TestLoadCases(unittest.TestCase):
             self.assertTrue(cases[1]["is_edge"])    # explicit field: still honored
 
     def test_example_tag_outranks_a_per_case_declared_scenario(self):
-        """`guarantee_pass` force-keeps on `scenario == "example"` exactly.
+        """Everything that treats examples specially matches `scenario == "example"`.
 
         Regression (problem 66f6b0a9): the generator declared per-case names
         ("example_1", "example_2") alongside the `example` tag. Taking the declared
-        name verbatim made the force-keep miss, and both public examples were dropped
-        from the shipped suite once the cap filled.
+        name verbatim made every such match miss, and both public examples were
+        dropped from the shipped suite once the cap filled.
         """
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "testcases.json")
@@ -191,31 +191,6 @@ class TestAnnotateTle(unittest.TestCase):
         self.assertEqual(n, 0)
 
 
-class TestWriteSelected(unittest.TestCase):
-    def test_writes_only_selected_renumbered_shape_preserved(self):
-        with tempfile.TemporaryDirectory() as d:
-            p = os.path.join(d, "testcases.json")
-            _write_tc(p, [
-                {"order": 1, "input": "a", "output": "1", "tags": ["subtask_1"], "weightage": 5},
-                {"order": 2, "input": "b", "output": "2", "tags": ["subtask_1"], "weightage": 5},
-                {"order": 3, "input": "c", "output": "3", "tags": ["subtask_2"], "weightage": 5},
-            ])
-            selected = [
-                {"_raw": {"order": 3, "input": "ccc", "output": "3", "tags": ["subtask_2"], "weightage": 5}},
-                {"_raw": {"order": 1, "input": "a", "output": "1", "tags": ["subtask_1"], "weightage": 5}},
-            ]
-            write_selected(p, selected)
-            with open(p) as f:
-                data = json.load(f)
-            tcs = data[0]["test_cases"]
-            self.assertEqual(len(tcs), 2)
-            self.assertEqual([t["order"] for t in tcs], [1, 2])   # renumbered
-            # Written in SHIPPING order (payload size ascending), not the order the
-            # selector happened to pick them in.
-            self.assertEqual([t["input"] for t in tcs], ["a", "ccc"])
-            self.assertEqual(tcs[0]["tags"], ["subtask_1"])          # tags preserved
-
-
 class TestShipOrder(unittest.TestCase):
     """Selection order is a keep-argument, not a reading order — see `ship_order`."""
 
@@ -252,6 +227,31 @@ class TestShipOrder(unittest.TestCase):
         big_example = self._case("x" * 500, ["subtask_3", "example"])
         cases = [self._case("a", ["subtask_1"]), big_example, self._case("b", ["subtask_1"])]
         self.assertIs(ship_order(cases)[0], big_example)
+
+
+class TestAnnotationDoesNotTrim(unittest.TestCase):
+    def test_counts_cases_that_killed_nothing(self):
+        """The selector's signal without the selector's authority."""
+        cases = [
+            {"id": 0, "kills": {"a.py"}, "input": "1\n", "output": "1"},
+            {"id": 1, "kills": set(), "input": "2\n", "output": "1"},
+            {"id": 2, "kills": set(), "input": "3\n", "output": "1"},
+        ]
+        self.assertEqual(count_dead_cases(cases), 2)
+
+    def test_all_cases_dead_is_reported_not_crashed(self):
+        cases = [{"id": 0, "kills": set(), "input": "1\n", "output": "1"}]
+        self.assertEqual(count_dead_cases(cases), 1)
+
+    def test_no_cases_is_zero(self):
+        self.assertEqual(count_dead_cases([]), 0)
+
+    def test_selector_entry_points_are_gone(self):
+        """The suite ships as generated; nothing may trim it."""
+        import testcase_selection as ts
+        for name in ("select_suite", "guarantee_pass", "fill_target", "format_funnel",
+                     "CASE_CAP", "CASE_FLOOR"):
+            self.assertFalse(hasattr(ts, name), f"{name} should have been deleted")
 
 
 if __name__ == "__main__":

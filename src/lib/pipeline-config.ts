@@ -334,16 +334,6 @@ export function buildCommand(
     args.push("--nonfunction");
   }
 
-  if (stepId === "select_testcases") {
-    const cap = process.env.TESTCASE_CASE_CAP;
-    const floor = process.env.TESTCASE_CASE_FLOOR;
-    if (cap) args.push("--cap", cap);
-    if (floor) args.push("--floor", floor);
-    // The owner's testcase count sizes the SHIPPED suite too, not just the generator's
-    // pool — otherwise asking for 30 still ships the difficulty-scaled ~100.
-    if (testcaseCount) args.push("--count", testcaseCount.toString());
-  }
-
   let script = config.script;
   if (stepId === "execute_tests_function" || stepId === "execute_tests_nonfunction") {
     const langs = filterLanguagesForCommand(stepId, languages, languages);
