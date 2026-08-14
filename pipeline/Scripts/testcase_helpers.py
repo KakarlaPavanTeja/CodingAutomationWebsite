@@ -785,3 +785,65 @@ def reorder_testcases_json_root(data) -> bool:
     if isinstance(data, dict) and "test_cases" in data:
         return _reorder_list(data["test_cases"])
     return False
+
+
+# --------------------------------------------------------------------------- #
+# Semantic subtasks: the model names WHAT a case validates; we number the groups
+# by demand and give every case in a group the same weight. Numbering by demand is
+# what makes weights monotonic without a weight table.
+# --------------------------------------------------------------------------- #
+_DEMAND_RANK = {"edge": 0, "small": 1, "medium": 2, "large": 3}
+_DEMAND_WEIGHT = {"edge": 1.0, "small": 1.0, "medium": 2.0, "large": 4.0}
+STRESS_WEIGHT_MULTIPLIER = 1.5
+
+
+def _subtask_display_name(slug: str) -> str:
+    """"max_constraint_performance" -> "Max Constraint Performance"."""
+    return " ".join(word.capitalize() for word in str(slug).split("_") if word) or "General"
+
+
+def _case_is_stress(tc: dict) -> bool:
+    from Prompts.testcasesprompt_v4 import STRESS_SCENARIO_TAGS
+    names = {str(t) for t in (tc.get("tags") or []) if isinstance(t, str)}
+    names.add(str(tc.get("scenario") or ""))
+    return bool(names & set(STRESS_SCENARIO_TAGS))
+
+
+def derive_subtasks(test_cases: list, kind: str, max_n: int) -> dict:
+    """Group by the model's `subtask` name, number groups by demand, set weights.
+
+    Mutates each case's `tags` (exactly one `subtask_<n>`, stale ones stripped) and
+    `weightage` (one value per group). Returns {"subtask_1": "Display Name", ...} for
+    the root-level `subtask_names` map — tags stay plain strings so `tier_from_tags`
+    and `_scenario_of` keep parsing them unchanged.
+    """
+    cases = [tc for tc in (test_cases or []) if isinstance(tc, dict)]
+    if not cases:
+        return {}
+
+    groups: dict[str, list] = {}
+    for tc in cases:
+        name = str(tc.get("subtask") or "").strip() or "general"
+        groups.setdefault(name, []).append(tc)
+
+    def _demand(members: list) -> tuple:
+        rank = max(_DEMAND_RANK.get(bucket_for_case(tc, max_n, kind), 1) for tc in members)
+        size = max(case_size_metric(tc, kind, max_n) or 0 for tc in members)
+        return rank, size
+
+    # Ascending demand; name breaks ties so numbering does not depend on input order.
+    ordered = sorted(groups.items(), key=lambda kv: (_demand(kv[1]), kv[0]))
+
+    names: dict[str, str] = {}
+    for tier, (name, members) in enumerate(ordered, start=1):
+        rank, _ = _demand(members)
+        bucket = next(b for b, r in _DEMAND_RANK.items() if r == rank)
+        weight = _DEMAND_WEIGHT[bucket]
+        if any(_case_is_stress(tc) for tc in members):
+            weight *= STRESS_WEIGHT_MULTIPLIER
+        enum = subtask_tag(tier)
+        names[enum] = _subtask_display_name(name)
+        for tc in members:
+            tc["tags"] = dedupe_tags(_strip_subtask_tags(tc.get("tags") or []) + [enum])
+            tc["weightage"] = weight
+    return names
