@@ -8,17 +8,10 @@ Key changes from v3:
     the script aborts loudly — a buggy "optimal" can no longer silently poison
     the suite. (Brute force is the oracle, not the answer source — the
     LeetCode-correct division of labor.)
-  * BIMODAL SIZE DISTRIBUTION (not uniform, not max-heavy). A large cluster of
-    tiny hand-traceable cases + a separate cluster pinned at max, sparse middle.
-  * PER-PROBLEM-TYPE STRATEGY. Explicit required scenarios for array / string /
-    tree / graph / DP / sliding-window / math problems.
   * ADVERSARIAL ENGINE (carried from v3 and strengthened): scenarios crafted to
     break specific wrong approaches (early-exit, greedy-instead-of-DP, etc.).
   * UNIQUE-SOLUTION VERIFICATION (lifted from v1): for "exactly one solution"
     problems, inject the target and scan the search space to prove uniqueness.
-  * DIFFICULTY x TYPE COUNT. Target count scales; not a flat random range.
-  * WEIGHTED SCORING. Output always carries weightage + subtask tags
-    (partial-credit judge).
 
 Public API mirrors v3 so the manager can import the same names.
 """
@@ -28,20 +21,11 @@ MAX_SUBTASKS = 12
 MAX_CASES_PER_SUBTASK = 12
 MIN_TESTCASES = 25                          # raised from 20 — LeetCode Easy floor
 
-# Over-generation targets (redesign): the LLM emits a generator SCRIPT, so volume
-# is nearly free. A downstream deterministic selector dedups, verifies TLE, scores
-# wrong-solution kills, and trims to CASE_CAP — so the generator should aim HIGH and
-# leave the final count/size%/weights to the selector. These bound the candidate POOL.
-POOL_TARGET_MIN = 150
-POOL_TARGET_MAX = 250
-
-# Bucket boundaries as fractions of the problem's own MAX_N, plus the selection
-# bounds. Imported from the selector so the prompt states the SAME rules the B3 gate
-# enforces — never re-written as fixed numbers here (a stale mirror of CASE_CAP would
-# have the prompt promise a trim the selector does not perform).
-from testcase_selection import (  # noqa: E402
+# CASE_CAP is re-exported for testcase_manager_v4's log line; the FRACs are used only by
+# get_size_fix_prompt. The size-bucket targets below are still consumed by testcase_helpers
+# and the B3 gate in benchmark_suite, but they are no longer stated in the generation prompt.
+from testcase_selection import (  # noqa: E402,F401
     CASE_CAP,
-    CASE_FLOOR,
     LARGE_FRAC,
     SMALL_FRAC,
 )
@@ -50,8 +34,7 @@ from testcase_selection import (  # noqa: E402
 # Philosophy (matches real judges like LeetCode): the suite is dominated by cheap
 # small/edge CORRECTNESS cases; large/stress cases are FEW but high-value. You don't
 # need 50-100 max-size cases — a handful of well-constructed worst cases gates TLE
-# just as hard. The few large cases carry most of the WEIGHT (see scoring block), not
-# most of the COUNT.
+# just as hard.
 SIZE_CATEGORY_TARGETS = {
     "edge": 20.0,
     "small": 52.0,
@@ -68,27 +51,11 @@ def size_tag(bucket: str) -> str:
         raise ValueError(f"size bucket must be one of {SIZE_BUCKETS}, got {bucket!r}")
     return f"{SIZE_TAG_PREFIX}{bucket}"
 
-# Difficulty x problem-type target band. Used only as a hint to the model; the
-# manager passes difficulty + (optional) detected type. Strings/DP skew high.
-# Over-generate: the selector dedups + trims to CASE_CAP, so aim for a large POOL.
+
 COUNT_BAND_BY_DIFFICULTY = {
-    # Lower end must clear CASE_FLOOR — a pool below it is reported as a thin
-    # "small_space" suite, which is wrong when the input space is actually large.
-    "easy":   (100, 180),
-    "medium": (120, 220),
-    "hard":   (150, 280),
-}
-# Multipliers nudging the band by problem family (applied to the upper end).
-TYPE_COUNT_HINT = {
-    "string": "skew HIGH (strings need many cases — aim near the top of the band or above)",
-    "dp": "skew HIGH (DP needs many small cases covering every transition)",
-    "math": "exhaustively cover the SMALL input range (every value up to a modest cap)",
-    "array": "mid band",
-    "graph": "skew LOW-MID but structurally diverse (fewer cases, many topologies)",
-    "tree": "skew LOW-MID but structurally diverse (skewed, balanced, single-node, max-depth)",
-    "sliding_window": "mid band; include window=1 and window=entire-array",
-    "greedy": "mid-high; include cases where greedy-instead-of-correct fails",
-    "generic": "mid band",
+    "easy": (80, 120),
+    "medium": (120, 180),
+    "hard": (180, 250),
 }
 
 SUBTASK_TAG_PREFIX = "subtask_"
@@ -193,39 +160,23 @@ The first 2 test cases (`order` 1 and `order` 2) MUST reproduce Example 1 and Ex
         lines.append(f"  Example {i} output:\n{out!r}")
     return "\n".join(lines) + "\n"
 
-def _count_hint(difficulty, problem_type, num_testcases):
-    diff = (difficulty or "").strip().lower()
-    band = COUNT_BAND_BY_DIFFICULTY.get(diff)
-    type_note = TYPE_COUNT_HINT.get((problem_type or "generic").strip().lower(),
-                                    TYPE_COUNT_HINT["generic"])
-    overflow = (f"OVER-GENERATE toward a pool of ~{POOL_TARGET_MIN}-{POOL_TARGET_MAX} DISTINCT "
-                f"cases — the downstream selector dedups and trims to {CASE_FLOOR}-{CASE_CAP} "
-                f"(by difficulty), so more is better and there is NO tight per-subtask cap. "
-                f"The ONE exception: if the problem's legal input space is genuinely tiny "
-                f"(a handful of distinct inputs), enumerate ALL of it, set "
-                f"space_mode=\"exhaustive\", and stop — do not pad it with duplicates.")
-    if num_testcases is not None:
-        floor = max(num_testcases, MIN_TESTCASES)
-        return (f"at least {floor} (hard minimum {MIN_TESTCASES}). {overflow} "
-                f"Type guidance: {type_note}.")
-    if band:
-        lo, hi = band
-        lo = max(lo, MIN_TESTCASES)
-        return (f"target {lo}-{hi} for '{diff}' difficulty (hard minimum {MIN_TESTCASES}). "
-                f"{overflow} Type guidance: {type_note}.")
-    return (f"at least {MIN_TESTCASES} (no difficulty given). {overflow} "
-            f"Type guidance: {type_note}.")
+
+def _count_hint(difficulty, num_testcases):
+    if num_testcases:
+        return f"exactly {num_testcases} cases (the owner asked for this count)"
+    lo, hi = COUNT_BAND_BY_DIFFICULTY.get(
+        str(difficulty or "medium").strip().lower(), COUNT_BAND_BY_DIFFICULTY["medium"])
+    return (f"{lo}-{hi} cases — pick within that band based on how large the problem's "
+            f"legal input space actually is")
 
 
 def get_testcases_prompt(
     description,
-    solution_code,
-    total_score,
+    optimal_solution,
     brute_force_code=None,
     num_testcases=None,
     difficulty=None,
-    problem_type=None,
-    is_function=True,
+    is_function=False,
     signature_params=None,
     io_contract=None,
 ):
@@ -236,7 +187,6 @@ def get_testcases_prompt(
         oracle. When provided, the generated script must cross-check every case
         (optimal vs brute) and abort on any mismatch. When None, the script
         falls back to self-consistency checks only and notes the weaker guarantee.
-    Output is always weighted (weightage + subtask tags) for a partial-credit judge.
 
     is_function / signature_params : whether this is a function-based problem and,
         if so, the reference function's parameter names. Both function-based and
@@ -250,20 +200,8 @@ def get_testcases_prompt(
     if num_testcases is not None:
         num_testcases = max(num_testcases, MIN_TESTCASES)
 
-    num_hint = _count_hint(difficulty, problem_type, num_testcases)
+    num_hint = _count_hint(difficulty, num_testcases)
     has_brute = bool(brute_force_code and brute_force_code.strip())
-
-    # Single source of truth for the size targets shown in the prompt — interpolated
-    # from SIZE_CATEGORY_TARGETS so the prompt can never drift from what B3 enforces.
-    st = SIZE_CATEGORY_TARGETS
-    tol = SIZE_TOLERANCE_PP
-    size_targets_block = (
-        f"  * size_edge   (~{st['edge']:g}%): min/degenerate sizes, singleton, all-equal, boundary extremes.\n"
-        f"  * size_small  (~{st['small']:g}%): n in [2, ~20], hand-traceable correctness cluster (the MAJORITY).\n"
-        f"  * size_medium (~{st['medium']:g}%): sparse middle (n between ~21 and ~0.5*max N); keep thin.\n"
-        f"  * size_large  (~{st['large']:g}%): n at/near max constraint N; FEW but high-value stress cases."
-    )
-    size_targets_inline = ", ".join(f"{b} {st[b]:g}%" for b in ("edge", "small", "medium", "large"))
 
     # ---- shared blocks -----------------------------------------------------
 
@@ -291,7 +229,7 @@ this cap and are validated by the optimal alone — that is expected and fine.
 """
         if has_brute else
         """
-(SINGLE-ORACLE MODE — no brute force provided):
+(SINGLE-ORACLE MODE — no brute force provided, so no DUAL-ORACLE cross-check):
 Only the OPTIMAL solution is available. Embed it verbatim; its output is the `output`.
 Without a second oracle there is NO cross-check, so the suite's correctness rests
 entirely on the optimal being correct. Compensate by:
@@ -303,18 +241,17 @@ Strongly recommend the caller supply a brute force for full LeetCode-grade valid
 """
     )
 
-    scoring_block = f"""
-(SCORING — partial-credit judge, weighted):
-Every case carries subtask structure and per-case weights.
-- Each case carries `weightage` (> 0), exactly one `subtask_<n>` tag, and exactly one `size_<edge|small|medium|large>` tag.
-- Within a subtask, skew weight toward stress/adversarial scenarios (see multiplier fn).
-- Output case keys IN ORDER: `input`, `output`, `weightage`, `tags`, `order`, `size_metric`, `scenario`, `is_edge`.
-- Invariants: weights sum to TOTAL_WEIGHTAGE (±0.01); top subtask holds >= 35% of weight;
-  stress/large cases carry ~50% of weight (target 50%) — they are FEW in COUNT but
-  high-value, so passing them gates most of the score; all weights > 0. ADJUST weights to
-  reach these shares. Do NOT `assert` ANY of this and crash — not a share, and NOT the
-  weight SUM either: the pipeline rescales every weight to the exact total afterwards, so
-  asserting the sum only throws away a working suite. Set weights, write the file, stop.
+    subtask_block = f"""
+(SUBTASKS — group cases by WHAT THEY VALIDATE):
+Every case carries a `subtask` field: a snake_case name for the behaviour that case is
+checking. Cases validating the SAME behaviour MUST share the same name.
+  * Good names describe a behaviour: `empty_and_singleton`, `all_equal_elements`,
+    `duplicate_keys`, `max_constraint_performance`, `negative_values`.
+  * Bad names describe a size or restate the problem: `small_cases`, `test_group_2`.
+  * Use between {MIN_SUBTASKS} and {MAX_SUBTASKS} distinct names across the whole suite.
+  * Numbering and weighting are derived from these groups afterwards — a group of
+    max-constraint cases automatically outweighs a group of degenerate ones. Do NOT
+    emit `subtask_1`-style tags or any per-case weight.
 """
 
     # I/O representation depends on the problem kind. Function-based problems use
@@ -361,38 +298,35 @@ Every case carries subtask structure and per-case weights.
     `str([1,2,3])` (gives "[1, 2, 3]") unless the spec literally uses that bracket form.
   * Handle newlines and trailing spaces per spec. Both fields are STDIN/STDOUT strings."""
 
-    overgenerate_block = f"""
-(OVER-GENERATE — a downstream SELECTOR dedups, verifies TLE, scores kills, and trims to
-{CASE_FLOOR}-{CASE_CAP} cases):
-This suite is NO LONGER the final suite. A deterministic selector runs AFTER you: it removes
-exact-input duplicates, buckets by size, times the brute force for TLE, scores which cases catch
-wrong solutions, and keeps the strongest {CASE_FLOOR}-{CASE_CAP} (easy problems land near
-{CASE_FLOOR}, hard ones near {CASE_CAP}). So:
-  * Aim HIGH: emit a LARGE pool of DISTINCT cases (target ~{POOL_TARGET_MIN}-{POOL_TARGET_MAX}). More
-    distinct, well-labeled cases is strictly better. Do NOT minimize the count or stop early.
-  * You are NOT responsible for the final count, the exact size %, or the final weights — the
-    selector owns those. You ARE responsible for: correct outputs, DISTINCT inputs, explicit edge
-    cases, real at-MAX_N stress cases, and accurate per-case labels (below).
-  * Keep emitting distinct cases per scenario/size until the scenario runs dry (respect `seen_inputs`
-    and the attempt caps); never pad with duplicates.
+    final_suite_block = f"""
+(THIS IS THE FINAL SUITE — nothing trims it):
+There is NO downstream selector. Every case you emit ships to the platform exactly as
+written. So:
+  * Emit {num_hint}. Every case must be DISTINCT — never pad with duplicates.
+  * You are responsible for: correct outputs, distinct inputs, explicit edge cases, real
+    at-MAX_N stress cases, and honest grouping (below).
+  * You are NOT responsible for: size tags, weights, case order, or subtask numbers.
+    Those are computed from your inputs after you run. Do not emit them.
 """
 
     declared_metadata_block = """
-(DECLARED PER-CASE METADATA — REQUIRED on EVERY case, consumed by the selector):
-In ADDITION to input/output/weightage/tags/order, every case MUST also carry:
+(DECLARED PER-CASE METADATA — the ONLY keys on a case, ALL REQUIRED on EVERY case):
+  * `input` / `output`: the raw stdin and the reference solution's byte-exact stdout.
+  * `subtask` (str, snake_case): the validation group — see the SUBTASKS section.
   * `size_metric` (int): the REAL numeric size THIS case scales by — array length / string length /
-    rows*cols / nodes+edges / the value of n. This is what the selector buckets on, so it must be the
-    true size (NOT blindly the first token if that token is not the size). Use 0 ONLY when the problem
-    has no size dimension at all.
+    rows*cols / nodes+edges / the value of n. This is what the size bucket is derived from, so it must
+    be the true size (NOT blindly the first token if that token is not the size). Use 0 ONLY when the
+    problem has no size dimension at all.
   * `scenario` (str, snake_case): the named scenario, e.g. "answer_at_end", "all_equal", "max_stress",
-    "duplicates". Mirror the scenario tag; one token.
+    "duplicates". One token.
   * `is_edge` (bool): true for degenerate / boundary / min literals (empty, n=min, all-same, overflow
-    boundary, singleton). The selector FORCE-KEEPS every is_edge case, so mark them accurately.
+    boundary, singleton). Mark them accurately — they are reported separately.
+Emit NO other keys: no per-case weight, no `tags`, no `order`. Those are derived.
 """
 
     size_model_block = """
 (PROBLEM SIZE MODEL — REQUIRED at the ROOT dict, alongside `test_cases`):
-Declare how THIS problem scales so the selector buckets correctly:
+Declare how THIS problem scales so the size buckets come out right:
   * `size_model`: {"kind": "count"|"value"|"grid"|"multi"|"none", "max_n": <int>}
       - count : size is a count/length (array n, string length, #nodes). max_n = that maximum.
       - value : size is the magnitude of a single value (e.g. an integer up to 1e9). max_n = that max.
@@ -417,53 +351,24 @@ Inputs:
 1. Problem Description (constraints, I/O format, examples).
 2. Optimal Python Solution (verbatim — produces ground-truth outputs).
 3. Brute-Force Python Solution ({"PROVIDED — use as validation oracle" if has_brute else "NOT provided"}).
-4. Total Weightage: {total_score}
-5. Target total cases: {num_hint}
+4. Target total cases: {num_hint}
 {oracle_block}
-{scoring_block}
+{subtask_block}
 {_mandatory_example_block(description, io_contract)}
 
-(SIZE DISTRIBUTION — CORRECTNESS-HEAVY, FEW HIGH-VALUE STRESS — CRITICAL):
-Like real judges (LeetCode): MANY cheap small/edge correctness cases, FEW large
-stress cases. Each case MUST carry exactly ONE size tag: `size_edge`, `size_small`,
-`size_medium`, or `size_large`.
-Target COUNT distribution (within +/-{tol:g} percentage points):
-{size_targets_block}
-Do NOT spread sizes evenly and do NOT push half the cases to max. The small cluster
-DOMINATES the count; large cases are deliberately FEW — but they carry ~50% of the
-WEIGHT (see scoring block), so for large cases quality matters far more than quantity.
-A few worst-case stress inputs at/near MAX_N fail a slow solution just as hard as fifty.
-
-MANDATORY SIZE-LADDER RECIPE (do this explicitly IN CODE — do NOT hand-wave):
-  1. Parse MAX_N (the largest primary-size constraint) from the Constraints section into
-     a variable. If several sizes exist (n, m, q...), scale the dominant one.
-  2. In SCENARIO_PLAN, assign every planned case a TARGET size bucket UP FRONT, then pick
-     its n FROM that bucket's range:
-        edge   -> min / degenerate (n = min, singleton, all-equal, boundary)
-        small  -> n in [2, 20]
-        medium -> n in [21, 0.5*MAX_N]
-        large  -> n in [0.8*MAX_N, MAX_N]   (REAL stress sizes — fill with legal values)
-  3. size_large cases MUST use n at/near MAX_N. This is the #1 failure we see: a suite
-     that is 100% small is REJECTED by the coverage-shape gate (B3) AND makes mutation
-     testing vacuous — small inputs cannot kill off-by-one / comparison / boundary mutants.
-
-HOW THE SIZE AUDIT ACTUALLY BUCKETS YOUR CASES (match it EXACTLY — it IGNORES your tags):
-  The audit does NOT trust your size_* tag. It DERIVES each case's bucket from the raw
-  input: n = the FIRST integer token of the input's FIRST line, then:
-     n >= 0.8*MAX_N            -> large
-     n <= 1                    -> edge
-     n <= 20                   -> small
-     n >= 0.5*MAX_N            -> large    else -> medium
-     (first token NOT an integer -> the case can ONLY be edge/small, never large/medium)
-  CONSEQUENCE: when the problem has a size dimension, the FIRST LINE's FIRST TOKEN must BE
-  that primary size n (array length / count / etc.), and every size_large case must make
-  that token >= 0.8*MAX_N. If you lead the input with a non-size value, or never scale n
-  up, the audit records 0% large and REGENERATES you — no matter how you tagged the cases.
-Self-check (MUST mirror the audit, not your own tags): for each case, parse the first int
-token of its first input line as n, compute the DERIVED bucket with the rule above, and
-COUNT the derived buckets against targets ({size_targets_inline}). If a bucket is SHORT,
-ADD constraint-scaled cases for it before writing JSON. Do NOT assert or exit on the
-counts — over-supplying a bucket is fine; the downstream selector trims to a balanced suite.
+(SIZE LADDER — CORRECTNESS-HEAVY, FEW HIGH-VALUE STRESS):
+Like real judges (LeetCode): MANY cheap small/degenerate correctness cases, FEW but REAL
+stress cases. Do this explicitly IN CODE — do NOT hand-wave:
+  1. Parse MAX_N (the largest primary-size constraint) from the Constraints section into a
+     variable. If several sizes exist (n, m, q...), scale the dominant one.
+  2. In SCENARIO_PLAN, assign every planned case a target size UP FRONT and pick its n from
+     that range: degenerate (n = min, singleton, all-equal, boundary), small/hand-traceable,
+     a THIN middle, and stress at/near MAX_N.
+  3. Stress cases MUST actually use n at/near MAX_N. This is the #1 failure we see: a suite
+     that is 100% small cannot catch a slow solution, and makes mutation testing vacuous —
+     small inputs cannot kill off-by-one / comparison / boundary mutants.
+Do NOT spread sizes evenly and do NOT push half the cases to max. A few worst-case stress
+inputs at/near MAX_N fail a slow solution just as hard as fifty.
 
 (MULTI-AXIS STRESS — MANDATORY when constraints expose MORE THAN ONE resource axis):
 Many problems have TWO independent size axes: a COUNT (n items) and a SECONDARY resource
@@ -481,20 +386,6 @@ For EVERY secondary axis found in the constraints, the plan MUST include stress 
 Construct these adversarially for the likely wrong approaches: same-length pairwise
 NON-equivalent items (forces full quadratic scans), near-miss pairs that defeat early
 exits (differ only at the last compared position), and worst-case-shaped single items.
-
-(PER-PROBLEM-TYPE REQUIRED SCENARIOS):
-Detect the problem family from the statement + solution and include its mandatory cases.
-| Family | Must-include scenarios |
-|--------|------------------------|
-| Array | all-negative, all-zero, all-equal, single element, min & max values, heavy duplicates, sorted asc, reverse sorted |
-| String | empty (if allowed), single char, all-same char, palindrome, no-match, max length, FEW VERY LONG strings at the total-length cap (see multi-axis stress), spaces/unicode if in alphabet |
-| Tree | single node, fully left-skewed (linked-list shape), fully right-skewed, perfectly balanced, max depth |
-| Graph | single node, disconnected components, self-loop (if allowed), complete graph, line/path graph, max edges |
-| DP | n=0 (if allowed), n=1, the impossible/"-1" case, greedy-beats-correct trap, all-zeros, max n |
-| Sliding window | window = 1, window = entire array, all duplicates, all distinct |
-| Math/combinatorial | exhaustively cover the SMALL value range, plus the max value; off-by-one at boundaries |
-Adapt names to the actual problem. Skip a row only if constraints make it impossible
-(e.g. empty array when 2 <= n).
 
 (ADVERSARIAL ENGINE — defeat specific WRONG approaches — CRITICAL):
 Before generating inputs, the script MUST (in comments + a SCENARIO_PLAN structure):
@@ -532,12 +423,11 @@ If the statement says "exactly one solution" / "guaranteed unique":
     the attempt counter or a random filler so repeated fallbacks don't collide and re-trigger
     the loop).
   * NEVER `raise`, `assert`, or `sys.exit` because a scenario produced a duplicate input,
-    could not reach its target case count, OR because the realized size/scenario/weight
-    DISTRIBUTION missed a target percentage. The ONLY assertions permitted in the whole
-    script are CORRECTNESS asserts (optimal == brute on the same input). Distribution is a
-    goal you OVER-GENERATE toward, never a gate you crash on: if a bucket is short, ADD more
-    cases for it; if a bucket is over, that is FINE — the downstream selector trims the pool
-    to a balanced suite. A script that asserts `edge_pct ~= 0.20` and exits is a BUG.
+    could not reach its target case count, OR because the realized size/scenario mix missed
+    a target. The ONLY assertions permitted in the whole script are CORRECTNESS asserts
+    (optimal == brute on the same input). A size mix is a goal you generate toward, never a
+    gate you crash on: if one size range is thin, ADD more cases for it and move on. A script
+    that asserts `edge_pct ~= 0.20` and exits is a BUG.
     On a duplicate: SKIP it and continue (or perturb a
     filler within constraints and retry up to the cap, then move on). A scenario that yields
     fewer cases than planned is ACCEPTABLE — emit ONLY the distinct cases you actually have
@@ -588,20 +478,11 @@ A script that raises is a total loss: no suite, and a wasted repair round trip. 
 failure below is one you can FIX IN CODE with information you already have, so fix it —
 do NOT `assert` it and do NOT `raise`. The ONLY permitted abort is an optimal-vs-brute
 ORACLE MISMATCH (a real correctness bug, which must stop the run).
-  * Weight sum off (`AssertionError: Weight sum 20.22 != 20`): RENORMALIZE — scale every
-    weight by TOTAL/current_sum, then put the rounding remainder on the last case so the
-    sum is exact. Never assert a sum you can compute and correct.
   * Duplicate input: `add_case` returns False and the caller moves on. Never assert on it.
-  * A scenario runs dry, or you cannot reach a target count or size %: accept fewer cases
-    and continue. The downstream selector owns the final count and distribution.
+  * A scenario runs dry, or you cannot reach the target count: accept fewer cases and
+    continue. Emitting fewer DISTINCT cases beats crashing or padding with duplicates.
   * A required key is missing on a case: SET it (sensible default) instead of raising.
   * Do not paper over it with bare `try/except: pass` either — fix the cause, keep the case.
-
-(SOURCE MUST BE PURE ASCII):
-Every character in the file — code AND comments — must be ASCII. One typographic character
-is a hard SyntaxError. Write `-` not en/em dashes, `'` not curly quotes, `"` not curly
-double quotes, `<=` not the comparison glyph, `->` not an arrow, `...` not an ellipsis
-character. Never paste text from the problem statement into source without transliterating.
 
 (IMPORT CORRECTNESS — every import at the TOP of the file, before any other statement):
   * `import sys` is REQUIRED if you touch `sys` anywhere (including a `sys.stderr` progress
@@ -614,38 +495,27 @@ character. Never paste text from the problem statement into source without trans
   * Typically you need only `import json`, `import random`, `import sys`, `import io`
     `from tc_harness import run_solution` (the IO harness above), and maybe `import math`.
 
-{overgenerate_block}
+{final_suite_block}
 {declared_metadata_block}
 {size_model_block}
 (OUTPUT JSON SHAPE):
 Root: a LIST containing EXACTLY ONE dict with keys `"test_cases"`, `"size_model"`, `"space_mode"`.
   CORRECT:   [ {{"test_cases": [...], "size_model": {{"kind": "count", "max_n": 100000}}, "space_mode": "sampled"}} ]
   INCORRECT: {{"test_cases": [...]}}   (dict at root is invalid; missing size_model/space_mode)
-Each case dict carries: `input`, `output`, `weightage`, `tags`, `order`, `size_metric`, `scenario`, `is_edge`.
+Each case dict carries EXACTLY: `input`, `output`, `subtask`, `scenario`, `is_edge`, `size_metric`.
 Write with `json.dump(result, f, indent=4, ensure_ascii=False)`.
-`order` is global 1..N, sequential (+1 each), smallest/example first, max stress last.
-
-(SELF-CHECK BEFORE WRITE):
-  * Every case validated by the optimal{" and cross-checked by brute (where size permits)" if has_brute else ""}.
-  * `seen_inputs` dedup; all inputs constraint-legal.
-  * Bimodal size check: ENSURE there exist cases with small n AND cases at/near max n (ADD one if missing — do not assert).
-  * Size distribution: aim each size_* bucket toward targets ({size_targets_inline}); ADD cases for SHORT buckets. Never assert/exit on the distribution.
-  * Scenario diversity: distinct scenario tags >= max(2, non_example_count // 3).
-  * Declared metadata present: EVERY case has int `size_metric`, str `scenario`, bool `is_edge`;
-    the root dict has `size_model` (kind+max_n) and `space_mode`.
-  * `order` == 1..N sequential.
-  * Weight self-check: assert ONLY the exact weight-SUM; reach top-tier-share/stress-share by adjusting weights, not by asserting them (see scoring block).
 
 (Script structure):
 1. imports, constants, `random.seed(42)`
 2. OPTIMAL_CODE {"+ BRUTE_CODE " if has_brute else ""}as triple-quoted strings; run via `from tc_harness import run_solution`
 3. serialize_input / serialize_output helpers, run_optimal{"/run_brute" if has_brute else ""}, normalize
 4. comment: intended algorithm + naive pitfalls for THIS problem
-5. plan structures (SUBTASK_PLAN + SCENARIO_PLAN) — every case named before any input is built
-6. weight computation
-7. iterate SCENARIO_PLAN: deterministic construct per scenario → run optimal{" + brute cross-check" if has_brute else ""} → append case
-8. self-checks (CORRECTNESS asserts only) + size/diversity TOP-UP (add short buckets; never assert/exit on distribution or weight shares)
-9. json.dump([{{"test_cases": test_cases, "size_model": {{"kind": SIZE_KIND, "max_n": MAX_N}}, "space_mode": SPACE_MODE}}], open("testcases.json","w"), indent=4, ensure_ascii=False)
+5. plan structures (SUBTASK_PLAN + SCENARIO_PLAN) — every case named and assigned its
+   `subtask` group before any input is built
+6. iterate SCENARIO_PLAN: deterministic construct per scenario → run optimal{" + brute cross-check" if has_brute else ""} → append case
+7. self-checks (CORRECTNESS asserts only) + size/diversity TOP-UP (add cases where a size
+   range or scenario is thin; never assert/exit on the mix)
+8. json.dump([{{"test_cases": test_cases, "size_model": {{"kind": SIZE_KIND, "max_n": MAX_N}}, "space_mode": SPACE_MODE}}], open("testcases.json","w"), indent=4, ensure_ascii=False)
    (every case dict must include size_metric/scenario/is_edge; SIZE_KIND/SPACE_MODE are the declared problem size model)
 
 FINAL CHECK — verify these FIVE before you emit a single character. They are the only
@@ -674,7 +544,7 @@ Return ONLY the Python script. No markdown fences, no prose outside comments.
 {description}
 
 ### Optimal Python Solution (ground truth for outputs):
-{solution_code}
+{optimal_solution}
 {brute_section}"""
     return system_prompt, user_prompt
 
