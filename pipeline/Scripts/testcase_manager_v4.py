@@ -655,6 +655,23 @@ def derive_and_normalize(out_path: str, description: str, io_contract=None) -> d
 
     kind, max_n = resolve_size_context(root, description, unique)
 
+    # Order, then sync the public examples, and only THEN bucket. `sync_example_testcases`
+    # selects cases by `order`, so order must exist first — but it also REWRITES the input
+    # of cases 1-2, so bucketing before it would tag those cases from inputs that no longer
+    # exist (a synced n=3 example keeping the `size_edge` of the n=1 case it replaced).
+    for idx, tc in enumerate(unique, start=1):
+        tc["order"] = idx
+
+    examples_fixed = sync_example_testcases(unique, description, io_contract) if unique else 0
+
+    # `is_edge` is the model's claim about the input it originally wrote. The sync just
+    # REPLACED that input, so the claim no longer describes anything — and bucket_for_case
+    # honours `is_edge` over the measured size, which would keep a synced n=3 example in
+    # the `edge` bucket forever. Drop the stale claim and let the new input decide.
+    for tc in unique:
+        if "example" in (tc.get("tags") or []):
+            tc["is_edge"] = False
+
     buckets: dict = {}
     for tc in unique:
         bucket = bucket_for_case(tc, max_n, kind)
@@ -666,15 +683,11 @@ def derive_and_normalize(out_path: str, description: str, io_contract=None) -> d
                 [t for t in (tc.get("tags") or []) if not str(t).startswith("size_")]
                 + [f"size_{bucket}"]
             )
-        if tc.get("size_metric") is None:
-            tc["size_metric"] = case_size_metric(tc, kind, max_n) or 0
+        # Recomputed unconditionally, not just when absent: a synced example's stored
+        # size_metric describes the input it had BEFORE the sync replaced it.
+        tc["size_metric"] = case_size_metric(tc, kind, max_n) or 0
 
     subtask_names = derive_subtasks(unique, kind, max_n)
-
-    for idx, tc in enumerate(unique, start=1):
-        tc["order"] = idx
-
-    examples_fixed = sync_example_testcases(unique, description, io_contract) if unique else 0
 
     root["test_cases"] = unique
     root["subtask_names"] = subtask_names

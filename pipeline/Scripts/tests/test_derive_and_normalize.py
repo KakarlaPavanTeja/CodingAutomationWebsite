@@ -103,6 +103,30 @@ class TestDeriveAndNormalize(unittest.TestCase):
         self.assertEqual(report["kept"], 1)
         os.unlink(path)
 
+    def test_synced_example_is_bucketed_from_its_new_input(self):
+        """Example sync REWRITES the input of cases 1-2, so bucketing must run after it.
+
+        Bucketing first left a synced n=3 example wearing the `size_edge` tag of the n=1
+        case it replaced — a label describing an input that no longer existed.
+        """
+        described = (
+            "Sum an array.\n\nConstraints\n1 <= n <= 100000\n\n"
+            "### Example 1\n\n**Input:**\n```\n3\n1 2 3\n```\n\n"
+            "**Output:**\n```\n6\n```\n"
+        )
+        # Case 1 starts as a degenerate n=1; the description's Example 1 is n=3.
+        path = write_suite([case("degenerate", 1), case("other", 50)])
+        tm.derive_and_normalize(path, described)
+        first = load(path)["test_cases"][0]
+
+        self.assertEqual(first["input"], "3\n1 2 3\n", "example sync should have replaced it")
+        self.assertIn("size_small", first["tags"],
+                      "n=3 is small; a stale size_edge means bucketing ran before the sync")
+        self.assertNotIn("size_edge", first["tags"])
+        self.assertEqual(first["size_metric"], 3,
+                         "size_metric must describe the input the case actually ships with")
+        os.unlink(path)
+
 
 if __name__ == "__main__":
     unittest.main()
