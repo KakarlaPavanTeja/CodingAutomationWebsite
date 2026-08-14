@@ -45,11 +45,23 @@ class TestPromptShape(unittest.TestCase):
             "OUTPUT HYGIENE",
             "NEVER CRASH",
             "IMPORT CORRECTNESS",
-            "DUAL-ORACLE",
             "MULTI-AXIS STRESS",
             "ADVERSARIAL",
         ]:
             self.assertIn(marker, text, f"{marker!r} must survive — it defends a real failure")
+
+    def test_dual_oracle_section_appears_when_a_brute_force_is_given(self):
+        """Asserted against a prompt built WITH a brute force — the only mode in which
+        dual-oracle cross-checking exists. Asserting it on a single-oracle prompt would
+        pass only if the string were smuggled into some other header."""
+        text = build(brute_force_code="print(sum(map(int, input().split())))\n")
+        self.assertIn("DUAL-ORACLE", text)
+
+    def test_single_oracle_mode_is_declared_when_no_brute_force_is_given(self):
+        text = build()
+        self.assertIn("SINGLE-ORACLE MODE", text)
+        self.assertNotIn("DUAL-ORACLE", text,
+                         "a single-oracle prompt must not claim a cross-check it lacks")
 
     def test_states_the_difficulty_count_band(self):
         self.assertIn("120", build(difficulty="medium"))

@@ -229,7 +229,7 @@ this cap and are validated by the optimal alone — that is expected and fine.
 """
         if has_brute else
         """
-(SINGLE-ORACLE MODE — no brute force provided, so no DUAL-ORACLE cross-check):
+(SINGLE-ORACLE MODE — no brute force provided):
 Only the OPTIMAL solution is available. Embed it verbatim; its output is the `output`.
 Without a second oracle there is NO cross-check, so the suite's correctness rests
 entirely on the optimal being correct. Compensate by:
