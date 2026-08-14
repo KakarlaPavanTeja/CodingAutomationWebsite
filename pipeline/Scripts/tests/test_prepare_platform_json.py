@@ -302,5 +302,58 @@ class TestPreparePlatformJson(unittest.TestCase):
             ppj.INPUTS_DIR = original
 
 
+class TestSubtaskDisplayNames(unittest.TestCase):
+    """A subtask tag stays `subtask_<n>` (parsers read it positionally); only the
+    label a learner sees carries the semantic name from the root `subtask_names`."""
+
+    def test_semantic_name_wins_over_the_generated_label(self):
+        tc = {"tags": ["subtask_5", "stress"]}
+        out = ppj.normalize_tags(tc, {"subtask_5": "Max Constraint Performance"})
+        by_enum = {t["name_enum"]: t["display_name"] for t in out}
+        self.assertEqual(by_enum["subtask_5"], "Max Constraint Performance")
+
+    def test_non_subtask_tags_keep_the_generated_label(self):
+        tc = {"tags": ["subtask_1", "stress"]}
+        out = ppj.normalize_tags(tc, {"subtask_1": "Empty And Singleton"})
+        by_enum = {t["name_enum"]: t["display_name"] for t in out}
+        self.assertEqual(by_enum["stress"], "Stress")
+
+    def test_missing_map_falls_back_to_the_generated_label(self):
+        tc = {"tags": ["subtask_2"]}
+        out = ppj.normalize_tags(tc, None)
+        self.assertEqual(out[0]["display_name"], "Subtask 2")
+
+    def test_enum_absent_from_the_map_falls_back(self):
+        tc = {"tags": ["subtask_9"]}
+        out = ppj.normalize_tags(tc, {"subtask_1": "Something Else"})
+        self.assertEqual(out[0]["display_name"], "Subtask 9")
+
+    def test_practice_and_exam_paths_read_the_root_map(self):
+        """Both platform formats must pick the map up off the container root."""
+        container = {
+            "subtask_names": {"subtask_3": "Duplicate Heavy Input"},
+            "test_cases": [
+                {"input": "1", "output": "1", "weightage": 1.0, "order": 1,
+                 "tags": ["subtask_3"]},
+            ],
+        }
+        for parse in (ppj.practice_parse_test_cases, ppj.exam_parse_test_cases):
+            tags = parse(container)[0]["tags"]
+            self.assertEqual(tags[0]["display_name"], "Duplicate Heavy Input", parse.__name__)
+            self.assertEqual(tags[0]["name_enum"], "subtask_3", parse.__name__)
+
+    def test_suite_without_the_map_still_packages(self):
+        """Suites written before subtask_names existed keep today's labels."""
+        container = {
+            "test_cases": [
+                {"input": "1", "output": "1", "weightage": 1.0, "order": 1,
+                 "tags": ["subtask_3"]},
+            ],
+        }
+        for parse in (ppj.practice_parse_test_cases, ppj.exam_parse_test_cases):
+            tags = parse(container)[0]["tags"]
+            self.assertEqual(tags[0]["display_name"], "Subtask 3", parse.__name__)
+
+
 if __name__ == "__main__":
     unittest.main()

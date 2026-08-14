@@ -484,7 +484,7 @@ def _tag_display_name(name_enum):
     return " ".join(word.capitalize() for word in str(name_enum).split("_") if word)
 
 
-def normalize_tags(tc):
+def normalize_tags(tc, subtask_names=None):
     """Carry the v4 subtask/scenario tags through to the platform JSON.
 
     v4 emits a per-case `tags` list of strings (e.g. ["subtask_3", "stress"]).
@@ -493,6 +493,11 @@ def normalize_tags(tc):
     tag accordingly. Already-wrapped dict tags are passed through, keeping any
     display_name they already carry (idempotent). Empty/blank tags are dropped;
     default to [] when absent.
+
+    `subtask_names` is the suite's root-level map (`{"subtask_5": "Max Constraint
+    Performance"}`). Only the LABEL takes the semantic name — the enum stays
+    `subtask_<n>` because `tier_from_tags`/`_scenario_of` read it positionally.
+    Suites written before the map existed just fall back to "Subtask 5".
     """
     raw = tc.get("tags", [])
     if isinstance(raw, str):
@@ -512,11 +517,14 @@ def normalize_tags(tc):
         if not name or name in seen:
             continue
         seen.add(name)
+        if not display and subtask_names:
+            display = str(subtask_names.get(name, "")).strip()
         out.append({"name_enum": name, "display_name": display or _tag_display_name(name)})
     return out
 
 
 def exam_parse_test_cases(container):
+    subtask_names = container.get("subtask_names") or {}
     test_cases = []
     order_update = 1
     for tc in container["test_cases"]:
@@ -531,7 +539,7 @@ def exam_parse_test_cases(container):
             "evaluation_type": "DEFAULT",
             "display_text": None,
             "criteria": None,
-            "tags": normalize_tags(tc),
+            "tags": normalize_tags(tc, subtask_names),
             "order": order_update,
         }
         if tc.get("multiple_possible_output"):
@@ -811,6 +819,7 @@ def practice_parse_debug_helper_code(lua, lang):
 
 
 def practice_parse_test_cases(container):
+    subtask_names = container.get("subtask_names") or {}
     test_cases = []
     for i, tc in enumerate(container["test_cases"]):
         if tc.get("input") is None:
@@ -842,7 +851,7 @@ def practice_parse_test_cases(container):
             "evaluation_type": "DEFAULT",
             "display_text": None,
             "criteria": None,
-            "tags": normalize_tags(tc),
+            "tags": normalize_tags(tc, subtask_names),
             "order": tc["order"],
         }
         if is_multiple_output:
