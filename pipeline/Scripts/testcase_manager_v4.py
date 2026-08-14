@@ -655,8 +655,8 @@ def _cleanup(path: str | None) -> None:
 def derive_and_normalize(out_path: str, description: str, io_contract=None) -> dict:
     """Compute everything the model was never asked for, deterministically.
 
-    dedup -> size tags -> semantic subtask numbering + weights -> order -> example sync.
-    Dedup lives here because the selector used to do it and the selector is gone.
+    dedup -> example sync -> shipping order -> size tags -> subtask numbering + weights.
+    Dedup and ordering live here because the selector used to do them and it is gone.
 
     This replaced a repair step that overrode the model's own claims (size tags, subtask
     tiers, weights). Nothing is overridden now because nothing is claimed: the model owns
@@ -696,6 +696,16 @@ def derive_and_normalize(out_path: str, description: str, io_contract=None) -> d
     for tc in unique:
         if "example" in (tc.get("tags") or []):
             tc["is_edge"] = False
+
+    # Now that the examples are tagged, put the suite in shipping order: examples first,
+    # then ascending payload size, so a graded run walks small inputs before big ones and
+    # the first failure a submission hits is a case a human can read. `write_selected`
+    # used to do this; it died with the selector.
+    from testcase_annotate import ship_order
+
+    unique = ship_order(unique)
+    for idx, tc in enumerate(unique, start=1):
+        tc["order"] = idx
 
     buckets: dict = {}
     for tc in unique:

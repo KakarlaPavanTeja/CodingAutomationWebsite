@@ -103,6 +103,38 @@ class TestDeriveAndNormalize(unittest.TestCase):
         self.assertEqual(report["kept"], 1)
         os.unlink(path)
 
+    def test_ships_small_to_large_after_the_examples(self):
+        """`write_selected` owned this ordering and died with the selector.
+
+        A graded run should walk small inputs before big ones, so the first failure a
+        submission hits is a case a human can read. Generation order does not guarantee
+        that — the model emits its stress cases wherever it likes.
+        """
+        path = write_suite([case("big", 900), case("tiny", 2), case("mid", 60)])
+        tm.derive_and_normalize(path, DESCRIPTION)
+        shipped = load(path)["test_cases"]
+
+        self.assertEqual([tc["subtask"] for tc in shipped], ["tiny", "mid", "big"])
+        self.assertEqual([tc["order"] for tc in shipped], [1, 2, 3],
+                         "order must be renumbered over the shipped sequence")
+
+    def test_examples_stay_at_the_front_regardless_of_size(self):
+        """`prepare_platform_json` marks visibility by array position (`is_hidden =
+        order > 2`), so a size sort that demoted an example would hide it from the
+        problem statement."""
+        described = (
+            "Sum an array.\n\nConstraints\n1 <= n <= 100000\n\n"
+            "### Example 1\n\n**Input:**\n```\n400\n" + " ".join("1" for _ in range(400))
+            + "\n```\n\n**Output:**\n```\n400\n```\n"
+        )
+        # The example is the LARGEST payload here; it must still ship first.
+        path = write_suite([case("seed", 5), case("tiny", 1)])
+        tm.derive_and_normalize(path, described)
+        shipped = load(path)["test_cases"]
+
+        self.assertIn("example", shipped[0]["tags"])
+        self.assertEqual(shipped[0]["order"], 1)
+
     def test_synced_example_is_bucketed_from_its_new_input(self):
         """Example sync REWRITES the input of cases 1-2, so bucketing must run after it.
 
