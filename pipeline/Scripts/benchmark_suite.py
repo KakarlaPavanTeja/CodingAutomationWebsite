@@ -695,18 +695,80 @@ def run_mutation_benchmark(
 # --------------------------------------------------------------------------- #
 # B2 — Wrong-approach gate
 # --------------------------------------------------------------------------- #
+def suite_is_float_valued(test_cases: list) -> bool:
+    """True when any stored output holds a decimal number.
+
+    Output comparison is textual, so `3.14159` vs `3.141590` mismatches and a CORRECT
+    solution reads as killed. Integers parse as floats too, hence the decimal-point
+    requirement.
+    """
+    for tc in test_cases or []:
+        for token in str(tc.get("output") or "").split():
+            if "." not in token:
+                continue
+            try:
+                float(token)
+                return True
+            except ValueError:
+                continue
+    return False
+
+
+def b2_verdict(
+    wrong_files: int,
+    failures: list,
+    test_cases: list,
+    description: str | None = "",
+) -> dict[str, Any]:
+    """The one B2 verdict shape, shared by the live gate and testcase_annotate's
+    reuse of its own kill data. B2 is the only blocking quality gate, so it either
+    blocks, passes on evidence, or abstains — it never silently no-ops.
+
+    Abstains (`cannot_judge`) where a textual verdict would be meaningless: problems
+    with multiple valid outputs, and float-valued suites. Abstention is not a pass.
+    """
+    if description and is_open_ended_problem(description):
+        reason = ("this problem accepts multiple valid outputs, so textual "
+                  "comparison would misreport")
+    elif suite_is_float_valued(test_cases):
+        reason = ("this suite has decimal outputs, so textual comparison "
+                  "would misreport")
+    else:
+        reason = ""
+    if reason:
+        return {"skipped": True, "cannot_judge": True, "missing": False,
+                "reason": reason, "wrong_files": wrong_files,
+                "failures": [], "hard_fail": False}
+    if not wrong_files:
+        return {"skipped": False, "cannot_judge": False, "missing": True,
+                "reason": "no wrong_solutions/*.py found", "wrong_files": 0,
+                "failures": [], "hard_fail": True}
+    return {"skipped": False, "cannot_judge": False, "missing": False,
+            "reason": "", "wrong_files": wrong_files, "failures": failures,
+            "hard_fail": len(failures) > 0}
+
+
 def run_wrong_approach_gate(
     test_cases: list[dict],
     wrong_dir: str | None = None,
     timeout: float = BENCHMARK_RUN_TIMEOUT,
     progress: bool = False,
+    description: str | None = None,
 ) -> dict[str, Any]:
+    # Cheap pre-check: if B2 cannot judge this problem at all, say so before running
+    # anything. Otherwise this is already the "no wrong solutions" verdict.
+    verdict = b2_verdict(0, [], test_cases, description)
+    if verdict["cannot_judge"]:
+        _log_warn(f"[B2] CANNOT JUDGE — {verdict['reason']}. Gate skipped (not a pass).")
+        return verdict
+
     wrong_dir = wrong_dir or os.path.join("Outputs", "wrong_solutions")
     paths = sorted(glob.glob(os.path.join(wrong_dir, "*.py")))
     if not paths:
-        if progress:
-            _log_warn("No wrong_solutions/*.py found — skipping B2")
-        return {"skipped": True, "note": "no wrong_solutions/*.py found", "hard_fail": False}
+        _log_fail("[B2] no wrong_solutions/*.py found. B2 is the only blocking quality "
+                  "gate; without it the suite is unvalidated. "
+                  "Run Generate Wrong Solutions first.")
+        return verdict
 
     if progress:
         _log_detail(f"Checking {len(paths)} wrong-approach file(s) against {len(test_cases)} cases…")
@@ -738,12 +800,7 @@ def run_wrong_approach_gate(
                 "file": name,
                 "passed_cases": [i for i, p, _ in results if p],
             })
-    return {
-        "skipped": False,
-        "wrong_files": len(paths),
-        "failures": failures,
-        "hard_fail": len(failures) > 0,
-    }
+    return b2_verdict(len(paths), failures, test_cases, description)
 
 
 # --------------------------------------------------------------------------- #
@@ -1455,9 +1512,12 @@ def run_benchmark(
         report.b2 = precomputed_b2
     else:
         print("[B2] Wrong-approach gate", flush=True)
-        report.b2 = run_wrong_approach_gate(test_cases, timeout=timeout, progress=True)
+        report.b2 = run_wrong_approach_gate(test_cases, timeout=timeout, progress=True,
+                                            description=description)
     if report.b2.get("skipped"):
         pass
+    elif report.b2.get("missing"):
+        report.hard_failures.append(f"B2: {report.b2.get('reason')}")
     elif report.b2.get("hard_fail"):
         _log_fail(f"[B2] FAIL — wrong solution(s) passed tests")
         report.hard_failures.append(
@@ -1549,7 +1609,10 @@ def print_report(report: BenchmarkReport, min_kill: float, report_only: bool = F
             _log_detail(f"… and {len(report.b1['survivors']) - 10} more (see benchmark output JSON if saved)")
 
     if report.b2.get("skipped"):
-        _log_warn(f"B2 Wrong-approach gate: SKIPPED ({report.b2.get('note')})")
+        _log_warn(f"B2 Wrong-approach gate: CANNOT JUDGE ({report.b2.get('reason')}) "
+                  "— abstained, not a pass")
+    elif report.b2.get("missing"):
+        _log_fail(f"B2 Wrong-approach gate: BLOCKED ({report.b2.get('reason')})")
     else:
         if report.b2.get("hard_fail"):
             _log_fail(f"B2 Wrong-approach gate: FAIL ({report.b2.get('wrong_files', 0)} files checked)")

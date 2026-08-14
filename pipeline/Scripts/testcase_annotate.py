@@ -402,15 +402,17 @@ def run_annotation(outputs_dir: str = "Outputs") -> dict:
     # is exactly the set of wrong solutions the final suite fails to catch — so we
     # never re-run the wrong solutions. Informational only: a benchmark failure must
     # not fail this step, whose real deliverable is the annotation report.
+    from benchmark_suite import b2_verdict
+    uncatchable = report.get("uncatchable") or []
+    b2 = b2_verdict(
+        report.get("kills_total", 0),
+        [{"file": f, "reused_from_select": True} for f in uncatchable],
+        cases,
+        desc,
+    )
+
     try:
         from benchmark_suite import run_benchmark, print_report, DEFAULT_MIN_KILL
-        uncatchable = report.get("uncatchable") or []
-        b2 = {
-            "skipped": report.get("kills_total", 0) == 0,
-            "wrong_files": report.get("kills_total", 0),
-            "failures": [{"file": f, "reused_from_select": True} for f in uncatchable],
-            "hard_fail": len(uncatchable) > 0,
-        }
         brute_path = None
         for name in ("BRUTE_FORCE.py", "BRUTE.py"):
             p = os.path.join(outputs_dir, "generatedFullCode", name)
@@ -432,6 +434,20 @@ def run_annotation(outputs_dir: str = "Outputs") -> dict:
         print_report(bench, DEFAULT_MIN_KILL, report_only=True)
     except Exception as e:
         log(f"⚠ benchmark (informational) skipped — {type(e).__name__}: {e}")
+
+    # B2 is the only blocking quality gate left (the selector is gone), so it blocks
+    # here — outside the try, so a benchmark crash cannot swallow the verdict.
+    if b2.get("hard_fail"):
+        if b2.get("missing"):
+            log("ERROR: no wrong_solutions/*.py found. B2 is the only blocking quality "
+                "gate; with nothing to discriminate, the suite is unvalidated. "
+                "Run Generate Wrong Solutions, then re-run this step.")
+        else:
+            names = ", ".join(f["file"] for f in b2.get("failures") or [])
+            log(f"ERROR: known-wrong solution(s) pass every test case ({names}). "
+                "The suite does not discriminate them. Refusing to ship. "
+                "Add cases that expose the wrong approach, or re-run Generate Test Cases.")
+        raise SystemExit(1)
 
     return report
 
