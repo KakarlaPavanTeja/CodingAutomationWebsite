@@ -10,9 +10,10 @@ compares stdout byte-for-byte. Two subprocess runs, at the cheapest point in the
 
 Named-variable example blocks (`N = 2763`) — the form EVERY function-type description
 uses — used to make the checkpoint report "skipped", because `extract_example_io` drops
-them as display-only. They are now CONVERTED: `named_var_stdin_candidates` proposes the
-plausible raw-stdin layouts and the reference solution picks the winner by reproducing the
-stated answer. That conversion is the piece nobody in the pipeline owned.
+them as display-only. They are now CONVERTED: a small model reads the reference solution's
+own parser and proposes ONE raw-stdin layout, which is accepted only when the reference
+reproduces the stated answer. Execution, not the model, decides. That conversion is the
+piece nobody in the pipeline owned.
 """
 
 import importlib.util
@@ -56,6 +57,17 @@ NAMED_VAR_DESC = NL.join([
     "## Example 1", "**Input:**", FENCE, "N = 2763", "C = 0", FENCE,
     "**Output:**", FENCE, "false", FENCE, "",
 ])
+
+
+class FakeLLM:
+    """Hands back queued stdin proposals so the conversion runs without a network call."""
+
+    def __init__(self, *replies):
+        self.replies = list(replies)
+
+    def __call__(self, system, user, purpose=None):
+        return self.replies.pop(0), {"prompt_tokens": 0, "completion_tokens": 0,
+                                     "model": "fake", "cost": 0.0}
 
 
 @unittest.skipIf(_m is None, "testcase_manager_v4 deps unavailable in this env")
@@ -120,7 +132,8 @@ class TestVerifyIoContract(unittest.TestCase):
             + "n, c = map(int, sys.stdin.read().split())" + NL
             + "print('false' if c == 0 else 'true')" + NL
         )
-        contract = _m.verify_io_contract(NAMED_VAR_DESC, ref, outputs_dir=self.out)
+        contract = _m.verify_io_contract(NAMED_VAR_DESC, ref, outputs_dir=self.out,
+                                         llm=FakeLLM("2763\n0\n"))
         self.assertTrue(contract["verified"], contract)
         self.assertEqual(contract["pairs"][0]["stdin"], "2763\n0\n")
         self.assertEqual(contract["pairs"][0]["stdout"], "false")
@@ -128,7 +141,8 @@ class TestVerifyIoContract(unittest.TestCase):
 
     def test_named_var_conversion_picks_the_layout_the_solution_reads(self):
         """A solution that reads a length line the block did not declare still resolves:
-        candidate 2 inserts the size, and only that candidate reproduces the answer."""
+        the model reads the parser, proposes the size-prefixed layout, and the reference
+        confirms it by reproducing the answer."""
         desc = NL.join([
             "## Example 1", "**Input:**", FENCE, "values = [4, 1, 7]", FENCE,
             "**Output:**", FENCE, "[12]", FENCE, "",
@@ -139,16 +153,18 @@ class TestVerifyIoContract(unittest.TestCase):
             + "n = int(d[0])" + NL
             + "print(sum(map(int, d[1:1 + n])))" + NL
         )
-        contract = _m.verify_io_contract(desc, ref, outputs_dir=self.out)
+        contract = _m.verify_io_contract(desc, ref, outputs_dir=self.out,
+                                         llm=FakeLLM("3\n4 1 7\n"))
         self.assertTrue(contract["verified"], contract)
         self.assertEqual(contract["pairs"][0]["stdin"], "3\n4 1 7\n")
         self.assertEqual(contract["pairs"][0]["stdout"], "12")
 
     def test_named_var_conversion_failure_is_reported_not_silent(self):
-        """No candidate layout reproduces the stated answer -> a loud NOT VERIFIED with
+        """No proposed layout reproduces the stated answer -> a loud NOT VERIFIED with
         the layouts tried, never a silent pass that ships `N = 2763` as a graded input."""
         ref = self.script("import sys" + NL + "sys.stdin.read()" + NL + "print('MAYBE')" + NL)
-        contract = _m.verify_io_contract(NAMED_VAR_DESC, ref, outputs_dir=self.out)
+        contract = _m.verify_io_contract(NAMED_VAR_DESC, ref, outputs_dir=self.out,
+                                         llm=FakeLLM("2763\n0\n", "2763 0\n"))
         self.assertFalse(contract["verified"])
         self.assertEqual(contract["pairs"], [])
         self.assertEqual(contract["mismatches"][0]["got"], _m.UNCONVERTIBLE)

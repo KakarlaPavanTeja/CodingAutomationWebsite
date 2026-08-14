@@ -308,33 +308,90 @@ def _load_testcases_from(out_path: str) -> list[dict]:
 UNCONVERTIBLE = "<no candidate stdin layout reproduced the stated output>"
 
 
-def _resolve_named_var_example(optimal_path: str, block: str, expected: str, timeout: float):
+_IO_LAYOUT_SYSTEM = (
+    "You convert a problem statement's worked Example into the RAW STDIN the given "
+    "reference solution reads. The solution's own parser is the source of truth — read "
+    "how it consumes stdin and produce the exact byte layout it expects (usually a "
+    "size/count line, then space-separated data line(s); a bracketed level-order line "
+    "for tree/linked-list inputs). "
+    "Return ONLY the stdin text. No explanation, no markdown fences, no `name = value` "
+    "assignments. End with a trailing newline."
+)
+
+
+def _strip_fences(text: str) -> str:
+    t = (text or "").strip()
+    if t.startswith("```"):
+        nl = t.find("\n")
+        t = t[nl + 1:] if nl != -1 else t[3:]
+    if t.rstrip().endswith("```"):
+        t = t.rstrip()[:-3]
+    t = t.strip("\n")
+    return t + "\n" if t else ""
+
+
+def resolve_example_stdin(optimal_path, block, expected, timeout, llm=None):
     """Convert one display-form example block into the raw stdin the reference reads.
 
-    The block alone is ambiguous (did it declare the size line? does the solution read
-    it?), so try each candidate layout and keep the first whose stdout matches the stated
-    expected output under token comparison — the description states the function's RETURN
-    value (`[1, 2]`, `false`) while the solution PRINTS it (`1 2`, `false`), so an exact
-    compare would reject every candidate. Returns (stdin, reference_stdout, detail); the
-    frozen stdout is the reference's own bytes, not the description's display form.
+    The model reads the solution's actual parser and proposes ONE layout; we run it and
+    accept only if the reference reproduces the stated answer. A mismatch buys exactly
+    one INFORMED retry — the model sees its own layout, what it printed, and what was
+    expected, which beats a second blind guess.
+
+    Returns (stdin, reference_stdout, detail); stdin is None when unresolved.
     """
-    from benchmark_suite import display_value_tokens, named_var_stdin_candidates
+    from benchmark_suite import display_value_tokens
+
+    if llm is None:
+        llm = call_llm
+    try:
+        with open(optimal_path, "r", encoding="utf-8") as f:
+            solution = f.read()
+    except OSError as e:
+        return None, None, f"could not read the reference solution ({e})"
 
     want = display_value_tokens(expected)
-    tried: list[str] = []
-    for cand in named_var_stdin_candidates(block):
-        got, status = _run_reference_on_input(optimal_path, cand, timeout)
+    user = (
+        f"REFERENCE SOLUTION (its stdin parser is the source of truth):\n\n"
+        f"```python\n{solution}\n```\n\n"
+        f"EXAMPLE from the problem statement:\n{block}\n\n"
+        f"Its stated answer is: {expected}\n\n"
+        f"Return the raw stdin that makes this solution print that answer."
+    )
+    tried = []
+    for attempt in (1, 2):
+        try:
+            content, usage = llm(_IO_LAYOUT_SYSTEM, user, purpose="io_contract_layout")
+        except Exception as e:
+            return None, None, f"LLM call failed ({e})"
+        if usage:
+            update_usage(
+                usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+                "io_contract_layout", model=usage.get("model", "unknown"),
+                purpose="testcases", step_id="generate_testcases",
+                cost=usage.get("cost", 0.0),
+            )
+        candidate = _strip_fences(content)
+        got, status = _run_reference_on_input(optimal_path, candidate, timeout)
         if status != "ok":
-            tried.append(f"{cand!r} -> <{status}>")
-            continue
-        got = _normalize_output(got)
-        if display_value_tokens(got) == want:
-            return cand, got, None
-        tried.append(f"{cand!r} -> {got[:60]!r}")
+            tried.append(f"{candidate!r} -> <{status}>")
+        else:
+            got = _normalize_output(got)
+            if display_value_tokens(got) == want:
+                return candidate, got, None
+            tried.append(f"{candidate!r} -> {got[:60]!r}")
+        if attempt == 1:
+            shown = got if status == "ok" else f"<{status}>"
+            user += (
+                f"\n\nYour layout {candidate!r} was WRONG. The solution printed "
+                f"{shown!r} but the stated answer is {expected!r}. "
+                f"Re-read the parser and return a corrected stdin."
+            )
     return None, None, "; ".join(tried)
 
 
-def verify_io_contract(description: str, optimal_path: str, outputs_dir: str = "Outputs") -> dict:
+def verify_io_contract(description: str, optimal_path: str, outputs_dir: str = "Outputs",
+                       llm=None) -> dict:
     """CHECKPOINT: freeze the I/O contract from the description's own Examples, verified
     against the reference solution, BEFORE any testcase is generated.
 
@@ -351,9 +408,10 @@ def verify_io_contract(description: str, optimal_path: str, outputs_dir: str = "
 
     Function-type descriptions show their Examples as named-variable assignments
     (`N = 2763` / `C = 0`) rather than raw stdin, which is why this used to report
-    "skipped" for every function problem. Those blocks are now CONVERTED: each candidate
-    stdin layout is piped to the reference and the one that reproduces the stated answer
-    wins, so the contract covers both description forms.
+    "skipped" for every function problem. Those blocks are now CONVERTED: a small model
+    reads the reference solution's own parser and proposes one stdin layout, which is
+    accepted only if the reference reproduces the stated answer — so the contract covers
+    both description forms. `llm` is injectable for tests; production uses `call_llm`.
 
     Writes `io_contract.json` so downstream steps can quote a VERIFIED concrete pair
     instead of prose describing a format. Returns the contract dict.
@@ -391,8 +449,8 @@ def verify_io_contract(description: str, optimal_path: str, outputs_dir: str = "
     for block, out in named[: max(0, 2 - len(pairs))]:
         idx = len(contract["pairs"]) + len(contract["mismatches"]) + 1
         want = _normalize_output(out)
-        stdin_str, stdout, detail = _resolve_named_var_example(
-            optimal_path, block, out, timeout)
+        stdin_str, stdout, detail = resolve_example_stdin(
+            optimal_path, block, out, timeout, llm=llm)
         if stdin_str is None:
             contract["mismatches"].append({
                 "example": idx, "stdin": _normalize_output(block), "expected": want,
