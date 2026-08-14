@@ -12,7 +12,6 @@ import random
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from Prompts.testcasesprompt_v4 import (
-    DEFAULT_DISTRIBUTION_PRESET,
     MAX_CASES_PER_SUBTASK,
     MAX_SUBTASKS,
     MIN_SUBTASKS,
@@ -726,9 +725,6 @@ def main():
     parser = argparse.ArgumentParser(description="Generate LeetCode-grade test cases (v4)")
     parser.add_argument("--count", type=int, default=None,
                         help=f"Target case count (minimum {MIN_TESTCASES}; default scales by difficulty x type)")
-    parser.add_argument("--distribution", default=DEFAULT_DISTRIBUTION_PRESET,
-                        choices=["assessment", "contest"],
-                        help="Subtask weight split mode. Default: assessment.")
     parser.add_argument("--type", default=None,
                         help="Override detected problem type (array/string/tree/graph/dp/sliding_window/math/greedy).")
     args = parser.parse_args()
@@ -835,7 +831,6 @@ def main():
 
     problem_type = (args.type or detect_problem_type(description)).strip().lower()
     print(f"Problem type (for count scaling): {problem_type}")
-    print(f"Subtask weight mode: {args.distribution} (split by problem-chosen subtask count {MIN_SUBTASKS}-{MAX_SUBTASKS}).")
 
     # 4c. Function signature — decides the I/O representation. The naming step
     #     writes description_signature.json for function-based problems; its
@@ -872,7 +867,6 @@ def main():
         total_score,
         brute_force_code=brute_solution,
         num_testcases=num_testcases,
-        distribution_preset=args.distribution,
         difficulty=difficulty,
         problem_type=problem_type,
         is_function=is_function,

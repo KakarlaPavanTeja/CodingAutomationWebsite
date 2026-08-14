@@ -23,9 +23,8 @@ Key changes from v3:
 Public API mirrors v3 so the manager can import the same names.
 """
 
-DEFAULT_DISTRIBUTION_PRESET = "assessment"
 MIN_SUBTASKS = 3
-MAX_SUBTASKS = 8
+MAX_SUBTASKS = 12
 MAX_CASES_PER_SUBTASK = 12
 MIN_TESTCASES = 25                          # raised from 20 — LeetCode Easy floor
 
@@ -90,30 +89,6 @@ TYPE_COUNT_HINT = {
     "sliding_window": "mid band; include window=1 and window=entire-array",
     "greedy": "mid-high; include cases where greedy-instead-of-correct fails",
     "generic": "mid band",
-}
-
-# Weight % per subtask (must sum to 100). Later subtasks = stress tiers.
-# IMPORTANT: every subtask count in [MIN_SUBTASKS, MAX_SUBTASKS] MUST have a row in
-# BOTH presets, or the generated script's DISTRIBUTION_BY_COUNT[preset][k] lookup
-# KeyErrors. Keep the highest key == MAX_SUBTASKS. Each row sums to 100, is monotonic
-# increasing, and the top tier holds >= 35% (scoring-block invariant).
-DISTRIBUTION_BY_MODE = {
-    "assessment": {
-        3: [12, 28, 60],
-        4: [10, 18, 24, 48],
-        5: [9, 13, 17, 22, 39],
-        6: [6, 10, 13, 16, 19, 36],
-        7: [5, 7, 9, 11, 14, 19, 35],
-        8: [4, 5, 7, 8, 10, 13, 18, 35],
-    },
-    "contest": {
-        3: [8, 27, 65],
-        4: [6, 14, 25, 55],
-        5: [6, 11, 16, 24, 43],
-        6: [5, 9, 13, 16, 22, 35],
-        7: [4, 6, 8, 10, 13, 21, 38],
-        8: [3, 4, 6, 8, 10, 13, 18, 38],
-    },
 }
 
 SUBTASK_TAG_PREFIX = "subtask_"
@@ -218,16 +193,6 @@ The first 2 test cases (`order` 1 and `order` 2) MUST reproduce Example 1 and Ex
         lines.append(f"  Example {i} output:\n{out!r}")
     return "\n".join(lines) + "\n"
 
-def _format_distribution_tables() -> str:
-    lines = []
-    for mode, by_count in DISTRIBUTION_BY_MODE.items():
-        lines.append(f"  {mode!r}:")
-        for n in sorted(by_count):
-            pcts = by_count[n]
-            lines.append(f"    {n}: {pcts},  # {' / '.join(str(p) for p in pcts)}")
-    return "\n".join(lines)
-
-
 def _count_hint(difficulty, problem_type, num_testcases):
     diff = (difficulty or "").strip().lower()
     band = COUNT_BAND_BY_DIFFICULTY.get(diff)
@@ -258,7 +223,6 @@ def get_testcases_prompt(
     total_score,
     brute_force_code=None,
     num_testcases=None,
-    distribution_preset=DEFAULT_DISTRIBUTION_PRESET,
     difficulty=None,
     problem_type=None,
     is_function=True,
@@ -283,12 +247,9 @@ def get_testcases_prompt(
         and the description examples, and lets the generated suite be validated by
         piping each `input` to the reference solution.
     """
-    if distribution_preset not in DISTRIBUTION_BY_MODE:
-        distribution_preset = DEFAULT_DISTRIBUTION_PRESET
     if num_testcases is not None:
         num_testcases = max(num_testcases, MIN_TESTCASES)
 
-    dist_tables = _format_distribution_tables()
     num_hint = _count_hint(difficulty, problem_type, num_testcases)
     has_brute = bool(brute_force_code and brute_force_code.strip())
 
@@ -346,7 +307,6 @@ Strongly recommend the caller supply a brute force for full LeetCode-grade valid
 (SCORING — partial-credit judge, weighted):
 Every case carries subtask structure and per-case weights.
 - Each case carries `weightage` (> 0), exactly one `subtask_<n>` tag, and exactly one `size_<edge|small|medium|large>` tag.
-- Subtask weight split comes from DISTRIBUTION_BY_COUNT[preset][SUBTASK_COUNT].
 - Within a subtask, skew weight toward stress/adversarial scenarios (see multiplier fn).
 - Output case keys IN ORDER: `input`, `output`, `weightage`, `tags`, `order`, `size_metric`, `scenario`, `is_edge`.
 - Invariants: weights sum to TOTAL_WEIGHTAGE (±0.01); top subtask holds >= 35% of weight;
@@ -459,7 +419,6 @@ Inputs:
 3. Brute-Force Python Solution ({"PROVIDED — use as validation oracle" if has_brute else "NOT provided"}).
 4. Total Weightage: {total_score}
 5. Target total cases: {num_hint}
-6. Distribution mode: `{distribution_preset}`.
 {oracle_block}
 {scoring_block}
 {_mandatory_example_block(description, io_contract)}
@@ -665,36 +624,6 @@ Root: a LIST containing EXACTLY ONE dict with keys `"test_cases"`, `"size_model"
 Each case dict carries: `input`, `output`, `weightage`, `tags`, `order`, `size_metric`, `scenario`, `is_edge`.
 Write with `json.dump(result, f, indent=4, ensure_ascii=False)`.
 `order` is global 1..N, sequential (+1 each), smallest/example first, max stress last.
-
-(WEIGHT DISTRIBUTION):
-Embed and use this dict after choosing SUBTASK_COUNT (3-6, problem-driven, do NOT default to 4):
-```
-DISTRIBUTION_BY_COUNT = {{
-{dist_tables}
-}}
-```
-Compute subtask buckets from the row for the chosen count, then split within each bucket
-by a multiplier that favors stress/adversarial cases:
-```
-STRESS_SCENARIO_TAGS = frozenset({{
-    "stress", "max_constraint", "worst_case_position", "early_exit_trap",
-    "answer_at_end", "adversarial", "tle_trap",
-}})
-def case_weight_multiplier(tags, tier, top_tier):
-    m, ts = 1.0, set(tags)
-    if "example" in ts: m *= 0.5
-    if "random" in ts and not ts & STRESS_SCENARIO_TAGS: m *= 0.75
-    if ts & STRESS_SCENARIO_TAGS: m *= 2.5
-    if "stress" in ts or "max_constraint" in ts: m *= 1.25
-    if tier == top_tier: m *= 1.3
-    return max(m, 0.25)
-```
-Use integer-cents splitting so weights sum exactly; ensure every weight > 0.
-STRESS SHARE TARGET (~50%): after applying multipliers, compute the total weight held by
-stress/large cases (tags in STRESS_SCENARIO_TAGS or size_large). If it is < 45% of
-TOTAL_WEIGHTAGE, scale stress/large weights UP (and/or non-stress weights down) until the
-stress/large share is ~50%, THEN re-normalize so the grand total is exact. This is
-intentional: large cases are few in count but must gate roughly half the score.
 
 (SELF-CHECK BEFORE WRITE):
   * Every case validated by the optimal{" and cross-checked by brute (where size permits)" if has_brute else ""}.
