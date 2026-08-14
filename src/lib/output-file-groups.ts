@@ -91,7 +91,8 @@ export function outputGroupForPath(filePath: string): OutputGroupId {
     filePath.startsWith("wrong_solutions/") ||
     filePath.startsWith("s3_blobs/") ||
     name === "testcases.json" ||
-    // The generator's full pre-selection pool, snapshotted by select_testcases.
+    // Legacy: the deleted selector's pre-selection pool snapshot. No longer
+    // produced; kept so archived problem folders still group it correctly.
     name === "testcases_pool.json" ||
     // The stdin/stdout pair verified against the reference before generation.
     name === "io_contract.json" ||

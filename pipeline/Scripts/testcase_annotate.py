@@ -331,13 +331,13 @@ def run_annotation(outputs_dir: str = "Outputs") -> dict:
     def log(msg):
         print(msg, flush=True)
 
-    log("=== VALIDATE TEST CASES (annotate kills → verify TLE → benchmark) ===")
+    log("=== VALIDATE TEST CASES (no trimming — the generated suite ships) ===")
 
     cases, max_n = load_cases(tc_path, desc)
     if not cases:
         raise SystemExit("annotation: testcases.json has no cases")
     size_kind, space_mode = determine_size_model(cases, max_n)
-    log(f"[1/4] Loaded {len(cases)} case(s)  ·  "
+    log(f"[1/3] Loaded {len(cases)} case(s)  ·  "
         f"size_model={size_kind} (max_n={max_n})  ·  space={space_mode}")
     log(f"      oracles: reference={'present' if reference else 'MISSING'}  ·  "
         f"brute-force={'present' if brute else 'absent'}  ·  "
@@ -362,40 +362,39 @@ def run_annotation(outputs_dir: str = "Outputs") -> dict:
         return run_solutions_batch(code, inputs, tle_limit)
 
     if wrong:
-        log(f"[2/4] Scoring kills: running {len(wrong)} wrong solution(s) over "
+        log(f"[2/3] Scoring kills: running {len(wrong)} wrong solution(s) over "
             f"{len(cases)} case(s)…")
     else:
-        log("[2/4] Scoring kills: SKIPPED (no wrong_solutions/*.py found)")
+        log("[2/3] Scoring kills: SKIPPED (no wrong_solutions/*.py found)")
     wrong_ids = annotate_kills(cases, wrong, batch_runner, log=log)
 
+    killed = set().union(*[c["kills"] for c in cases]) if cases else set()
+    uncatchable = sorted(wrong_ids - killed)
+    dead = count_dead_cases(cases)
+    log(f"      · wrong sols caught   {len(wrong_ids & killed)}/{len(wrong_ids)}"
+        + (f"  ⚠ uncatchable: {', '.join(uncatchable)}" if uncatchable else ""))
+    # Not a failure on its own: a case can be correct and still discriminate nothing.
+    # It is the one number that says whether the suite is broad or merely long.
+    log(f"      · killed nothing      {dead}/{len(cases)} case(s)")
+
     if brute and size_kind != "none":
-        log(f"[3/4] Verifying brute-force TLE on large-regime case(s) "
+        log(f"[3/3] Brute-force TLE on large-regime case(s) "
             f"(limit {tle_limit:g}s; a timeout = verified TLE)…")
     else:
         why = "no brute force" if not brute else "no size dimension"
-        log(f"[3/4] Brute-force TLE: N/A ({why})")
+        log(f"[3/3] Brute-force TLE: N/A ({why})")
     tle_n = annotate_tle(cases, brute, tle_batch_runner, max_n, size_kind, log=log)
+    log(f"      · verified brute TLE  {tle_n}"
+        + ("" if (brute and size_kind != "none") else "  (N/A)"))
 
-    killed = set().union(*[c["kills"] for c in cases]) if cases else set()
-    dead = count_dead_cases(cases)
     report = {
         "total": len(cases),
         "kills_covered": len(wrong_ids & killed),
         "kills_total": len(wrong_ids),
-        "uncatchable": sorted(wrong_ids - killed),
+        "uncatchable": uncatchable,
         "dead_cases": dead,
         "tle_verified": tle_n,
     }
-
-    log(f"[4/4] Suite ships as generated: {report['total']} case(s) — nothing trimmed.")
-    log(f"      · verified brute TLE  {tle_n}"
-        + ("" if (brute and size_kind != "none") else "  (N/A)"))
-    log(f"      · wrong sols caught   {report['kills_covered']}/{report['kills_total']}"
-        + (f"  ⚠ uncatchable: {', '.join(report['uncatchable'])}"
-           if report["uncatchable"] else ""))
-    # Not a failure on its own: a case can be correct and still discriminate nothing.
-    # It is the one number that says whether the suite is broad or merely long.
-    log(f"      · killed nothing      {dead}/{report['total']} case(s)")
 
     # Merged benchmark: report-only mutation/coverage/fuzz on the shipped suite.
     # B2 (wrong-approach gate) reuses the kill data we just computed — `uncatchable`
@@ -403,13 +402,17 @@ def run_annotation(outputs_dir: str = "Outputs") -> dict:
     # never re-run the wrong solutions. Informational only: a benchmark failure must
     # not fail this step, whose real deliverable is the annotation report.
     from benchmark_suite import b2_verdict
-    uncatchable = report.get("uncatchable") or []
     b2 = b2_verdict(
-        report.get("kills_total", 0),
-        [{"file": f, "reused_from_select": True} for f in uncatchable],
+        report["kills_total"],
+        [{"file": f, "reused_from_annotation": True} for f in uncatchable],
         cases,
         desc,
     )
+    # Abstention otherwise only surfaces inside print_report, which runs in a try/except
+    # — and B2 is the only blocking gate, so "it did not judge" belongs in the summary.
+    if b2.get("cannot_judge"):
+        log(f"      · B2 gate CANNOT JUDGE — {b2.get('reason')}. Not a pass: "
+            f"this suite ships with no blocking quality gate.")
 
     try:
         from benchmark_suite import run_benchmark, print_report, DEFAULT_MIN_KILL

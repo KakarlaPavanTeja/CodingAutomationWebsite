@@ -70,9 +70,9 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
   },
   {
     id: "select_testcases",
-    label: "Validate & Benchmark Test Cases",
+    label: "Validate Test Cases",
     description:
-      "Dedups exact-input duplicates, verifies brute-force TLE, scores wrong-solution kills, and selects the strongest suite (the Test cases count if you set one, else 80–150: easy ≈80, medium ≈110, hard ≈150; a problem whose input space holds fewer ships complete) — then benchmarks it (injects bugs to measure kill rate, coverage, and fuzz) in the same pass. Read-only benchmark: reports a score, never changes the selected suite.",
+      "Runs every wrong solution over the suite to confirm each is caught, times the brute force to verify TLE on large cases, and benchmarks suite strength (injected bugs, coverage, fuzz). Does not add, remove, or reorder cases — the generated suite ships as-is. A wrong solution that passes every case fails this step.",
     script: "Scripts/testcase_annotate.py",
     subSteps: [],
     hasLanguageSelector: false,

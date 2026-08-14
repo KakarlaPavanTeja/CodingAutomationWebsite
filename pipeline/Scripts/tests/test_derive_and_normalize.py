@@ -101,6 +101,20 @@ class TestDeriveAndNormalize(unittest.TestCase):
         path = write_suite([case("a", 5), {"input": "  ", "output": "1", "subtask": "b"}])
         report = tm.derive_and_normalize(path, DESCRIPTION)
         self.assertEqual(report["kept"], 1)
+        # kept + duplicates does NOT recover what the generator emitted once an
+        # inputless case is dropped, and the step log reports that number.
+        self.assertEqual(report["generated"], 2)
+        os.unlink(path)
+
+    def test_report_carries_every_field_the_step_log_prints(self):
+        """A log line naming a key that vanished crashes the step at RUNTIME, not import."""
+        path = write_suite([case("a", 5), case("b", 100000)])
+        report = tm.derive_and_normalize(path, DESCRIPTION)
+        self.assertEqual(
+            set(report),
+            {"generated", "kept", "duplicates", "buckets", "subtask_names",
+             "examples_synced"},
+        )
         os.unlink(path)
 
     def test_ships_small_to_large_after_the_examples(self):

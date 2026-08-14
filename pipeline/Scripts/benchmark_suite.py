@@ -306,7 +306,7 @@ def load_testcases(path: str | None = None) -> list[dict]:
 
 
 def load_suite_complete(path: str | None = None) -> bool:
-    """Root-level `suite_complete` flag stamped by testcase selection.
+    """Root-level `suite_complete` flag stamped by the derive step.
 
     True means the suite holds the WHOLE available input space — a problem with only
     a handful of legal inputs ships a handful of cases, and that is finished work, not
@@ -715,7 +715,7 @@ def b2_verdict(
     blocks, passes on evidence, or abstains — it never silently no-ops.
 
     Abstains (`cannot_judge`) where a textual verdict would be meaningless: problems
-    with multiple valid outputs, and float-valued suites. Abstention is not a pass.
+    that accept multiple valid outputs. Abstention is not a pass.
     """
     if description and is_open_ended_problem(description):
         reason = ("this problem accepts multiple valid outputs, so textual "
@@ -1491,11 +1491,11 @@ def run_benchmark(
         )
 
     if precomputed_b2 is not None:
-        # Merged select+benchmark step: select_testcases already ran every wrong
-        # solution over the pool and knows which the selected suite fails to catch
+        # Merged validate+benchmark step: run_annotation already ran every wrong
+        # solution over the shipped suite and knows which ones it fails to catch
         # (`uncatchable`). Reuse that verdict instead of re-executing every wrong
         # solution over the suite — same answer, one fewer full-suite pass.
-        print("[B2] Wrong-approach gate (reused from selection)", flush=True)
+        print("[B2] Wrong-approach gate (reused from the annotation pass)", flush=True)
         report.b2 = precomputed_b2
     else:
         print("[B2] Wrong-approach gate", flush=True)
@@ -1639,17 +1639,16 @@ def print_report(report: BenchmarkReport, min_kill: float, report_only: bool = F
         for w in report.warnings[:8]:
             _log_detail(w)
 
-    # Report-only mode (redesign): the deterministic selector owns the final suite,
-    # and there is no longer a Strengthen/regeneration step to act on distribution
-    # gaps — so B1/B2/B4 are the real signals and coverage-shape items are advisory
-    # notes, never a pipeline failure.
+    # Report-only mode (redesign): the generated suite ships as-is and there is no
+    # Strengthen/regeneration step to act on distribution gaps — so B1/B2/B4 are the
+    # real signals and coverage-shape items are advisory notes, never a failure.
     if report_only:
         real_pass = report.b1.get("kill_rate", 0.0) >= min_kill and not report.b2.get("hard_fail")
         print(f"\nBenchmark report (informational — not a gate). "
               f"Quality: {'STRONG' if real_pass else 'REVIEW'}", flush=True)
         if report.hard_failures:
             _log_warn(f"{len(report.hard_failures)} coverage-shape note(s) "
-                      f"(distribution is owned by Select Test Cases; not blocking):")
+                      f"(the generated suite ships as-is; not blocking):")
             for hf in report.hard_failures:
                 _log_detail(str(hf))
         return
@@ -1660,7 +1659,7 @@ def print_report(report: BenchmarkReport, min_kill: float, report_only: bool = F
         _log_ok("Benchmark gate passed — test suite is strong enough to continue")
     else:
         _log_fail("Benchmark gate failed — review survivors/issues above; "
-                  "re-run Generate → Select Test Cases to rebuild the suite")
+                  "re-run Generate Test Cases to rebuild the suite")
     if report.hard_failures:
         _log_fail(f"{len(report.hard_failures)} hard failure(s):")
         for hf in report.hard_failures:

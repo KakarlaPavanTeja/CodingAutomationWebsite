@@ -671,6 +671,7 @@ def derive_and_normalize(out_path: str, description: str, io_contract=None) -> d
     with open(out_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     root = data[0] if isinstance(data, list) and data else data
+    generated = len(root.get("test_cases") or [])
     cases = [tc for tc in (root.get("test_cases") or []) if isinstance(tc, dict)]
 
     # Filter first: dedup_by_input indexes tc["input"] directly, and an inputless case
@@ -738,8 +739,11 @@ def derive_and_normalize(out_path: str, description: str, io_contract=None) -> d
     if io_shape:
         print(f"WARNING: {io_shape}")
 
-    return {"kept": len(unique), "duplicates": duplicates, "buckets": buckets,
-            "subtask_names": subtask_names, "examples_synced": examples_fixed}
+    # `generated` is what the script emitted; kept + duplicates does NOT recover it,
+    # because inputless cases are filtered out above and would vanish from the log.
+    return {"generated": generated, "kept": len(unique), "duplicates": duplicates,
+            "buckets": buckets, "subtask_names": subtask_names,
+            "examples_synced": examples_fixed}
 
 
 # --------------------------------------------------------------------------- #
@@ -751,6 +755,8 @@ def main():
                         help=f"Exact case count (minimum {MIN_TESTCASES}; "
                              f"default is the difficulty's count band)")
     args = parser.parse_args()
+
+    print("=== GENERATE TEST CASES ===")
 
     description_path = os.path.join("Outputs", "generated_description.md")
     output_script_path = os.path.join("Outputs", "testcases_generator_script.py")
@@ -824,11 +830,6 @@ def main():
         "llm": "llm",
         "default": "default→medium",
     }.get(difficulty_source, difficulty_source)
-    print(
-        f"Testcase LLM routing: difficulty={effective} (source={source_label}) "
-        f"primary={routing['model']}@{routing['effort']} "
-        f"fallbacks=[{routing['fallbacks_display']}]"
-    )
 
     # 4. Count. There is no selector downstream, so what the generator emits is what
     #    ships: an owner count is an exact target, otherwise the difficulty's band.
@@ -841,7 +842,6 @@ def main():
             str(difficulty or "medium").strip().lower(),
             COUNT_BAND_BY_DIFFICULTY["medium"])
         count_label = f"{lo}-{hi} cases"
-    print(f"Target case count: {count_label} (this suite ships untrimmed).")
 
     # 4c. Function signature — decides the I/O representation. The naming step
     #     writes description_signature.json for function-based problems; its
@@ -862,8 +862,11 @@ def main():
         except Exception as exc:
             print(f"Warning: could not read {signature_path} ({exc}); "
                   "defaulting to STDIN/STDOUT I/O format.")
-    print(f"I/O format: {'function (raw stdin the solution parses)' if is_function else 'STDIN/STDOUT'}"
-          + (f"; params={signature_params}" if signature_params else ""))
+    print(f"      difficulty={effective} ({source_label})  ·  target {count_label}  ·  "
+          f"I/O: {'function (raw stdin)' if is_function else 'STDIN/STDOUT'}"
+          + (f" params={signature_params}" if signature_params else ""))
+    print(f"      model={routing['model']}@{routing['effort']}  ·  "
+          f"fallbacks=[{routing['fallbacks_display']}]")
 
     # 4b. CHECKPOINT — freeze and verify the I/O contract before generating anything.
     #     Two subprocess runs; catches a description/solution disagreement here rather
@@ -931,17 +934,39 @@ def main():
         #    to argue with the model about a distribution we can just compute.
         try:
             report = derive_and_normalize(out_path, description, io_contract)
-            print(f"Derived: {report['duplicates']} duplicate(s) removed · "
-                  f"{report['kept']} case(s) kept · "
-                  f"{len(report['subtask_names'])} subtask group(s)")
+            blank = report["generated"] - report["kept"] - report["duplicates"]
+            print(f"Derived: {report['generated']} generated → {report['kept']} case(s) "
+                  f"ship (removed {report['duplicates']} duplicate(s)"
+                  + (f", {blank} with no input" if blank else "") + ")")
             print("      size buckets   " + " · ".join(
                 f"{b} {report['buckets'].get(b, 0)}"
                 for b in ("edge", "small", "medium", "large")))
+
+            # Re-read what actually shipped so the subtask table reports the file on
+            # disk, not our expectation of it.
+            with open(out_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            shipped_root = data[0] if isinstance(data, list) and data else data
+            counts, weights = {}, {}
+            for tc in shipped_root.get("test_cases") or []:
+                for t in tc.get("tags") or []:
+                    if str(t).startswith("subtask_"):
+                        counts[t] = counts.get(t, 0) + 1
+                        weights[t] = tc.get("weightage")
+            names = report["subtask_names"]
+            print(f"      subtasks ({len(names)}, ordered by demand):")
+            for enum in sorted(names, key=lambda e: int(str(e).rsplit("_", 1)[-1])):
+                print(f"        {enum:<12} {names[enum]:<28} {counts.get(enum, 0):>3} cases"
+                      f"   weight {weights.get(enum)}")
+
             if report["examples_synced"]:
                 print(f"      {report['examples_synced']} public example case(s) synced "
                       f"from the description")
-            if report["kept"] < MIN_TESTCASES:
-                print(f"WARNING: only {report['kept']} case(s) survived — below the "
+            if shipped_root.get("suite_complete"):
+                print(f"      space=exhaustive — the whole legal input space is "
+                      f"{report['kept']} case(s); shipped complete")
+            elif report["kept"] < MIN_TESTCASES:
+                print(f"WARNING: only {report['kept']} case(s) shipped — below the "
                       f"{MIN_TESTCASES} floor the B3 gate enforces.")
         except Exception as e:
             print(f"Warning: could not derive/normalize testcases.json: {e}")
