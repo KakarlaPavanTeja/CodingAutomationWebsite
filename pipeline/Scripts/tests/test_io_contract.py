@@ -141,8 +141,8 @@ class TestVerifyIoContract(unittest.TestCase):
 
     def test_named_var_conversion_picks_the_layout_the_solution_reads(self):
         """A solution that reads a length line the block did not declare still resolves:
-        the model reads the parser, proposes the size-prefixed layout, and the reference
-        confirms it by reproducing the answer."""
+        the size-prefixed layout is tried and the reference confirms it by reproducing
+        the answer."""
         desc = NL.join([
             "## Example 1", "**Input:**", FENCE, "values = [4, 1, 7]", FENCE,
             "**Output:**", FENCE, "[12]", FENCE, "",
@@ -158,6 +158,69 @@ class TestVerifyIoContract(unittest.TestCase):
         self.assertTrue(contract["verified"], contract)
         self.assertEqual(contract["pairs"][0]["stdin"], "3\n4 1 7\n")
         self.assertEqual(contract["pairs"][0]["stdout"], "12")
+
+    def test_deterministic_layout_resolves_without_spending_an_llm_call(self):
+        """The common case costs zero tokens and needs no API key.
+
+        `llm` here raises if touched, so a regression that reorders the stages — model
+        first, deterministic second — fails loudly instead of quietly billing for every
+        function-type problem.
+        """
+        def explode(system, user, purpose=None):
+            raise AssertionError("the deterministic layouts should have resolved this")
+
+        ref = self.script(
+            "import sys" + NL
+            + "n, c = map(int, sys.stdin.read().split())" + NL
+            + "print('false' if c == 0 else 'true')" + NL
+        )
+        contract = _m.verify_io_contract(NAMED_VAR_DESC, ref, outputs_dir=self.out,
+                                         llm=explode)
+        self.assertTrue(contract["verified"], contract)
+        self.assertEqual(contract["pairs"][0]["stdin"], "2763\n0\n")
+
+    def test_model_resolves_what_the_deterministic_layouts_cannot(self):
+        """The fallback earns its keep: this solution reads the scalar BEFORE the array,
+        an order no mechanical serialization of the block produces."""
+        desc = NL.join([
+            "## Example 1", "**Input:**", FENCE, "arr = [1, 2, 3]", "k = 2", FENCE,
+            "**Output:**", FENCE, "12", FENCE, "",
+        ])
+        ref = self.script(
+            "import sys" + NL
+            + "d = sys.stdin.read().split()" + NL
+            + "k = int(d[0])" + NL
+            + "n = int(d[1])" + NL
+            + "print(sum(map(int, d[2:2 + n])) * k)" + NL
+        )
+        contract = _m.verify_io_contract(desc, ref, outputs_dir=self.out,
+                                         llm=FakeLLM("2\n3\n1 2 3\n"))
+        self.assertTrue(contract["verified"], contract)
+        self.assertEqual(contract["pairs"][0]["stdin"], "2\n3\n1 2 3\n")
+        self.assertEqual(contract["pairs"][0]["stdout"], "12")
+
+    def test_the_model_is_told_which_layouts_already_failed(self):
+        """Without this the model re-proposes the verbatim layout the pre-check just
+        disproved, burning both attempts on the same dead end."""
+        seen = {}
+
+        def capture(system, user, purpose=None):
+            seen["user"] = user
+            return "2\n3\n1 2 3\n", {"prompt_tokens": 0, "completion_tokens": 0,
+                                     "model": "fake", "cost": 0.0}
+
+        desc = NL.join([
+            "## Example 1", "**Input:**", FENCE, "arr = [1, 2, 3]", "k = 2", FENCE,
+            "**Output:**", FENCE, "12", FENCE, "",
+        ])
+        ref = self.script(
+            "import sys" + NL
+            + "d = sys.stdin.read().split()" + NL
+            + "print(int(d[0]) * int(d[1]) * int(d[2]))" + NL
+        )
+        _m.verify_io_contract(desc, ref, outputs_dir=self.out, llm=capture)
+        self.assertIn("already tried", seen["user"])
+        self.assertIn("1 2 3", seen["user"])
 
     def test_named_var_conversion_failure_is_reported_not_silent(self):
         """No proposed layout reproduces the stated answer -> a loud NOT VERIFIED with

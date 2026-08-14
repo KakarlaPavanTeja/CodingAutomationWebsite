@@ -319,14 +319,18 @@ def _strip_fences(text: str) -> str:
 def resolve_example_stdin(optimal_path, block, expected, timeout, llm=None):
     """Convert one display-form example block into the raw stdin the reference reads.
 
-    The model reads the solution's actual parser and proposes ONE layout; we run it and
-    accept only if the reference reproduces the stated answer. A mismatch buys exactly
-    one INFORMED retry — the model sees its own layout, what it printed, and what was
-    expected, which beats a second blind guess.
+    Two stages, cheapest first. The deterministic layouts go first and cost nothing; only
+    if none of them reproduces the stated answer does a model read the solution's actual
+    parser and propose ONE layout. A model mismatch buys exactly one INFORMED retry — it
+    sees its own layout, what it printed, and what was expected, which beats a second
+    blind guess.
+
+    Both stages are held to the same standard: a layout is accepted only when the
+    reference reproduces the stated answer. Execution decides, never the proposer.
 
     Returns (stdin, reference_stdout, detail); stdin is None when unresolved.
     """
-    from benchmark_suite import display_value_tokens
+    from benchmark_suite import display_value_tokens, named_var_stdin_candidates
 
     if llm is None:
         llm = call_llm
@@ -337,6 +341,30 @@ def resolve_example_stdin(optimal_path, block, expected, timeout, llm=None):
         return None, None, f"could not read the reference solution ({e})"
 
     want = display_value_tokens(expected)
+    tried: list[str] = []
+
+    def _accepts(candidate):
+        """(stdout, None) when the reference reproduces the stated answer, else
+        (None, note). Appends the failed attempt to `tried` either way."""
+        got, status = _run_reference_on_input(optimal_path, candidate, timeout)
+        if status != "ok":
+            tried.append(f"{candidate!r} -> <{status}>")
+            return None, f"<{status}>"
+        got = _normalize_output(got)
+        if display_value_tokens(got) == want:
+            return got, None
+        tried.append(f"{candidate!r} -> {got[:60]!r}")
+        return None, got
+
+    # Free first. The verbatim layout is what the standard `main()` in this pipeline
+    # reads, so most function problems resolve here for zero tokens — and this path still
+    # works when no API key is configured, which is when an LLM-only conversion would
+    # leave the contract unverified for EVERY function-type problem.
+    for candidate in named_var_stdin_candidates(block):
+        stdout, _ = _accepts(candidate)
+        if stdout is not None:
+            return candidate, stdout, None
+
     user = (
         f"REFERENCE SOLUTION (its stdin parser is the source of truth):\n\n"
         f"```python\n{solution}\n```\n\n"
@@ -344,7 +372,10 @@ def resolve_example_stdin(optimal_path, block, expected, timeout, llm=None):
         f"Its stated answer is: {expected}\n\n"
         f"Return the raw stdin that makes this solution print that answer."
     )
-    tried = []
+    if tried:
+        # Naming the dead ends stops the model re-proposing a layout already disproved.
+        user += ("\n\nThese layouts were already tried and did NOT reproduce it:\n"
+                 + "\n".join(f"  {t}" for t in tried))
     for attempt in (1, 2):
         try:
             content, usage = llm(_IO_LAYOUT_SYSTEM, user, purpose="io_contract_layout")
@@ -358,16 +389,10 @@ def resolve_example_stdin(optimal_path, block, expected, timeout, llm=None):
                 cost=usage.get("cost", 0.0),
             )
         candidate = _strip_fences(content)
-        got, status = _run_reference_on_input(optimal_path, candidate, timeout)
-        if status != "ok":
-            tried.append(f"{candidate!r} -> <{status}>")
-        else:
-            got = _normalize_output(got)
-            if display_value_tokens(got) == want:
-                return candidate, got, None
-            tried.append(f"{candidate!r} -> {got[:60]!r}")
+        stdout, shown = _accepts(candidate)
+        if stdout is not None:
+            return candidate, stdout, None
         if attempt == 1:
-            shown = got if status == "ok" else f"<{status}>"
             user += (
                 f"\n\nYour layout {candidate!r} was WRONG. The solution printed "
                 f"{shown!r} but the stated answer is {expected!r}. "
