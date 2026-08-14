@@ -8,10 +8,20 @@ retry that sees its own wrong stdout against the expected one.
 import os
 import sys
 import tempfile
+import types
 import unittest
 
 SCRIPT_DIR = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, SCRIPT_DIR)
+
+# testcase_manager_v4 -> llm_client -> httpx. No network call happens here (the LLM is
+# injected), so stub the deps this checkout may not have installed rather than depending
+# on another test module having stubbed them first.
+for _name in ("httpx", "openai", "dotenv", "psycopg2", "requests"):
+    if _name not in sys.modules:
+        _stub = types.ModuleType(_name)
+        _stub.__getattr__ = lambda n: type(n, (Exception,), {})
+        sys.modules[_name] = _stub
 
 import testcase_manager_v4 as tm  # noqa: E402
 

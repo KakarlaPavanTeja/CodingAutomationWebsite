@@ -6,33 +6,20 @@ import shutil
 import sys
 import subprocess
 import argparse
-import random
 
 # Ensure the Scripts directory is in the path for imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from Prompts.testcasesprompt_v4 import (
-    MAX_CASES_PER_SUBTASK,
-    MAX_SUBTASKS,
-    MIN_SUBTASKS,
+    COUNT_BAND_BY_DIFFICULTY,
     MIN_TESTCASES,
-    subtask_tag,
     get_testcases_prompt,
-    get_size_fix_prompt,
 )
 from llm_client import apply_testcases_routing, call_llm, resolve_pipeline_difficulty
 from usage_tracker import update_usage
 from testcase_helpers import (
     audit_io_shape,
-    audit_size_distribution,
-    detect_problem_type,
-    format_compliance,
     format_io_shape,
-    has_subtask_tags,
-    reorder_testcases_json_root,
-    repair_suite_json_root,
-    sync_size_tags_json_root,
-    sync_subtask_tags,
     sync_example_testcases,
 )
 
@@ -99,9 +86,8 @@ def _syntax_error_of(source: str) -> str | None:
                 + (f"\n    {snippet}" if snippet else ""))
 
 
-# Reorder helpers live in testcase_helpers (has_subtask_tags,
-# reorder_testcases_json_root) — this module used to carry a byte-identical
-# second copy that both had to be kept in sync.
+# Ordering is derived, not repaired: `derive_and_normalize` renumbers `order` after the
+# subtask groups are ranked by demand, so the suite ships in ascending-demand order.
 
 
 # --------------------------------------------------------------------------- #
@@ -641,139 +627,71 @@ def _cleanup(path: str | None) -> None:
             pass
 
 
-def _size_fix_rounds() -> int:
-    """Max LLM-regeneration rounds for size diversity (default 0 = disabled).
+def derive_and_normalize(out_path: str, description: str, io_contract=None) -> dict:
+    """Compute everything the model was never asked for, deterministically.
 
-    Each round is one extra LLM call + script run (`testcase_generation_size_fix`),
-    which fired on nearly every suite and dominated testcase cost, so it is OFF by
-    default. Re-enable per-run with TESTCASE_SIZE_FIX_ROUNDS=1 (or higher).
+    dedup -> size tags -> semantic subtask numbering + weights -> order -> example sync.
+    Dedup lives here because the selector used to do it and the selector is gone.
+
+    This replaced a repair step that overrode the model's own claims (size tags, subtask
+    tiers, weights). Nothing is overridden now because nothing is claimed: the model owns
+    the inputs and their grouping, we own everything computable from them.
     """
-    raw = os.environ.get("TESTCASE_SIZE_FIX_ROUNDS", "").strip()
-    if raw:
-        try:
-            return max(0, int(raw))
-        except ValueError:
-            pass
-    return 0
+    from testcase_helpers import (
+        bucket_for_case, case_size_metric, dedupe_tags, derive_subtasks,
+        resolve_size_context,
+    )
+    from testcase_selection import dedup_by_input
 
-
-def _print_size_audit(audit: dict, prefix: str = "Size distribution") -> None:
-    realized = audit.get("realized", {})
-    order = ("edge", "small", "medium", "large")
-    parts = [f"{b} {realized.get(b, 0.0)}%" for b in order]
-    print(f"{prefix}: " + ", ".join(parts) + f"  (n={audit.get('total', 0)})")
-
-
-def _reformat_and_audit(out_path: str, description: str, io_contract=None) -> dict:
-    """Load the suite, sync size + subtask tags, reorder, save, and return a size audit."""
     with open(out_path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    # Repair the mechanical contract FIRST (dupes, missing keys, weights, order) so the
-    # generator never has to assert these — and record what it got wrong.
-    compliance = repair_suite_json_root(data)
-    tags_fixed = sync_size_tags_json_root(data, description)
-    # Guarantee a valid subtask partition (B3). LLM generator scripts sometimes emit
-    # NO subtask_<n> tags despite the prompt, which fails "subtask count outside [3,6]"
-    # downstream and can't be fixed by re-running Strengthen. Assign difficulty-ordered
-    # subtasks here so a freshly generated suite is shape-valid from the start.
-    tcs = (
-        data[0]["test_cases"]
-        if isinstance(data, list) and data and isinstance(data[0], dict)
-        else data.get("test_cases") if isinstance(data, dict) else []
-    )
-    subtasks_fixed = sync_subtask_tags(tcs, description) if tcs else 0
-    # Force the public example cases (order 1 & 2) to match description Examples 1 & 2
-    # exactly and tag them `example`. Mutates the case dicts in place (they are the same
-    # objects inside `data`), so the changes persist when `data` is written below.
-    examples_fixed = sync_example_testcases(tcs, description, io_contract) if tcs else 0
-    # Reorder AFTER subtask tags exist so the subtask-aware sort applies.
-    did_reorder = reorder_testcases_json_root(data)
+    root = data[0] if isinstance(data, list) and data else data
+    cases = [tc for tc in (root.get("test_cases") or []) if isinstance(tc, dict)]
+
+    # Filter first: dedup_by_input indexes tc["input"] directly, and an inputless case
+    # is not a duplicate — it is unusable.
+    cases = [tc for tc in cases if str(tc.get("input") or "").strip()]
+    unique, duplicates = dedup_by_input(cases)
+
+    kind, max_n = resolve_size_context(root, description, unique)
+
+    buckets: dict = {}
+    for tc in unique:
+        bucket = bucket_for_case(tc, max_n, kind)
+        if bucket:
+            # None means the problem has no size dimension — leave the tags alone
+            # rather than stamping a `size_None` the B3 gate cannot read.
+            buckets[bucket] = buckets.get(bucket, 0) + 1
+            tc["tags"] = dedupe_tags(
+                [t for t in (tc.get("tags") or []) if not str(t).startswith("size_")]
+                + [f"size_{bucket}"]
+            )
+        if tc.get("size_metric") is None:
+            tc["size_metric"] = case_size_metric(tc, kind, max_n) or 0
+
+    subtask_names = derive_subtasks(unique, kind, max_n)
+
+    for idx, tc in enumerate(unique, start=1):
+        tc["order"] = idx
+
+    examples_fixed = sync_example_testcases(unique, description, io_contract) if unique else 0
+
+    root["test_cases"] = unique
+    root["subtask_names"] = subtask_names
+    if str(root.get("space_mode") or "").strip().lower() == "exhaustive":
+        root["suite_complete"] = True
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
+
     # Shape check on the TEXT. Grounding cannot catch this class: if the reference
     # solution of the moment also parses the literal form, a literal suite grounds
     # clean and then scores 0/150 against the real driver (T primes, 2026-07-29).
-    io_shape = format_io_shape(audit_io_shape(tcs, description)) if tcs else ""
+    io_shape = format_io_shape(audit_io_shape(unique, description)) if unique else ""
     if io_shape:
         print(f"WARNING: {io_shape}")
-    violations = format_compliance(compliance)
-    if violations:
-        # Named, not silent: this line is the evidence for which prompt rules to keep.
-        print(f"Contract auto-repaired (model did not comply): {violations}")
-    else:
-        print("Contract compliance: clean (no mechanical repairs needed).")
-    if tags_fixed:
-        print(f"Corrected size_* tags on {tags_fixed} case(s) from derived input sizes.")
-    if subtasks_fixed:
-        print(f"Assigned subtask tags on {subtasks_fixed} case(s) (generator emitted none/invalid).")
-    if examples_fixed:
-        print(f"Synced {examples_fixed} public example case(s) from description Examples 1 & 2.")
-    if did_reorder:
-        if has_subtask_tags(tcs):
-            print("Reordered within subtask tag blocks (payload sort for subtask >= 3).")
-        else:
-            print("Reordered cases by input+output size (ascending); stress cases last.")
-    return audit_size_distribution(tcs, description)
 
-
-def _regenerate_for_size(script_path: str, out_path: str, description: str,
-                         audit: dict, round_no: int) -> bool:
-    """Re-prompt the LLM to fix the generator's size ladder, re-run, and keep the
-    result only if it is valid. The current suite is backed up first and restored
-    on any failure, so a bad round never destroys a usable suite. Returns True when
-    a new suite was produced, False when we degraded to the previous one."""
-    import shutil
-
-    backup = out_path + ".sizebak"
-    had_backup = False
-    try:
-        shutil.copyfile(out_path, backup)
-        had_backup = True
-    except OSError:
-        backup = None
-
-    def _degrade(reason: str) -> bool:
-        print(f"Size-fix round {round_no}: {reason} — keeping previous suite.")
-        if had_backup:
-            try:
-                shutil.copyfile(backup, out_path)
-            except OSError:
-                pass
-        _cleanup(backup)
-        return False
-
-    with open(script_path, "r", encoding="utf-8") as f:
-        current_script = f.read()
-    system_prompt, user_prompt = get_size_fix_prompt(current_script, description, audit)
-    system_prompt = _repair_system_prompt(system_prompt)
-    print(f"--- Size-diversity round {round_no}: re-prompting LLM to regenerate for size targets ---")
-    try:
-        content, usage = call_llm(system_prompt, user_prompt, purpose="testcases_size_fix")
-        content = _sanitize_generated_script(content)
-        with open(script_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        update_usage(
-            usage.get("prompt_tokens", 0),
-            usage.get("completion_tokens", 0),
-            "testcase_generation_size_fix",
-            model=usage.get("model", "unknown"),
-            purpose="testcases",
-            step_id="generate_testcases",
-            cost=usage.get("cost", 0.0),
-        )
-    except Exception as e:
-        return _degrade(f"LLM call failed ({e})")
-
-    result = _run_generator(script_path)
-    if result.returncode != 0:
-        return _degrade(f"regenerated script crashed:\n{result.stderr.strip()[-600:]}")
-
-    _move_testcases_to_outputs()
-    if not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
-        return _degrade("regenerated script produced no testcases.json")
-
-    _cleanup(backup)
-    return True
+    return {"kept": len(unique), "duplicates": duplicates, "buckets": buckets,
+            "subtask_names": subtask_names, "examples_synced": examples_fixed}
 
 
 # --------------------------------------------------------------------------- #
@@ -782,9 +700,8 @@ def _regenerate_for_size(script_path: str, out_path: str, description: str,
 def main():
     parser = argparse.ArgumentParser(description="Generate LeetCode-grade test cases (v4)")
     parser.add_argument("--count", type=int, default=None,
-                        help=f"Target case count (minimum {MIN_TESTCASES}; default scales by difficulty x type)")
-    parser.add_argument("--type", default=None,
-                        help="Override detected problem type (array/string/tree/graph/dp/sliding_window/math/greedy).")
+                        help=f"Exact case count (minimum {MIN_TESTCASES}; "
+                             f"default is the difficulty's count band)")
     args = parser.parse_args()
 
     description_path = os.path.join("Outputs", "generated_description.md")
@@ -833,8 +750,9 @@ def main():
             "Add a brute force for full LeetCode-grade validation."
         )
 
-    # 3. Difficulty (owner-set is FINAL, else LLM-generated file) + weightage.
-    total_score = 100
+    # 3. Difficulty (owner-set is FINAL, else LLM-generated file). It routes the model
+    #    and picks the count band — it no longer buys a total score to divide up, since
+    #    weights are derived per subtask group from the cases themselves.
     difficulty, difficulty_source = resolve_pipeline_difficulty()
     owner_score_raw = os.environ.get("PIPELINE_OWNER_SCORE", "").strip()
     owner_score = None
@@ -845,23 +763,11 @@ def main():
                 owner_score = parsed
         except ValueError:
             owner_score = None
-
     if owner_score is not None:
-        total_score = owner_score
-        print(f"Using owner-set score (final). Total weightage: {total_score}")
-    elif difficulty:
-        total_score = {"easy": 20, "medium": 25, "hard": 30}.get(difficulty, 100)
-        source_label = {
-            "owner": "owner-set",
-            "llm": "LLM-generated",
-            "default": "default",
-        }.get(difficulty_source, difficulty_source)
-        print(f"Using {source_label} difficulty: {difficulty}. Total weightage: {total_score}")
-    else:
-        print(
-            "Warning: no owner difficulty and generated_difficulty.txt not found. "
-            "Using default total weightage: 100"
-        )
+        print(f"Owner-set score: {owner_score} (the platform scales the derived "
+              f"per-subtask weights to it).")
+    if not difficulty:
+        print("Warning: no owner difficulty and generated_difficulty.txt not found.")
 
     routing = apply_testcases_routing(difficulty)
     effective = difficulty or routing["tier"]
@@ -876,19 +782,18 @@ def main():
         f"fallbacks=[{routing['fallbacks_display']}]"
     )
 
-    # 4. Count + type
-    from Prompts.testcasesprompt_v4 import POOL_TARGET_MIN, POOL_TARGET_MAX, CASE_CAP
+    # 4. Count. There is no selector downstream, so what the generator emits is what
+    #    ships: an owner count is an exact target, otherwise the difficulty's band.
     num_testcases = args.count
     if num_testcases is not None:
         num_testcases = max(num_testcases, MIN_TESTCASES)
-        print(f"Target test case count: {num_testcases} (minimum {MIN_TESTCASES})")
+        count_label = f"exactly {num_testcases}"
     else:
-        print(f"No explicit count; target scales by difficulty x type (minimum {MIN_TESTCASES}).")
-    print(f"Over-generate mode: aiming for a ~{POOL_TARGET_MIN}-{POOL_TARGET_MAX} candidate "
-          f"POOL — the select_testcases step later dedups and trims to {CASE_CAP}.")
-
-    problem_type = (args.type or detect_problem_type(description)).strip().lower()
-    print(f"Problem type (for count scaling): {problem_type}")
+        lo, hi = COUNT_BAND_BY_DIFFICULTY.get(
+            str(difficulty or "medium").strip().lower(),
+            COUNT_BAND_BY_DIFFICULTY["medium"])
+        count_label = f"{lo}-{hi} cases"
+    print(f"Target case count: {count_label} (this suite ships untrimmed).")
 
     # 4c. Function signature — decides the I/O representation. The naming step
     #     writes description_signature.json for function-based problems; its
@@ -922,17 +827,15 @@ def main():
     system_prompt, user_prompt = get_testcases_prompt(
         description,
         optimal_solution,
-        total_score,
         brute_force_code=brute_solution,
         num_testcases=num_testcases,
         difficulty=difficulty,
-        problem_type=problem_type,
         is_function=is_function,
         signature_params=signature_params,
         io_contract=io_contract,
     )
-    # Repair calls (crash-retry, grounding-fix, size-fix) reuse this so they keep the
-    # same contract instead of shipping a bare "fix this script" instruction.
+    # Repair calls (crash-retry, grounding-fix) reuse this so they keep the same
+    # contract instead of shipping a bare "fix this script" instruction.
     global _PRIMARY_SYSTEM_PROMPT
     _PRIMARY_SYSTEM_PROMPT = system_prompt
 
@@ -974,45 +877,26 @@ def main():
             sys.exit(1)
         print("Successfully generated testcases.json")
 
-        # 9. Reorder + reformat + size-diversity feedback loop.
-        #    A suite that is all-small fails the B3 coverage-shape gate and makes
-        #    mutation testing vacuous. When the realized size mix misses targets we
-        #    re-prompt the LLM to regenerate the script with a proper size ladder
-        #    (bounded by TESTCASE_SIZE_FIX_ROUNDS; degrades safely on any failure).
+        # 9. Derive everything the model was never asked for: dedup, size tags,
+        #    subtask numbering + weights, order, public examples. Deterministic, no LLM
+        #    — the size-fix regeneration loop this replaced spent an LLM call per suite
+        #    to argue with the model about a distribution we can just compute.
         try:
-            audit = _reformat_and_audit(out_path, description, io_contract)
-            _print_size_audit(audit, "Realized size distribution")
-            # A pool far above target means the script enumerated its input space
-            # instead of sampling it (e.g. `for N in range(1, MAX_N + 1)`). Harmless
-            # for correctness — select_testcases caps the suite — but the kill and
-            # mutation phases then run over thousands of cases, so name it here
-            # instead of leaving it to be discovered in the select log.
-            pool_n = audit.get("total", 0)
-            if pool_n > 3 * POOL_TARGET_MAX:
-                print(f"WARNING: generator produced {pool_n} cases for a "
-                      f"~{POOL_TARGET_MIN}-{POOL_TARGET_MAX} target pool — it likely "
-                      f"enumerated the input space rather than sampling it. "
-                      f"select_testcases will trim to {CASE_CAP}.")
-            rounds = _size_fix_rounds()
-            attempt = 0
-            while not audit["ok"] and attempt < rounds:
-                attempt += 1
-                deficient = ", ".join(f"size_{d['bucket']}" for d in audit["deficient"]) or "none"
-                excessive = ", ".join(f"size_{d['bucket']}" for d in audit["excessive"]) or "none"
-                print(f"Size distribution off-target (deficient: {deficient}; excessive: {excessive}). "
-                      f"Regeneration attempt {attempt}/{rounds}.")
-                if not _regenerate_for_size(output_script_path, out_path, description, audit, attempt):
-                    break
-                audit = _reformat_and_audit(out_path, description, io_contract)
-                _print_size_audit(audit, f"After size-fix round {attempt}")
-            if audit["ok"]:
-                print("Size distribution within tolerance of targets.")
-            else:
-                print("WARNING: size distribution still off-target after regeneration. "
-                      "The coverage-shape gate (B3) may flag this and mutation testing "
-                      "may stay weak — large/edge buckets need constraint-scaled inputs.")
+            report = derive_and_normalize(out_path, description, io_contract)
+            print(f"Derived: {report['duplicates']} duplicate(s) removed · "
+                  f"{report['kept']} case(s) kept · "
+                  f"{len(report['subtask_names'])} subtask group(s)")
+            print("      size buckets   " + " · ".join(
+                f"{b} {report['buckets'].get(b, 0)}"
+                for b in ("edge", "small", "medium", "large")))
+            if report["examples_synced"]:
+                print(f"      {report['examples_synced']} public example case(s) synced "
+                      f"from the description")
+            if report["kept"] < MIN_TESTCASES:
+                print(f"WARNING: only {report['kept']} case(s) survived — below the "
+                      f"{MIN_TESTCASES} floor the B3 gate enforces.")
         except Exception as e:
-            print(f"Warning: could not reformat/audit testcases.json: {e}")
+            print(f"Warning: could not derive/normalize testcases.json: {e}")
 
         # 10. Grounding — the suite is only valid if the REFERENCE SOLUTION can read
         #     every `input` on stdin and print the stored `output` (that is exactly how
@@ -1032,7 +916,9 @@ def main():
                     output_script_path, out_path, optimal_solution, failures
                 )
                 if repaired:
-                    _reformat_and_audit(out_path, description, io_contract)
+                    # The repair regenerated the suite from scratch, so it carries none
+                    # of the derived fields — derive them again before re-grounding.
+                    derive_and_normalize(out_path, description, io_contract)
                     failures = _ground_against_reference(out_path, optimal_path)
                 if failures:
                     print(

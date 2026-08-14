@@ -21,15 +21,6 @@ MAX_SUBTASKS = 12
 MAX_CASES_PER_SUBTASK = 12
 MIN_TESTCASES = 25                          # raised from 20 — LeetCode Easy floor
 
-# CASE_CAP is re-exported for testcase_manager_v4's log line; the FRACs are used only by
-# get_size_fix_prompt. The size-bucket targets below are still consumed by testcase_helpers
-# and the B3 gate in benchmark_suite, but they are no longer stated in the generation prompt.
-from testcase_selection import (  # noqa: E402,F401
-    CASE_CAP,
-    LARGE_FRAC,
-    SMALL_FRAC,
-)
-
 # Size-category distribution targets (count %, enforced by B3 in benchmark_suite).
 # Philosophy (matches real judges like LeetCode): the suite is dominated by cheap
 # small/edge CORRECTNESS cases; large/stress cases are FEW but high-value. You don't
@@ -547,91 +538,3 @@ Return ONLY the Python script. No markdown fences, no prose outside comments.
 {optimal_solution}
 {brute_section}"""
     return system_prompt, user_prompt
-
-
-def _size_audit_lines(audit) -> str:
-    realized = audit.get("realized", {})
-    targets = audit.get("targets", SIZE_CATEGORY_TARGETS)
-    rows = []
-    for b in SIZE_BUCKETS:
-        rows.append(
-            f"  size_{b}: realized {realized.get(b, 0.0)}%  vs target {targets.get(b, 0.0)}%"
-        )
-    return "\n".join(rows)
-
-
-def get_size_fix_prompt(failed_script, description, audit):
-    """Build (system, user) to repair a generator script whose realized SIZE mix
-    missed SIZE_CATEGORY_TARGETS.
-
-    The script RAN fine — it just produced the wrong size distribution (almost
-    always all-small: the script never scaled the primary size n toward the
-    constraint maximum). That fails B3 coverage-shape downstream and makes
-    mutation testing vacuous, so this re-prompt asks the model to fix the SIZE
-    LADDER only, preserving the dual-oracle / scoring / JSON-shape behavior.
-    """
-    deficient = audit.get("deficient") or []
-    excessive = audit.get("excessive") or []
-    def_str = ", ".join(
-        f"size_{d['bucket']} (short by {d['shortfall_pp']}pp)" for d in deficient
-    ) or "none"
-    exc_str = ", ".join(
-        f"size_{d['bucket']} (over by {d['excess_pp']}pp)" for d in excessive
-    ) or "none"
-
-    system = (
-        "You are a Python expert fixing a competitive-programming test-case GENERATOR "
-        "script. The script runs correctly but the suite it emits has the WRONG SIZE "
-        "DISTRIBUTION: it does not match the required edge/small/medium/large mix. Almost "
-        "always the cause is that the script never scales the primary input size n up "
-        "toward the constraint maximum, so every case lands in 'small'. Fix the script so "
-        "the realized size mix matches the targets within tolerance, WITHOUT changing the "
-        "dual-oracle / scoring behavior, the JSON shape, or the I/O format, and keeping all "
-        "existing correctness asserts. "
-        "OUTPUT HYGIENE (CRITICAL): your entire response is written verbatim to a .py file "
-        "and executed. The first character MUST be valid Python (import/#/from); no preamble, "
-        "no sign-off, no markdown fences. "
-        "IMPORT CORRECTNESS: only import names that exist; round/abs/min/max/sum/pow are "
-        "built-ins, not in math."
-    )
-
-    user = f"""The generator script below RAN successfully but produced a suite whose size
-distribution is out of spec.
-
-REALIZED vs TARGET size distribution ({audit.get('total', 0)} cases):
-{_size_audit_lines(audit)}
-
-DEFICIENT buckets (need MANY MORE of these): {def_str}
-EXCESSIVE buckets (have too many): {exc_str}
-Tolerance: +/- {audit.get('tolerance_pp', SIZE_TOLERANCE_PP)} percentage points per bucket.
-
-HOW TO FIX (do ALL of these):
-1. Parse the constraint maximum N from the problem (call it MAX_N). If several sizes
-   exist (n, m, q...), scale the dominant one.
-2. Build an explicit SIZE LADDER and assign every case a target bucket BEFORE building it:
-   Every boundary below is a FRACTION of THIS problem's own MAX_N — never a fixed
-   number — and is exactly how the B3 gate buckets your cases:
-     * size_edge   (~{SIZE_CATEGORY_TARGETS['edge']}%): DEGENERATE cases — set `is_edge: true` and the
-       tag follows automatically: n = min, empty, singleton, all-same, already-satisfying,
-       infeasible/impossible, overflow boundary. Do NOT rely on n <= 1 to fill this bucket — when the
-       alphabet is tiny (a binary string has exactly TWO inputs of length 1) there are not enough
-       distinct minimum-size inputs to reach the target, so flag SMALL degenerate cases instead.
-     * size_small  (~{SIZE_CATEGORY_TARGETS['small']}%): 1 < n <= {SMALL_FRAC:g}*MAX_N, hand-traceable at the low end.
-     * size_medium (~{SIZE_CATEGORY_TARGETS['medium']}%): {SMALL_FRAC:g}*MAX_N < n < {LARGE_FRAC:g}*MAX_N (keep thin).
-     * size_large  (~{SIZE_CATEGORY_TARGETS['large']}%): n >= {LARGE_FRAC:g}*MAX_N, pushed toward MAX_N — REAL stress sizes, NOT small.
-3. For deficient buckets, ADD cases constructed at the right n. For size_large you MUST
-   generate inputs with n near MAX_N (fill with constraint-legal values; keep the
-   brute-force cross-check guarded by its own size cap so large cases are validated by the
-   optimal alone).
-4. Re-tag each case with the correct size_<bucket> from its ACTUAL n. COUNT the buckets and
-   ADD cases for short ones; never assert/exit on the distribution — over-supply is fine.
-
-Do not reduce the total below the current count. Return ONLY the corrected Python script.
-
-### Problem Description (for constraint parsing):
-{description}
-
-### Current generator script:
-{failed_script}
-"""
-    return system, user
