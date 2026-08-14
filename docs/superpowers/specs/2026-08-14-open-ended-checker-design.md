@@ -147,14 +147,49 @@ extra LLM call per problem.
 
 ## Open questions
 
-- How does a problem get marked open-ended in the first place — does solution generation
-  decide, or does something upstream classify it? This determines whether the
-  description rule can be relaxed safely.
-- Does the reference solution shipping a checker confuse any step that reads it as a
-  plain solution (normalization, conversion to other languages)?
-- Non-function-based open-ended problems keep the tie-break rule. Should the pipeline
-  detect and reject them outright instead of trusting the rule, given the current
-  detector cannot tell a resolved tie-break from an unresolved one?
+Investigated 2026-08-14; two are now answered, one still needs a decision.
+
+### Where "open-ended" is decided — the description step (answered)
+
+`description` is the first step in the pipeline and already owns the DETERMINISTIC
+ANSWER rule, so it is the only place that decides today. It must stop unconditionally
+forcing a tie-break and instead emit an explicit flag (e.g. `open_ended: true`) for
+function-based problems, which solution generation then reads to know a checker is
+required. Without a flag, relaxing the rule would silently produce ungradeable problems
+whenever no checker followed.
+
+**Signature extraction is NOT at risk.** `signatureExtractionPrompt.py` reads the
+function signature out of the *description*, not the solution source, so a second
+function in the reference cannot confuse it.
+
+### A checker in the reference must survive four language paths (answered — and this is the real cost)
+
+Two steps consume the reference solution as source:
+
+- `naming` — `get_normalization_prompt(code, ...)` rewrites the solution to house style.
+  The checker must come through with a **stable name**, because the driver calls it by
+  name.
+- `translate_cpp` / `translate_java` / `translate_nodejs` —
+  `get_conversion_prompt(target_language, source_code, ...)` translates the reference
+  into each enabled language.
+
+So a checker is not one function — it is **one per enabled language**, produced by
+translation. If the Java translation of the checker is subtly wrong, Java submissions are
+graded by a different standard than Python ones, and nothing downstream would notice.
+
+This is the largest risk in the design and needs a mitigation before implementation.
+The natural one: extend B2 to run the reference and the known-wrong solutions through
+*every* enabled language's driver, not just Python — the reference must be `VALID`
+everywhere and the wrong solutions `INVALID` everywhere. A translation that broke the
+checker then fails the gate. `BENCHMARK_USE_COMPILER=1` already reaches the compiler,
+which is what makes a per-language check affordable.
+
+### Still open: non-function-based open-ended problems
+
+These keep the tie-break rule, because there is no driver to host a checker. Should the
+pipeline detect and reject them outright rather than trusting the rule? The current
+detector cannot tell a resolved tie-break from an unresolved one, so it cannot be the
+thing that decides. Needs a decision before implementation.
 
 ## Out of scope
 
