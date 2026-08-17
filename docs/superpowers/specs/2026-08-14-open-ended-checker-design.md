@@ -217,10 +217,24 @@ What replaces it is three obligations on the description step:
 `sync_example_testcases` forces test cases 1-2 to match the description's worked
 examples. That interacts with both paths and must be handled explicitly:
 
-- **Function-based:** no hazard. The driver prints an answer, so the stored output is a
-  real answer and the sync behaves exactly as it does for a single-answer problem. This
-  is a direct benefit of printing answers rather than verdicts — the verdict design would
-  have made the two visible cases fail for everyone, including a correct solution.
+- **Function-based:** cases 1-2 are synced from the description, exactly as for a
+  single-answer problem — the driver prints an answer, so the stored output is answer-shaped
+  and the sync needs no change. But there is a hazard, and it is easy to miss:
+
+  **`reference_answer` must reproduce the description's worked example, byte for byte.**
+  The description is written at step 1 and its Example 1 output is fixed there. The
+  driver's `reference_answer` is written later, by solution generation. If they disagree
+  — the statement shows `1 2 3`, the driver computes `3 2 1` — then sync stores `1 2 3`,
+  the driver always prints `3 2 1`, and **test case 1 fails for every student, including
+  a perfect solution.**
+
+  This is the same failure the verdict design had, relocated rather than removed. Printing
+  answers does not fix it on its own.
+
+  **The guard:** grounding must run the reference *through its own driver* and confirm it
+  reproduces every stored output, cases 1-2 included. A disagreement between the statement
+  and `reference_answer` then fails loudly at generation time instead of silently at
+  grading time. This is a hard requirement, not an advisory check.
 - **Non-function-based:** the example's stated answer must appear **in** the case's
   `outputs` list. If enumeration produced a list that omits the answer printed in the
   problem statement, the statement and the grader disagree, and the student who copies
