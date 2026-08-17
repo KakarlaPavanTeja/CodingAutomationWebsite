@@ -184,15 +184,47 @@ everywhere and the wrong solutions `INVALID` everywhere. A translation that brok
 checker then fails the gate. `BENCHMARK_USE_COMPILER=1` already reaches the compiler,
 which is what makes a per-language check affordable.
 
-### Still open: non-function-based open-ended problems
+### Non-function-based problems: enumerate, never block (decided)
 
-These keep the tie-break rule, because there is no driver to host a checker. Should the
-pipeline detect and reject them outright rather than trusting the rule? The current
-detector cannot tell a resolved tie-break from an unresolved one, so it cannot be the
-thing that decides. Needs a decision before implementation.
+These have no driver, so a checker cannot grade them at runtime. They are **not**
+rejected and never block the pipeline. Instead the problem is flagged as
+multiple-answer and prepared with every valid answer stored on the case:
+`multiple_possible_output: true` plus an `outputs: [...]` list. Probed working
+2026-08-14 — any entry in the list passes, anything outside it fails.
 
-## Out of scope
+So the tie-break rule is no longer the only option for these problems, and a description
+that legitimately admits several answers can ship as written.
 
-Storing enumerated answers via `multiple_possible_output`. It works, but it caps inputs
-at toy sizes and the checker approach makes it unnecessary. Revisit only if a
-non-function-based open-ended problem must ship.
+## One checker, two uses
+
+Both paths need the same artifact, used at different times:
+
+| aspect | function-based | non-function-based |
+|---|---|---|
+| where the checker runs | in the driver, at grading time | in our pipeline, at generation time |
+| what ships | `VALID` as the expected output | the enumerated `outputs: [...]` list |
+| cap on input size | none | bounded by the answer count |
+
+For non-function problems the checker is what makes enumeration trustworthy: walk the
+candidate output space for a case, keep everything the checker accepts, and the resulting
+list is provably complete because we enumerated the space rather than trusting a model to
+recall every answer. The checker never ships — it is a generation-time tool.
+
+### The limit this imposes, and how to live with it
+
+The answer count explodes with input *shape*, not size: a topological sort over 8
+unconstrained nodes has 40,320 valid orderings, while a 100,000-node chain has exactly
+one. So enumeration is bounded by how the input is built, not by n.
+
+Two rules follow, and both need a concrete number before implementation:
+
+- **A cap on stored answers per case.** Beyond it, the case is rejected and regenerated
+  rather than shipped with a truncated list — a truncated list marks correct answers
+  wrong, which is the exact bug this design exists to remove.
+- **Stress cases must be shaped for a unique answer.** Large inputs carry the timing
+  coverage, so they must be built so only one output is valid (chain-shaped rather than
+  sparse). Small cases carry the multi-answer coverage.
+
+**Open:** the cap itself. If a case can neither be enumerated within the cap nor shaped
+to a unique answer, it cannot ship in any form — the generator must not emit it, and the
+generation prompt has to say so explicitly.
