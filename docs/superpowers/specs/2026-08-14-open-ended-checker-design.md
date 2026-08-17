@@ -231,14 +231,40 @@ examples. That interacts with both paths and must be handled explicitly:
   This is the same failure the verdict design had, relocated rather than removed. Printing
   answers does not fix it on its own.
 
-  **The fix — generate the example outputs by running the reference.** The reference
-  solution is an *input* to the pipeline: it exists before the description is written. So
-  the description step should not invent Example 1's output at all. It should run the
-  reference on the example input and use what it actually prints.
+  **The fix — the model writes the description, execution decides the outputs.** The
+  reference solution is an *input* to the pipeline: it exists before the description is
+  written. So the flow becomes generate → execute → reconcile:
+
+  1. The model writes the full description, examples included. It is good at readable
+     inputs and explanations, so it keeps that job.
+  2. Each example input is converted to the raw stdin the reference actually reads and
+     run against it **through the compiler API**, so the result comes from the same engine
+     that grades students. The conversion machinery already exists —
+     `resolve_example_stdin` / `verify_io_contract`, built in Task 4 of the redesign.
+  3. **Outputs agree → done.** This is the common case and costs one execution.
+  4. **Outputs disagree → the description is wrong.** Execution is the truth; ask the
+     model to correct the statement.
+  5. **The code errored → the code is wrong, not the description.** Ask the model to
+     repair the reference, then re-run.
+
+  Separating 4 from 5 is the point. They look alike from a distance and have opposite
+  fixes; conflating them is how a broken reference gets papered over by editing the
+  statement.
 
   Then the statement's example and the driver's `reference_answer` come from the same
-  code and agree by construction. There is nothing left to verify, and the hazard above
-  cannot occur.
+  code and agree by construction, and the hazard above cannot occur.
+
+  **The repair loop needs a bound.** A fixed maximum attempts, then a hard failure that
+  names which side was being repaired. An unbounded "ask the model to fix it" loop burns
+  tokens and can oscillate between the two repairs forever.
+
+  **Why trusting execution is safe here — and what it depends on.** Treating the
+  reference's output as truth enshrines its behaviour into the statement, so a genuinely
+  buggy reference would have its bug written into the problem. That is acceptable *only*
+  because the optimal-vs-brute cross-check independently validates the reference against a
+  second implementation. If that cross-check is ever weakened or skipped, this step loses
+  its safety net. Note that the current `is_open_ended_problem` regex skips it on false
+  positives — one more reason that detector must go.
 
   **This corrects an existing inversion.** Today the examples are model-authored and
   `optimal_example_failures` checks the reference against them — treating a mismatch as
