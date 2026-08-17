@@ -25,7 +25,7 @@ descriptions that ignored the rule. It matches phrases like `multiple valid` and
 spells out a tie-break. Verified 2026-08-14:
 
 | description | detector |
-|---|---|
+| --- | --- |
 | `Return any valid arrangement of the letters.` | True (correct) |
 | `If there are multiple valid answers, return the lexicographically smallest one.` | True (**wrong**) |
 | `If there are multiple pairs summing to k, print the pair with the smallest first index.` | True (**wrong**) |
@@ -49,9 +49,10 @@ INCORRECT. (This already removed B2's decimal exception — commit `08777e2`.)
 printing any of A/B/C returned CORRECT and printing D returned INCORRECT. The primary
 `contents` field is ignored once the flag is set.
 
-So storing every valid answer is a real option — but the count explodes with input
-shape, not size (a topological sort over 8 unconstrained nodes has 40,320 valid
-orderings), so it caps usable inputs at toy sizes and cannot cover stress cases.
+So storing every valid answer is a real option. The count explodes with input *shape*
+rather than size (a topological sort over 8 unconstrained nodes has 40,320 valid
+orderings, while a 100,000-node chain has exactly one), which means it is usable wherever
+the generator controls the shape — see the non-function-based path below.
 
 ## The design
 
@@ -110,9 +111,10 @@ A checker too lenient to reject anything fails B2 exactly as a weak suite would.
 
 ## Decisions taken
 
-**Scope: function-based problems only.** We control the driver for these. For
+**Scope: runtime checking is function-based only.** We control the driver for these. For
 stdin/stdout problems the student's code *is* the whole program, so there is nothing to
-wrap; those keep the existing tie-break rule.
+wrap — those ship enumerated answers instead, and are never blocked. See "Non-function-based
+problems" below.
 
 **Visible cases show `VALID`.** The first two test cases are shown to students. The
 problem statement's worked examples already carry real inputs and answers in prose, so
@@ -131,10 +133,10 @@ extra LLM call per problem.
 
 ## What this touches
 
-- `Prompts/` — solution generation must emit a checker for open-ended problems, and
-  decide when one is needed. `descriptionPrompt.py`'s DETERMINISTIC ANSWER rule must
-  become conditional: still mandatory for stdin/stdout problems, relaxed for
-  function-based ones that will ship a checker.
+- `descriptionPrompt.py` — the DETERMINISTIC ANSWER rule stops being mandatory for both
+  problem types, and the step starts emitting an explicit `open_ended` flag. Both
+  variants of the rule need changing (function-based ~line 421, stdin/stdout ~line 841).
+- `Prompts/` — solution generation reads that flag and emits a checker when it is set.
 - `code_splitter.py` / `splittingPrompt.py` — place the checker in the main file.
 - Test-case generation — store `VALID` rather than the reference's stdout for these
   problems, and keep grounding meaningful (the reference must check out as `VALID`).
@@ -145,18 +147,50 @@ extra LLM call per problem.
 - `prepare_platform_json.py`, execution managers — **no change**, already support both
   shapes.
 
-## Open questions
+## Resolved questions
 
-Investigated 2026-08-14; two are now answered, one still needs a decision.
+Investigated 2026-08-14 and decided; recorded here with the evidence behind each.
 
 ### Where "open-ended" is decided — the description step (answered)
 
 `description` is the first step in the pipeline and already owns the DETERMINISTIC
-ANSWER rule, so it is the only place that decides today. It must stop unconditionally
-forcing a tie-break and instead emit an explicit flag (e.g. `open_ended: true`) for
-function-based problems, which solution generation then reads to know a checker is
-required. Without a flag, relaxing the rule would silently produce ungradeable problems
-whenever no checker followed.
+ANSWER rule, so it is the only place that decides.
+
+**The rule stops being mandatory.** It exists only because grading could not accept more
+than one answer. Both paths can now — a checker for function-based problems, an
+enumerated list for the rest — so forcing every statement to invent a tie-break is no
+longer required, and it should not be: demanding the lexicographically smallest
+topological ordering changes what the problem tests.
+
+What replaces it is three obligations on the description step:
+
+1. **Emit an explicit `open_ended` flag.** Prose is not a reliable signal — the current
+   regex cannot tell a resolved tie-break from an unresolved one (see the table above).
+   A flag decided at authoring time is, and it is what tells the downstream steps whether
+   a checker (function-based) or an enumerated list (non-function) is required. Nothing
+   downstream should ever re-derive this from text.
+2. **Keep a tie-break when it is natural to the problem, drop it when it is not.**
+   "Smallest index" costs a topological-sort problem nothing and keeps it single-answer;
+   "lexicographically smallest ordering" distorts it. Where a tie-break is dropped, the
+   flag must be set.
+3. **Worked examples still show one concrete answer.** Students need to see the shape of
+   a valid output. But the statement must not claim that answer is the only one when the
+   flag is set, or the examples contradict the grading.
+
+### The worked examples need care in both paths
+
+`sync_example_testcases` forces test cases 1-2 to match the description's worked
+examples. That interacts with both paths and must be handled explicitly:
+
+- **Function-based:** the expected output for every case is `VALID`, so the sync must not
+  overwrite cases 1-2 with the example's raw answer — doing so would grade the two
+  visible cases by a different rule than the rest.
+- **Non-function-based:** the example's stated answer must appear **in** the case's
+  `outputs` list. If enumeration produced a list that omits the answer printed in the
+  problem statement, the statement and the grader disagree, and the student who copies
+  the worked example fails.
+
+Both are cheap assertions and both should be tested, because each fails silently.
 
 **Signature extraction is NOT at risk.** `signatureExtractionPrompt.py` reads the
 function signature out of the *description*, not the solution source, so a second
@@ -200,7 +234,7 @@ that legitimately admits several answers can ship as written.
 Both paths need the same artifact, used at different times:
 
 | aspect | function-based | non-function-based |
-|---|---|---|
+| --- | --- | --- |
 | where the checker runs | in the driver, at grading time | in our pipeline, at generation time |
 | what ships | `VALID` as the expected output | the enumerated `outputs: [...]` list |
 | cap on input size | none | bounded by the answer count |
@@ -216,15 +250,25 @@ The answer count explodes with input *shape*, not size: a topological sort over 
 unconstrained nodes has 40,320 valid orderings, while a 100,000-node chain has exactly
 one. So enumeration is bounded by how the input is built, not by n.
 
-Two rules follow, and both need a concrete number before implementation:
+**There is deliberately no fixed cap on stored answers.** A sensible number for one
+problem is wrong for the next, so a constant would either reject legitimate cases or
+wave through absurd ones. The limit is per-problem and emergent.
 
-- **A cap on stored answers per case.** Beyond it, the case is rejected and regenerated
-  rather than shipped with a truncated list — a truncated list marks correct answers
-  wrong, which is the exact bug this design exists to remove.
-- **Stress cases must be shaped for a unique answer.** Large inputs carry the timing
-  coverage, so they must be built so only one output is valid (chain-shaped rather than
-  sparse). Small cases carry the multi-answer coverage.
+What replaces it is a hard property, not a number:
 
-**Open:** the cap itself. If a case can neither be enumerated within the cap nor shaped
-to a unique answer, it cannot ship in any form — the generator must not emit it, and the
-generation prompt has to say so explicitly.
+- **A stored list must be provably exhaustive.** We ship the answers only when the
+  candidate space was walked to completion. A partial list marks correct answers wrong,
+  which is the exact bug this design exists to remove — so a truncated list is never an
+  acceptable outcome. If enumeration cannot finish, the case does not ship as
+  multi-answer.
+- **Stress cases are shaped for a unique answer.** Large inputs carry the timing
+  coverage, so they are built so only one output is valid (chain-shaped rather than
+  sparse). Small cases carry the multi-answer coverage. This is what keeps enumeration
+  bounded without a policy cap: the generator controls the answer count through the input
+  it chooses.
+
+Enumeration cost is the real ceiling and it is superexponential — 10 unconstrained nodes
+is 3.6M candidate orderings to check, 12 is 479M. So the generation prompt must instruct
+the generator to keep multi-answer cases small enough to enumerate, and to fall back to a
+unique-answer input shape when they are not. Storage is not the binding constraint:
+oversized outputs already upload to S3 (`_build_output_object`).
