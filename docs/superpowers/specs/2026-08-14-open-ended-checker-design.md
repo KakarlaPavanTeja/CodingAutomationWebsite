@@ -67,17 +67,48 @@ sys.stdout.write(str(result) + '\n')
 # --- Output Area End ---
 ```
 
-For an open-ended problem it writes a verdict instead:
+For an open-ended problem it validates the answer and then prints an **answer**, never a
+verdict:
 
 ```python
+# --- Checker Area Start ---
+# Problem-specific. Written by solution generation, placed here by split_code.
+def is_valid_arrangement(numAPIs, runtimes, candidate):
+    ...                                    # returns True/False for THIS problem
+
+def reference_answer(numAPIs, runtimes):
+    ...                                    # one deterministic valid answer
+# --- Checker Area End ---
+
 # --- Output Area Start ---
-sys.stdout.write("VALID\n" if is_valid(numAPIs, runtimes, result) else "INVALID\n")
+if is_valid_arrangement(numAPIs, runtimes, result):
+    sys.stdout.write(str(reference_answer(numAPIs, runtimes)) + '\n')
+else:
+    sys.stdout.write(str(result) + '\n')   # the student's OWN output, so they can debug
 # --- Output Area End ---
 ```
 
-Every test case then stores `VALID` as its expected output. Exact-text comparison is
-correct, nothing is enumerated, and there is **no cap on n** — a 100,000-node graph is
-checked in one pass. `multiple_possible_output` is not needed.
+A valid-but-different answer prints the reference's answer, matches the stored output and
+passes. An invalid answer prints what the student actually produced, mismatches and
+fails — and the student sees their real output in the failure, which is the whole point.
+
+**The driver never prints `VALID`/`INVALID`.** A verdict string hides what the student
+produced, which is the one thing they need when debugging. Every test case stores the
+reference's real answer as its `output`, exactly as a single-answer problem does — so
+nothing downstream needs to special-case these problems, and the worked examples stay
+truthful.
+
+There is **no cap on n**: a 100,000-node graph is checked in one pass.
+`multiple_possible_output` is not used on this path.
+
+### Known trade-off: the reference ships inside the driver
+
+`reference_answer` must live in the driver, because only the driver knows the input at
+grading time and the stored expected output is on the platform side. Student code is
+imported into the same process, so a determined student could read `main.py` and recover
+the reference implementation. Accepted deliberately. If it matters for a given problem
+set, the mitigation is on the platform side (hide the driver source from the execution
+sandbox), not in this design.
 
 ### Where the checker lives, and when it moves
 
@@ -104,10 +135,14 @@ student's measured runtime.
 
 ### B2 gets simpler, and validates the checker for free
 
-A wrong solution is caught when the driver prints `INVALID`. No set membership, no
-tolerance, no abstention. And the gate doubles as the checker's own test: the reference
-must produce `VALID` on every case, and the known-wrong solutions must produce `INVALID`.
-A checker too lenient to reject anything fails B2 exactly as a weak suite would.
+A wrong solution is caught when the driver echoes its own bad answer instead of the
+reference's, so the stored output mismatches. No set membership, no tolerance, no
+abstention.
+
+And the gate doubles as the checker's own test: run through the driver, the reference must
+match on every case and the known-wrong solutions must mismatch. A checker too lenient to
+reject anything lets the wrong solutions through and fails B2 exactly as a weak suite
+would.
 
 ## Decisions taken
 
@@ -116,11 +151,10 @@ stdin/stdout problems the student's code *is* the whole program, so there is not
 wrap — those ship enumerated answers instead, and are never blocked. See "Non-function-based
 problems" below.
 
-**Visible cases show `VALID`.** The first two test cases are shown to students. The
-problem statement's worked examples already carry real inputs and answers in prose, so
-students still learn the expected output shape. Grading stays correct everywhere. The
-alternative — grading the two visible cases against one stored answer — reintroduces the
-original bug on precisely the cases students see first.
+**Visible cases show a real answer.** The first two test cases are shown to students, and
+because the driver prints an answer rather than a verdict, they show exactly what a
+single-answer problem shows. No special casing, and the example sync keeps working
+untouched.
 
 **Local checks run through the compiler.** `BENCHMARK_USE_COMPILER=1` already routes
 benchmark execution through the compiler API (`benchmark_compiler.py`), so our verdict
@@ -138,8 +172,9 @@ extra LLM call per problem.
   variants of the rule need changing (function-based ~line 421, stdin/stdout ~line 841).
 - `Prompts/` — solution generation reads that flag and emits a checker when it is set.
 - `code_splitter.py` / `splittingPrompt.py` — place the checker in the main file.
-- Test-case generation — store `VALID` rather than the reference's stdout for these
-  problems, and keep grounding meaningful (the reference must check out as `VALID`).
+- Test-case generation — **no change** on the function-based path: cases store the
+  reference's real answer exactly as today. Grounding stays meaningful because the
+  reference, run through its own driver, must reproduce the stored answer.
 - `benchmark_suite.py` — delete `is_open_ended_problem` and its four call sites; kill
   scoring reads the driver's verdict.
 - `generate_brute_force.py`, `validate_solutions.py` — stop relaxing checks on a regex
@@ -182,9 +217,10 @@ What replaces it is three obligations on the description step:
 `sync_example_testcases` forces test cases 1-2 to match the description's worked
 examples. That interacts with both paths and must be handled explicitly:
 
-- **Function-based:** the expected output for every case is `VALID`, so the sync must not
-  overwrite cases 1-2 with the example's raw answer — doing so would grade the two
-  visible cases by a different rule than the rest.
+- **Function-based:** no hazard. The driver prints an answer, so the stored output is a
+  real answer and the sync behaves exactly as it does for a single-answer problem. This
+  is a direct benefit of printing answers rather than verdicts — the verdict design would
+  have made the two visible cases fail for everyone, including a correct solution.
 - **Non-function-based:** the example's stated answer must appear **in** the case's
   `outputs` list. If enumeration produced a list that omits the answer printed in the
   problem statement, the statement and the grader disagree, and the student who copies
@@ -213,8 +249,8 @@ graded by a different standard than Python ones, and nothing downstream would no
 
 This is the largest risk in the design and needs a mitigation before implementation.
 The natural one: extend B2 to run the reference and the known-wrong solutions through
-*every* enabled language's driver, not just Python — the reference must be `VALID`
-everywhere and the wrong solutions `INVALID` everywhere. A translation that broke the
+*every* enabled language's driver, not just Python — the reference must match the stored
+answer everywhere and the wrong solutions must mismatch. A translation that broke the
 checker then fails the gate. `BENCHMARK_USE_COMPILER=1` already reaches the compiler,
 which is what makes a per-language check affordable.
 
@@ -236,7 +272,7 @@ Both paths need the same artifact, used at different times:
 | aspect | function-based | non-function-based |
 | --- | --- | --- |
 | where the checker runs | in the driver, at grading time | in our pipeline, at generation time |
-| what ships | `VALID` as the expected output | the enumerated `outputs: [...]` list |
+| what ships | the reference's answer, as normal | the enumerated `outputs: [...]` list |
 | cap on input size | none | bounded by the answer count |
 
 For non-function problems the checker is what makes enumeration trustworthy: walk the
