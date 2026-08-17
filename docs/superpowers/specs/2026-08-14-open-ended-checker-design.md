@@ -231,10 +231,32 @@ examples. That interacts with both paths and must be handled explicitly:
   This is the same failure the verdict design had, relocated rather than removed. Printing
   answers does not fix it on its own.
 
-  **The guard:** grounding must run the reference *through its own driver* and confirm it
-  reproduces every stored output, cases 1-2 included. A disagreement between the statement
-  and `reference_answer` then fails loudly at generation time instead of silently at
-  grading time. This is a hard requirement, not an advisory check.
+  **The fix — generate the example outputs by running the reference.** The reference
+  solution is an *input* to the pipeline: it exists before the description is written. So
+  the description step should not invent Example 1's output at all. It should run the
+  reference on the example input and use what it actually prints.
+
+  Then the statement's example and the driver's `reference_answer` come from the same
+  code and agree by construction. There is nothing left to verify, and the hazard above
+  cannot occur.
+
+  **This corrects an existing inversion.** Today the examples are model-authored and
+  `optimal_example_failures` checks the reference against them — treating a mismatch as
+  "the reference/optimal solution is buggy". But the reference is the user's real working
+  code and the example is the invented artifact, so the blame points the wrong way. Once
+  outputs are generated from the reference, a whole class of wrong-worked-example bugs
+  disappears rather than being detected downstream. This benefits every problem, not only
+  open-ended ones.
+
+  **Ordering wrinkle to resolve during planning.** `description` runs before `naming`,
+  which normalizes the Python solution. The examples must come from the solution that
+  actually ships, so either generate them after normalization, or keep
+  `optimal_example_failures` purely as a normalization-drift check — a mismatch then means
+  normalization changed behaviour, which is a real defect worth failing on.
+
+  **Belt and braces:** grounding should still run the reference through its own driver and
+  confirm it reproduces every stored output, cases 1-2 included. With generated examples
+  this should never fire; if it does, something upstream changed the solution.
 - **Non-function-based:** the example's stated answer must appear **in** the case's
   `outputs` list. If enumeration produced a list that omits the answer printed in the
   problem statement, the statement and the grader disagree, and the student who copies
