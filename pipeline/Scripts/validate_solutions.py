@@ -20,9 +20,9 @@ from Prompts.validatesolutionsprompt import get_validate_solutions_prompt  # noq
 from benchmark_suite import (  # noqa: E402
     run_solutions_batch,
     normalize,
-    is_open_ended_problem,
     BENCHMARK_RUN_TIMEOUT,
 )
+from open_ended_checker import accepts  # noqa: E402
 
 
 def _parse_slm_json(content: str) -> dict | None:
@@ -69,10 +69,17 @@ def validate_solutions_llm(description, optimal_code, brute_code, *, _call=None,
     return _parse_slm_json(content)
 
 
-def validate_examples(examples, optimal_code, brute_code, description, *, _batch=None):
+def validate_examples(examples, optimal_code, brute_code, description, *, _batch=None,
+                      checker=None):
     """Run the SLM examples against the optimal (and brute). Advisory checks:
     input-format (optimal didn't error), ground-truth (optimal output == SLM
-    expected), and optimal-vs-brute agreement (skipped for open-ended problems)."""
+    expected), and optimal-vs-brute agreement.
+
+    `checker` is the open-ended problem's `is_valid_answer` (see open_ended_checker).
+    Agreement used to short-circuit to True whenever a prose regex read the description
+    as open-ended, which passed the check without running it — and fired on
+    deterministic descriptions that merely spelled out a tie-break. The checker answers
+    the same question for real: a brute answer it accepts agrees."""
     runner = _batch or (lambda code, inputs: run_solutions_batch(code, inputs, BENCHMARK_RUN_TIMEOUT))
     inputs = [e.get("input", "") for e in examples]
     if not inputs:
@@ -80,7 +87,6 @@ def validate_examples(examples, optimal_code, brute_code, description, *, _batch
 
     opt = runner(optimal_code, inputs)
     brute = runner(brute_code, inputs) if brute_code else [None] * len(inputs)
-    open_ended = is_open_ended_problem(description or "")
 
     results = []
     optimal_ok = True
@@ -99,7 +105,7 @@ def validate_examples(examples, optimal_code, brute_code, description, *, _batch
         }
         if b is not None:
             bout, bstatus = b
-            agrees = open_ended or (
+            agrees = accepts(checker, e.get("input", ""), normalize(bout)) or (
                 status == "ok" and bstatus == "ok" and normalize(bout) == normalize(out)
             )
             rec["brute_agrees"] = agrees

@@ -6,6 +6,7 @@ has a driver to ask. They all ask this module instead, and they all get the same
 driver will give at grading time.
 """
 
+import contextlib
 import importlib.util
 import io
 import os
@@ -22,9 +23,11 @@ def load_checker(source_path):
     falls back to exact-text comparison — which is strictly the safer failure direction.
 
     The reference keeps its stdin-reading driver, and nothing requires that driver to sit
-    behind an `if __name__ == "__main__"` guard, so importing it can run `sys.stdin.read()`.
-    stdin is swapped for an empty stream first: unguarded, that read would hang the whole
-    pipeline on a terminal or eat the caller's input.
+    behind an `if __name__ == "__main__"` guard, so importing it can run `sys.stdin.read()`
+    and PRINT. stdin is swapped for an empty stream first: unguarded, that read would hang
+    the whole pipeline on a terminal or eat the caller's input. stdout is swallowed for the
+    same reason — several steps load the checker, and each would otherwise drop the
+    reference's own answer into the middle of that step's log.
     """
     if not source_path or not os.path.exists(source_path):
         return None
@@ -36,7 +39,8 @@ def load_checker(source_path):
             return None
         module = importlib.util.module_from_spec(spec)
         sys.stdin = io.StringIO("")
-        spec.loader.exec_module(module)
+        with contextlib.redirect_stdout(io.StringIO()):
+            spec.loader.exec_module(module)
     except Exception:
         return None
     finally:
@@ -44,6 +48,21 @@ def load_checker(source_path):
     if all(callable(getattr(module, n, None)) for n in CHECKER_NAMES):
         return module
     return None
+
+
+def checker_for(outputs_dir="Outputs"):
+    """The problem's checker, or None when it was authored with a single right answer.
+
+    Gated on the author-time flag rather than on whether the import happens to expose the
+    names: `load_checker` EXECUTES the reference as a module, and there is no reason to do
+    that for a problem that has one answer. Every consumer (kill scoring, the optimal-vs-
+    brute sweep, B4, validate_solutions) wants exactly this, so the gate lives here once.
+    """
+    from problem_flags import load_open_ended
+
+    if not load_open_ended(outputs_dir):
+        return None
+    return load_checker(os.path.join(outputs_dir, "generatedFullCode", "PYTHON.py"))
 
 
 def accepts(checker, stdin_text, candidate_stdout):

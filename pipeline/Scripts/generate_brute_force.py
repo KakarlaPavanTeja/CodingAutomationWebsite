@@ -150,7 +150,9 @@ def _run_solution_validation(description: str, optimal_solution: str, brute_cont
             e for e in (slm.get("examples") or [])
             if isinstance(e, dict) and e.get("input")
         ]
-        exec_res = validate_examples(examples, optimal_solution, brute_content, description)
+        from open_ended_checker import checker_for
+        exec_res = validate_examples(examples, optimal_solution, brute_content, description,
+                                     checker=checker_for("Outputs"))
         optimal_v = slm.get("optimal") or {}
         brute_v = slm.get("brute") or {}
         _merge_slm_into_marker({
@@ -194,8 +196,8 @@ def _crosscheck_optimal_vs_brute(description: str, optimal_solution: str, brute_
             crosscheck_optimal_brute,
             extract_example_inputs,
             optimal_example_failures,
-            is_open_ended_problem,
         )
+        from open_ended_checker import checker_for
     except Exception as e:  # pragma: no cover - import guard
         print(f"(optimal-vs-brute cross-check skipped: cannot import benchmark_suite: {e})")
         _write_crosscheck_marker("skipped", f"could not import benchmark_suite: {e}")
@@ -231,11 +233,9 @@ def _crosscheck_optimal_vs_brute(description: str, optimal_solution: str, brute_
         return
 
     # The optimal reproduces every worked example → it is NOT buggy on the canonical
-    # cases. From here a brute disagreement can only be a *different-but-valid* answer.
-    if is_open_ended_problem(description):
-        print("Optimal-vs-brute cross-check skipped (problem accepts multiple valid outputs).")
-        _write_crosscheck_marker("skipped", "problem accepts multiple valid outputs")
-        return
+    # cases. From here a brute disagreement can only be a *different-but-valid* answer —
+    # and the checker below tells the two apart, so the sweep runs on open-ended problems
+    # too instead of being skipped wholesale.
 
     # 2. Brute sweep is now ADVISORY. A correct optimal can legitimately differ from the
     #    brute on problems that admit several valid answers (e.g. "return the indices of
@@ -245,7 +245,8 @@ def _crosscheck_optimal_vs_brute(description: str, optimal_solution: str, brute_
     #    "mismatch" verdict here — only a non-blocking advisory note.
     try:
         examples = extract_example_inputs(description)
-        mismatches = crosscheck_optimal_brute(optimal_solution, brute_content, examples)
+        mismatches = crosscheck_optimal_brute(optimal_solution, brute_content, examples,
+                                              checker=checker_for("Outputs"))
     except Exception as e:
         print(f"(brute sweep skipped: {e})")
         _write_crosscheck_marker("ok", f"optimal matches all worked examples; brute sweep skipped: {e}")

@@ -51,13 +51,15 @@ class TestMissingWrongSolutionsBlocks(unittest.TestCase):
         self.assertTrue(result["hard_fail"], "missing wrong solutions must block")
         self.assertTrue(result["missing"])
 
-    def test_open_ended_problem_abstains_instead_of_passing(self):
+    def test_an_open_ended_problem_with_no_wrong_solutions_still_blocks(self):
+        """It used to abstain here — a pass in everything but name. Open-endedness is
+        an authored flag now, and it never buys an exemption from B2."""
         with tempfile.TemporaryDirectory() as empty:
             result = run_wrong_approach_gate(
                 [{"input": "1\n", "output": "1"}], wrong_dir=empty,
                 description="Return any valid arrangement of the letters.")
-        self.assertTrue(result["cannot_judge"])
-        self.assertFalse(result["hard_fail"], "abstention must not block")
+        self.assertFalse(result["cannot_judge"])
+        self.assertTrue(result["hard_fail"], "a missing gate must block, not abstain")
 
     def test_a_decimal_suite_with_no_wrong_solutions_still_blocks(self):
         """Decimals are not a judgement problem, so they do not excuse a missing folder."""
@@ -69,13 +71,16 @@ class TestMissingWrongSolutionsBlocks(unittest.TestCase):
         self.assertTrue(result["hard_fail"])
 
     def test_every_return_path_carries_every_key(self):
+        """Three paths survive — missing, pass, hard_fail. The abstain path is gone;
+        every one of them must still carry the full shape callers index into."""
         cases = [{"input": "1\n", "output": "1"}]
         with tempfile.TemporaryDirectory() as empty:
             missing = run_wrong_approach_gate(cases, wrong_dir=empty)
-            abstain = run_wrong_approach_gate(cases, wrong_dir=empty,
-                                              description="print any valid answer")
-        for result in (missing, abstain):
+        passed = b2_verdict(2, [], cases, "count the pairs")
+        failed = b2_verdict(2, [{"file": "w1.py"}], cases, "count the pairs")
+        for result in (missing, passed, failed):
             self.assertEqual(B2_KEYS, set(result))
+            self.assertFalse(result["cannot_judge"])
 
 
 class TestReusedVerdict(unittest.TestCase):

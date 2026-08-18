@@ -134,6 +134,12 @@ def load_cases(testcases_json_path: str, description: str = "") -> tuple[list, i
             "id": cid,
             "input": inp,
             "output": tc.get("output", "") or "",
+            # A multi-answer case (non-function open-ended) stores every valid answer in
+            # `outputs` and carries NO `output` at all — `multi_answer_defects` rejects a
+            # case that carries both. Reading only `output` yields "", which no solution
+            # ever prints, so every wrong solution looked killed by every such case and
+            # B2 passed on inflated evidence.
+            "outputs": [str(o) for o in (tc.get("outputs") or [])],
             "subtask": tc.get("subtask") or _subtask_of(tc),
             "scenario": _scenario_for(tc, tags),
             "is_edge": bool(tc.get("is_edge")) or _is_edge_of(tags),
@@ -168,17 +174,32 @@ def determine_size_model(cases: list, max_n: int) -> tuple[str, str]:
 # --------------------------------------------------------------------------- #
 # 2. Kill annotation — inject batch_runner(code, inputs) -> [(out, status), ...]
 # --------------------------------------------------------------------------- #
-def annotate_kills(cases: list, wrong_solutions, batch_runner, log=None) -> set:
+def _accepted_outputs(case: dict) -> list:
+    """Every stored answer this case accepts, normalized. One entry for an ordinary
+    case; a multi-answer case's whole enumerated `outputs` list instead."""
+    outs = [_norm_out(o) for o in (case.get("outputs") or [])]
+    return outs or [_norm_out(case.get("output", ""))]
+
+
+def annotate_kills(cases: list, wrong_solutions, batch_runner, log=None, checker=None) -> set:
     """Run each wrong solution over the pool; record which cases catch it.
 
     wrong_solutions: iterable of (name, code). A case kills `name` when the
     wrong solution's output differs from the grounded stored output (or it
     errors/times out). Mutates c["kills"]; returns the set of wrong ids.
     `log` (optional callable) emits a per-solution progress line so the compiler
-    poll output is attributable to a specific wrong solution."""
+    poll output is attributable to a specific wrong solution.
+
+    `checker` is the open-ended problem's checker (see open_ended_checker). A case
+    only kills what the PLATFORM would mark wrong, so a valid-but-different answer —
+    one the driver would accept, or one enumerated in a multi-answer case's `outputs`
+    — is not a kill. Counting those inflates the kill evidence that B2, the only
+    blocking quality gate, passes on."""
+    from open_ended_checker import effective_output
+
     wrong_solutions = list(wrong_solutions)
     inputs = [c["input"] for c in cases]
-    expected = [_norm_out(c["output"]) for c in cases]
+    expected = [_accepted_outputs(c) for c in cases]
     wrong_ids = set()
     for i, (name, code) in enumerate(wrong_solutions, 1):
         wrong_ids.add(name)
@@ -191,7 +212,12 @@ def annotate_kills(cases: list, wrong_solutions, batch_runner, log=None) -> set:
         for c, exp, res in zip(cases, expected, results):
             out, status = res
             got = _norm_out(out)
-            if status != "ok" or got != exp:
+            if status == "ok":
+                # Ask the checker the same question the driver asks at grading time: for
+                # a valid answer the Output Area prints the REFERENCE's answer, which is
+                # the stored output, so the case does not discriminate.
+                got = _norm_out(effective_output(checker, c["input"], got, exp[0]))
+            if status != "ok" or got not in exp:
                 c["kills"].add(name)
                 caught += 1
         if log:
@@ -366,7 +392,12 @@ def run_annotation(outputs_dir: str = "Outputs") -> dict:
             f"{len(cases)} case(s)…")
     else:
         log("[2/3] Scoring kills: SKIPPED (no wrong_solutions/*.py found)")
-    wrong_ids = annotate_kills(cases, wrong, batch_runner, log=log)
+    # Loaded once: an open-ended problem's kill scoring must grade the way the driver
+    # will, or a wrong solution that prints a different valid answer counts as caught.
+    from open_ended_checker import checker_for
+
+    wrong_ids = annotate_kills(cases, wrong, batch_runner, log=log,
+                               checker=checker_for(outputs_dir))
 
     killed = set().union(*[c["kills"] for c in cases]) if cases else set()
     uncatchable = sorted(wrong_ids - killed)

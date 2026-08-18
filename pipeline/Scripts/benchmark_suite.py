@@ -37,6 +37,8 @@ from Prompts.testcasesprompt_v4 import (  # noqa: E402
     SIZE_MIN_PCT,
     tier_from_tags,
 )
+from open_ended_checker import accepts, checker_for  # noqa: E402
+from problem_flags import load_open_ended  # noqa: E402
 from testcase_helpers import (
     bucket_for_case,
     detect_problem_type,
@@ -709,21 +711,20 @@ def b2_verdict(
     description: str | None = "",
 ) -> dict[str, Any]:
     """The one B2 verdict shape, shared by the live gate and testcase_annotate's
-    reuse of its own kill data. B2 is the only blocking quality gate, so it either
-    blocks, passes on evidence, or abstains — it never silently no-ops.
+    reuse of its own kill data. B2 is the only blocking quality gate, so it always
+    judges: it blocks, or it passes on evidence. It never silently no-ops.
 
-    Abstains (`cannot_judge`) where a textual verdict would be meaningless: problems
-    that accept multiple valid outputs. Abstention is not a pass.
+    It used to abstain (`cannot_judge`) when a prose regex read the description as
+    accepting multiple valid outputs. That regex also matched the wording a description
+    MUST use when it DOES pin an answer down ("if there are multiple pairs, print the
+    smallest first index"), so the gate switched itself off on well-written
+    deterministic problems. Multiple valid answers are handled where they belong now —
+    kill scoring asks the problem's checker, or its enumerated `outputs`, whether an
+    answer is valid — so the evidence arriving here is meaningful either way.
+    `cannot_judge` stays in the shape (callers read the key) but is always False.
+
+    `description` is still accepted because callers pass it; nothing reads it.
     """
-    if description and is_open_ended_problem(description):
-        reason = ("this problem accepts multiple valid outputs, so textual "
-                  "comparison would misreport")
-    else:
-        reason = ""
-    if reason:
-        return {"skipped": True, "cannot_judge": True, "missing": False,
-                "reason": reason, "wrong_files": wrong_files,
-                "failures": [], "hard_fail": False}
     if not wrong_files:
         return {"skipped": False, "cannot_judge": False, "missing": True,
                 "reason": "no wrong_solutions/*.py found", "wrong_files": 0,
@@ -740,12 +741,8 @@ def run_wrong_approach_gate(
     progress: bool = False,
     description: str | None = None,
 ) -> dict[str, Any]:
-    # Cheap pre-check: if B2 cannot judge this problem at all, say so before running
-    # anything. Otherwise this is already the "no wrong solutions" verdict.
+    # This is already the "no wrong solutions" verdict, kept for the empty-dir return.
     verdict = b2_verdict(0, [], test_cases, description)
-    if verdict["cannot_judge"]:
-        _log_warn(f"[B2] CANNOT JUDGE — {verdict['reason']}. Gate skipped (not a pass).")
-        return verdict
 
     wrong_dir = wrong_dir or os.path.join("Outputs", "wrong_solutions")
     paths = sorted(glob.glob(os.path.join(wrong_dir, "*.py")))
@@ -935,8 +932,14 @@ def run_differential_fuzz(
     test_cases: list[dict] | None = None,
     count: int = BENCHMARK_FUZZ_COUNT,
     timeout: float = BENCHMARK_RUN_TIMEOUT,
+    checker=None,
 ) -> dict[str, Any]:
     """Cross-check the optimal against the brute force to catch a WRONG optimal.
+
+    `checker` is the problem's `is_valid_answer` (see open_ended_checker). A
+    different-but-valid brute answer is not a disagreement — the driver would accept
+    it too — so with a checker a surviving disagreement on an open-ended problem is
+    real evidence rather than a tie-break artifact.
 
     Inputs are FORMAT-PRESERVING: the real test cases plus value-perturbations of
     them. A generic numeric fuzz is only a fallback when no test cases are given —
@@ -971,17 +974,19 @@ def run_differential_fuzz(
         bru_results = run_solutions_batch(brute_code, batch, timeout)
         ran += len(batch)
         for inp, (opt_out, s1), (bru_out, s2) in zip(batch, opt_results, bru_results):
-            agree = s1 == "ok" and s2 == "ok" and normalize(opt_out) == normalize(bru_out)
+            agree = s1 == "ok" and s2 == "ok" and (
+                normalize(opt_out) == normalize(bru_out)
+                or accepts(checker, inp, normalize(bru_out))
+            )
             tested.append({
                 "input": inp,
                 "optimal": opt_out if s1 == "ok" else f"<{s1}>",
                 "brute": bru_out if s2 == "ok" else f"<{s2}>",
                 "agree": agree,
             })
-            if s1 != "ok" or s2 != "ok":
+            if s1 != "ok" or s2 != "ok" or agree:
                 continue
-            if normalize(opt_out) != normalize(bru_out):
-                disagreements.append({"input": inp[:200], "optimal": opt_out[:100], "brute": bru_out[:100]})
+            disagreements.append({"input": inp[:200], "optimal": opt_out[:100], "brute": bru_out[:100]})
         if len(disagreements) >= 5:
             break
 
@@ -1376,24 +1381,6 @@ def structured_random_inputs(examples: list[str], count: int = 100, seed: int = 
     return out
 
 
-_OPEN_ENDED_RE = re.compile(
-    r"\b(return|print|output|construct|produce|find|report|give|build)\s+any\b"
-    r"|\bany\s+(valid|such|one|correct)\b"
-    r"|\bmultiple\s+(valid|correct|possible|right)\b"
-    r"|\bmore than one\b"
-    r"|\bif there (are|is)\s+(multiple|several|many)\b"
-    r"|\bany of (them|the)\b",
-    re.I,
-)
-
-
-def is_open_ended_problem(description: str) -> bool:
-    """True when the statement accepts more than one correct output (e.g. "return
-    any grid such that ..."). For these, optimal and brute legitimately differ
-    textually, so a plain output comparison would false-positive."""
-    return bool(_OPEN_ENDED_RE.search(description or ""))
-
-
 def crosscheck_optimal_brute(
     optimal_code: str,
     brute_code: str,
@@ -1401,10 +1388,16 @@ def crosscheck_optimal_brute(
     count: int = 100,
     timeout: float = BENCHMARK_RUN_TIMEOUT,
     max_report: int = 5,
+    checker=None,
 ) -> list[dict]:
     """Run the optimal and the (independent) brute on the example inputs plus a
     structure-aware small-input sweep; return the inputs where they disagree. A
-    disagreement strongly indicates the reference/optimal solution is buggy."""
+    disagreement strongly indicates the reference/optimal solution is buggy.
+
+    `checker` is the problem's `is_valid_answer` (see open_ended_checker): a
+    different-but-valid brute answer is not a disagreement, because the driver would
+    accept it too. Without it every open-ended problem reports fake mismatches — which
+    is exactly why this sweep used to be skipped outright on them."""
     candidates = list(examples) + structured_random_inputs(examples, count)
     if not candidates:
         return []
@@ -1412,7 +1405,8 @@ def crosscheck_optimal_brute(
     bru = run_solutions_batch(brute_code, candidates, timeout)
     out: list[dict] = []
     for inp, (o, s1), (br, s2) in zip(candidates, opt, bru):
-        if s1 == "ok" and s2 == "ok" and normalize(o) != normalize(br):
+        if (s1 == "ok" and s2 == "ok" and normalize(o) != normalize(br)
+                and not accepts(checker, inp, normalize(br))):
             out.append({"input": inp, "optimal": normalize(o)[:80], "brute": normalize(br)[:80]})
             if len(out) >= max_report:
                 break
@@ -1537,9 +1531,14 @@ def run_benchmark(
     if brute_code:
         print("[B4] Differential fuzz vs brute force", flush=True)
         _log_detail(f"Generating up to {fuzz_count} random inputs…")
+        # The flag is authored once by the description step; `optimal_path` is
+        # <outputs_dir>/generatedFullCode/PYTHON.py, so its grandparent IS outputs_dir.
+        outputs_dir = os.path.dirname(os.path.dirname(optimal_path)) or "Outputs"
+        open_ended = load_open_ended(outputs_dir)
         report.b4 = run_differential_fuzz(
             optimal_code, brute_code, description,
             test_cases=test_cases, count=fuzz_count, timeout=timeout,
+            checker=checker_for(outputs_dir),
         )
         d = len(report.b4.get("disagreements", []))
         if report.b4.get("hard_fail"):
@@ -1551,10 +1550,15 @@ def run_benchmark(
             # almost always multiple-valid-answer artifacts or precondition-sensitive
             # fuzz inputs (e.g. a "sorted" array perturbed into an unsorted one) —
             # advisory, not a hard fail.
+            # This clause TIGHTENS B4 (open-ended => stays a hard fail); it is the one
+            # place the deleted regex did not relax a check, so it keeps its polarity
+            # and only changes source: the author-time flag, not prose matching. It is
+            # meaningful now because the fuzz above already discarded every
+            # different-but-valid brute answer, so what is left is a real disagreement.
             opt_fails_examples = bool(
                 optimal_example_failures(optimal_code, description, timeout=timeout)
             )
-            if not opt_fails_examples and not is_open_ended_problem(description):
+            if not opt_fails_examples and not open_ended:
                 report.b4["hard_fail"] = False
                 report.b4["advisory"] = True
                 report.b4["advisory_reason"] = (
