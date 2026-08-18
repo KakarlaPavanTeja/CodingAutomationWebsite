@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import time
@@ -9,8 +10,45 @@ if current_dir not in sys.path:
     sys.path.append(current_dir)
 
 from llm_client import call_llm
+from problem_flags import load_open_ended
 from Prompts.splittingPrompt import get_splitting_prompt
 from usage_tracker import update_usage
+
+# Word-bounded so `VALID` does not also fire inside `INVALID` and double every report.
+_VERDICT_RE = re.compile(r"\b(?:VALID|INVALID|CORRECT|INCORRECT|WRONG)\b")
+
+
+def split_defects(language_name, split_data, open_ended):
+    """Static gate on the split BEFORE it is written to disk. Empty list means it is sound.
+
+    Every defect here is silent in production: a leaked checker just means a student can
+    read the answer, and a verdict-printing driver just means every failure report is
+    useless. Neither breaks a test.
+
+    Phase 1 is Python only — `def reference_answer` is Python syntax and the checker's
+    placement rules differ per language. Task 9 teaches it the other three.
+    """
+    if not open_ended or language_name != "Python":
+        return []
+    driver = split_data.get("driver_code") or ""
+    defects = []
+    for name in ("reference_answer", "is_valid_answer"):
+        if f"def {name}" not in driver:
+            defects.append(f"driver_code is missing {name}")
+    for key in ("solution_code", "default_code"):
+        body = split_data.get(key) or ""
+        if "reference_answer" in body or "is_valid_answer" in body:
+            defects.append(f"the checker leaked into {key}, which is shown to the user")
+    for word in dict.fromkeys(_VERDICT_RE.findall(driver)):
+        defects.append(f"driver_code prints the verdict {word!r}; it must print an answer")
+    start, end = driver.find("start_time_ns"), driver.find("end_time_ns")
+    if start != -1 and end > start:
+        window = driver[start:end]
+        if "is_valid_answer" in window or "reference_answer" in window:
+            defects.append("the checker runs inside the timing window and would inflate "
+                           "the user's measured runtime")
+    return defects
+
 
 def clean_json_string(s):
     """Attempt to clean markdown code blocks from string."""
@@ -140,6 +178,10 @@ def main():
             with open(file_path, "r", encoding="utf-8") as f:
                 solutions[key] = f.read()
 
+    open_ended = load_open_ended(os.path.join(base_dir, "Outputs"))
+    if open_ended:
+        print("Open-ended problem: the driver will grade with the reference's checker.")
+
     # 1.1 Load generated_description.md
     desc_path = os.path.join(base_dir, "Outputs", "generated_description.md")
     desc_content = ""
@@ -184,9 +226,15 @@ def main():
             continue
             
         print(f"\nProcessing {lang_name}...")
-        
+        if open_ended and lang_name != "Python":
+            print(f"  ! {lang_name} has no checker yet (Phase 1 is Python only) — its "
+                  f"driver will grade against the single stored answer.")
+
         # 2. Call LLM to split code
-        system_prompt, user_prompt = get_splitting_prompt(lang_name, code, desc_response=desc_content, question_type=question_type)
+        system_prompt, user_prompt = get_splitting_prompt(
+            lang_name, code, desc_response=desc_content, question_type=question_type,
+            open_ended=open_ended,
+        )
         response, usage = call_llm(system_prompt, user_prompt, purpose="code")
         
         # Track usage
@@ -204,6 +252,14 @@ def main():
         try:
             cleaned_response = clean_json_string(response)
             split_data = json.loads(cleaned_response)
+            # SystemExit derives from BaseException, so the `except Exception` below does
+            # not swallow this.
+            defects = split_defects(lang_name, split_data, open_ended)
+            if defects:
+                print(f"ERROR: the {lang_name} split is unusable for an open-ended problem:")
+                for d in defects:
+                    print(f"  - {d}")
+                sys.exit(1)
             save_split_code(lang_name, split_data, question_type)
         except json.JSONDecodeError as e:
             print(f"  Error parsing JSON for {lang_name}: {e}")
