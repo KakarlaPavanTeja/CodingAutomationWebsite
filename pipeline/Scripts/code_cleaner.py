@@ -1,5 +1,25 @@
 import re
 
+
+def strip_code_fence(text):
+    """Drop a leading ```/```lang line and a trailing ``` from an LLM reply.
+
+    Safe on a reply with no newline at all. The idiom this replaces —
+    `text.split('\\n', 1)[1].rsplit('\\n', 1)[0]` — raises IndexError on a single-line
+    response (`split` returns ONE element, so `[1]` is out of range), killing the step
+    with a bare traceback instead of a message. Mirrors `_strip_fences` in
+    testcase_manager_v4, which got this right; this is the copy the generate_question
+    steps share.
+    """
+    t = (text or "").strip()
+    if t.startswith("```"):
+        nl = t.find("\n")
+        t = t[nl + 1:] if nl != -1 else t[3:]
+    if t.rstrip().endswith("```"):
+        t = t.rstrip()[:-3]
+    return t.strip()
+
+
 def strip_comments_from_code(code, language):
     """
     Removes comments from code based on language.

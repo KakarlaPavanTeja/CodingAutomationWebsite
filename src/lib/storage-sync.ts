@@ -184,16 +184,32 @@ export async function uploadSharedInputs(
   // temp workspace when a step runs — they should not be stored per-problem.
 }
 
-/** Walk a local directory and upload all files to storage under a prefix. */
+/**
+ * Walk a local directory and upload its files to storage under a prefix.
+ *
+ * `modifiedSinceMs` restricts the upload to files written AFTER that moment, and a
+ * pipeline step must always pass it. Every step runs in its own temp workspace
+ * hydrated with a full copy of the problem's Outputs, so an unrestricted upload
+ * re-sends the files the step never opened — and when two steps run in parallel, the
+ * one that finishes last thereby REVERTS the other's work. Passing the moment the
+ * step's process started drops hydrated-but-untouched files (whose mtime is the
+ * hydration write, strictly earlier), so a step only ever publishes what it actually
+ * produced. Omit it only for a one-shot sweep of a directory nobody else is writing.
+ */
 export async function uploadDirToStorage(
   localDir: string,
   storagePrefix: string,
+  modifiedSinceMs?: number,
 ): Promise<number> {
   const files = await walkDir(localDir);
   let count = 0;
   for (const relPath of files) {
     if (relPath.includes(".DS_Store") || relPath.includes("__pycache__")) continue;
     const localPath = path.join(localDir, relPath);
+    if (modifiedSinceMs !== undefined) {
+      const s = await stat(localPath).catch(() => null);
+      if (!s || s.mtimeMs < modifiedSinceMs) continue;
+    }
     const content = await readFile(localPath);
     await uploadFile(`${storagePrefix}/${relPath}`, content);
     count++;
@@ -201,12 +217,14 @@ export async function uploadDirToStorage(
   return count;
 }
 
-/** Upload outputs from a local Outputs/ directory to storage. */
+/** Upload outputs from a local Outputs/ directory to storage. See uploadDirToStorage
+ *  for why a pipeline step must pass `modifiedSinceMs`. */
 export async function uploadOutputsFromDir(
   problemId: string,
   localOutputsDir: string,
+  modifiedSinceMs?: number,
 ): Promise<number> {
-  return uploadDirToStorage(localOutputsDir, `${problemId}/outputs`);
+  return uploadDirToStorage(localOutputsDir, `${problemId}/outputs`, modifiedSinceMs);
 }
 
 // Logs live in object storage, never in Postgres. Storing them in a TOASTed
@@ -618,9 +636,15 @@ export function startPeriodicSync(
   problemId: string,
   localOutputsDir: string,
   intervalMs = 30_000,
+  modifiedSinceMs?: number,
 ): { stop: () => Promise<void> } {
   const knownFiles = new Map<string, number>(); // path → last modified time
   let stopped = false;
+  // `knownFiles` starts empty, so without this bound the FIRST tick treats every
+  // hydrated file as "changed" and re-uploads the whole workspace — publishing files
+  // this step never touched and clobbering a concurrent step's output. See
+  // uploadDirToStorage.
+  const since = modifiedSinceMs;
   // Large artifacts (testcases JSON, etc.) are uploaded once at step end.
   const maxPeriodicBytes = Math.max(
     0,
@@ -635,6 +659,7 @@ export function startPeriodicSync(
         const localPath = path.join(localOutputsDir, relPath);
         const s = await stat(localPath);
         const mtime = s.mtimeMs;
+        if (since !== undefined && mtime < since) continue;
 
         if (!knownFiles.has(relPath) || knownFiles.get(relPath)! < mtime) {
           if (maxPeriodicBytes > 0 && s.size > maxPeriodicBytes) continue;

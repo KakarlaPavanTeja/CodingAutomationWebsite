@@ -392,10 +392,14 @@ Your response MUST END immediately after the **Output Format** section.
 - DO NOT include any additional "Example" sections or text after the Output Format.
 - The Output Format section MUST be the FINAL section of your response.
 
-7. **CRITICAL: Do add spaces between array elements.**
-   - ALWAYS format arrays with spaces after commas.
-   - Example INCORRECT: `[1,2,3,4,5]`
-   - Example CORRECT: `[1, 2, 3, 4, 5]`
+7. **CRITICAL: array spacing depends on WHERE the array appears.**
+   - In prose, and in a named-variable Example **Input:** block, use spaces after commas.
+     - INCORRECT: `[1,2,3,4,5]`   ·   CORRECT: `[1, 2, 3, 4, 5]`
+   - Inside an Example's **Output:** block, use NO spaces after commas.
+     - INCORRECT: `[1, 2, 3, 4, 5]`   ·   CORRECT: `[1,2,3,4,5]`
+     - That block is the literal stdout the solution must print, and the normalizer emits
+       the compact form (`json.dumps(res, separators=(',', ':'))`). A space there makes the
+       statement and the reference solution disagree byte-for-byte on what the answer is.
 
 **SECTION INSTRUCTIONS**
 
@@ -615,7 +619,12 @@ Use the `USER CODE` below as the absolute source of truth for **Input Format** a
 - Use `**` for section titles: **Input Format**, **Output Format**, **Constraints**, **Example 1:**, etc.
 - One blank line after each section title
 - Backticks for literal values
-- Arrays with spaces after commas: `[1, 2, 3]`
+- Arrays in PROSE and in named-variable Example **Input:** blocks: spaces after commas,
+  `[1, 2, 3]`
+- Arrays inside an Example's **Output:** block: NO spaces after commas, `[1,2,3]`. That
+  block is the literal stdout the solution must print, and the normalizer emits the
+  compact form. A space there makes the statement and the reference disagree
+  byte-for-byte, which fails the I/O contract check and burns repair attempts.
 - Code fences in examples: bare ``` with no language tag
 
 **Input Format / Output Format:**

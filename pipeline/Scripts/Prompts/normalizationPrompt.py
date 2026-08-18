@@ -186,6 +186,7 @@ The problem description REQUIRES these specific names:
 - **ONLY normalize**: libraries, class names, remove comments, compact formatting, and correct the I/O to match the description.
 - **CRITICAL - PRINTING FORMAT**: All code (especially Python) MUST print arrays/lists **WITHOUT spaces** after commas (e.g., `[1,2,3]` not `[1, 2, 3]`).
   - For Python, use `json.dumps(res, separators=(',', ':'))` or manual formatting if needed.
+  - This is the SAME form the description's Example **Output:** blocks use, so statement and code agree byte-for-byte. The spaced form `[1, 2, 3]` belongs only to prose and to named-variable Example **Input:** blocks, which are a display convenience and never the wire format.
 - **CRITICAL - HELPER FUNCTIONS**: Do NOT use nested functions or lambda functions (e.g., `std::function` in C++, inner `def` in Python, or arrow functions in JS) for helper logic. If the source uses nested helpers, extract them as separate methods within the `solution` class.
 
 **INPUT CODE:**

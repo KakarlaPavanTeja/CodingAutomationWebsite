@@ -125,7 +125,16 @@ export function getQuestionSubStepWaves(
   if (questionType === "function") {
     const waves: QuestionSubStepId[][] = [];
     if (incl("description")) waves.push(["description"]);
-    const wave1 = (["naming", "titles", "difficulty", "topics"] as QuestionSubStepId[]).filter(incl);
+    // Naming runs ALONE. Every sub-step gets its own temp workspace hydrated from
+    // storage, and naming is the only one that rewrites generatedFullCode/PYTHON.py —
+    // so a sibling running beside it holds the pre-naming copy and re-uploads it,
+    // silently reverting the normalization. description_signature.json survives
+    // (nobody else has that file), leaving a signature that names `findPairs` next to
+    // code that still has the old name. Worse, the stdin and checker gates in
+    // run_naming_step pass on the code that then gets discarded, so what actually
+    // ships was never gated at all.
+    if (incl("naming")) waves.push(["naming"]);
+    const wave1 = (["titles", "difficulty", "topics"] as QuestionSubStepId[]).filter(incl);
     if (wave1.length) waves.push(wave1);
     const wave2 = (["translate_cpp", "translate_java", "translate_nodejs"] as QuestionSubStepId[]).filter(
       incl
