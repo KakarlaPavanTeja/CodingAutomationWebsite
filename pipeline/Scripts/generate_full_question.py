@@ -314,6 +314,15 @@ def _working_code_path(detected_lang):
     return os.path.join(_generated_full_code_dir(), FILE_MAPPINGS[key])
 
 
+def _read_text(path):
+    """Read a file, tolerating its absence — a missing reference must not kill the step."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 def _description_path():
     return os.path.join(OUTPUT_DIR, 'generated_description.md')
 
@@ -401,6 +410,116 @@ def detect_user_solution():
     print("Please provide one of: solution.py, solution.cpp, Solution.java, solution.js")
     sys.exit(1)
 
+MAX_DESCRIPTION_ATTEMPTS = 3
+
+_DESC_REPAIR_SYSTEM = (
+    "You are correcting a coding-problem statement. The reference solution is the source "
+    "of truth: it RAN and printed the outputs shown below. Rewrite the statement so its "
+    "worked Examples show what the reference actually prints, and so the Output Format "
+    "describes that. Change nothing else — same scenario, same variable names, same "
+    "constraints. Return the FULL corrected statement in the same markdown format, and "
+    "keep the trailing OPEN_ENDED marker line."
+)
+
+_CODE_REPAIR_SYSTEM = (
+    "You are repairing a reference solution that CRASHED or timed out on the problem "
+    "statement's own worked Example inputs. Do NOT change the problem statement. Return "
+    "ONLY the corrected full solution source, no markdown fences and no commentary."
+)
+
+
+def _mismatch_side(contract):
+    """'code' when the reference did not run, 'description' when it ran and disagreed.
+
+    These look alike from a distance and have opposite fixes. `verify_io_contract` writes
+    `got` as `<error>` / `<timeout>` for a failed run and as the real stdout otherwise;
+    an unconvertible display block carries its reason in `detail`."""
+    for m in contract.get("mismatches") or []:
+        blob = f"{m.get('got', '')} {m.get('detail', '')}"
+        if "<error>" in blob or "<timeout>" in blob:
+            return "code"
+    return "description"
+
+
+def _format_mismatches(contract):
+    lines = []
+    for m in contract.get("mismatches") or []:
+        lines.append(
+            f"- example {m.get('example')}:\n"
+            f"    stdin           : {m.get('stdin')!r}\n"
+            f"    statement claims: {m.get('expected')!r}\n"
+            f"    reference printed: {m.get('got')!r}"
+            + (f"  ({m.get('detail')!r})" if m.get("detail") else "")
+        )
+    return "\n".join(lines)
+
+
+def reconcile_description(problem_name, desc_prompt, problem_content, optimal_path,
+                          outputs_dir, scenario_level, llm=None, verifier=None,
+                          code_writer=None, max_attempts=MAX_DESCRIPTION_ATTEMPTS):
+    """Generate the statement, execute the reference against its own Examples, reconcile.
+
+    The reference solution is an INPUT to this pipeline — it exists before the statement is
+    written — so execution decides the example outputs and the model only writes prose.
+    That removes a whole class of wrong-worked-example bugs instead of detecting them three
+    steps later.
+
+    Returns (description, {"verified", "attempts", "repairs", "reason"}).
+    """
+    if llm is None:
+        llm = call_llm
+    if verifier is None:
+        from testcase_manager_v4 import verify_io_contract as verifier
+    if code_writer is None:
+        def code_writer(_key, code):
+            with open(optimal_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+
+    description = ""
+    repairs = []
+    system, user = desc_prompt, problem_content
+    for attempt in range(1, max_attempts + 1):
+        content, usage = llm(system, user, purpose="chat")
+        _track_llm_usage(usage, f"{problem_name}_description")
+        content = _strip_scratchpad(content)
+        if repairs and repairs[-1] == "code":
+            # The model returned SOURCE, not a statement: keep the statement we had.
+            if content.startswith("```"):
+                content = content.split('\n', 1)[1].rsplit('\n', 1)[0].strip()
+            code_writer("code", clean_generated_code(content, "python"))
+        else:
+            description = normalize_renderer_safe(content) if scenario_level == "none" else content
+
+        contract = verifier(description, optimal_path, outputs_dir, llm=llm)
+        if contract.get("verified"):
+            return description, {"verified": True, "attempts": attempt,
+                                 "repairs": repairs, "reason": ""}
+        if not (contract.get("mismatches") or []):
+            # Nothing parseable to reconcile against — not a defect we can repair.
+            return description, {"verified": False, "attempts": attempt,
+                                 "repairs": repairs,
+                                 "reason": contract.get("reason") or "no parseable Examples"}
+        if attempt == max_attempts:
+            break
+        side = _mismatch_side(contract)
+        repairs.append(side)
+        detail = _format_mismatches(contract)
+        if side == "code":
+            system = _CODE_REPAIR_SYSTEM
+            user = (f"STATEMENT:\n{description}\n\n"
+                    f"CURRENT SOLUTION:\n{_read_text(optimal_path)}\n\n"
+                    f"It failed on the statement's own Examples:\n{detail}")
+        else:
+            system = _DESC_REPAIR_SYSTEM
+            user = (f"CURRENT STATEMENT:\n{description}\n\n"
+                    f"The reference solution disagrees with it:\n{detail}")
+
+    side = repairs[-1] if repairs else "description"
+    return description, {"verified": False, "attempts": max_attempts, "repairs": repairs,
+                         "reason": f"gave up after {max_attempts} attempts while "
+                                   f"repairing the {side}"}
+
+
 def run_description_step(problem_name, structure_type, scenario_level, problem_content, user_code, detected_lang, question_kind="function"):
     print("\n" + "=" * 60)
     print("STEP: Description Creation")
@@ -412,20 +531,38 @@ def run_description_step(problem_name, structure_type, scenario_level, problem_c
         )
     else:
         desc_prompt = get_description_prompt(problem_name, structure_type, user_code, scenario_level)
-    desc_response, desc_usage = call_llm(desc_prompt, problem_content, purpose="chat")
-    desc_response = _strip_scratchpad(desc_response)
-    if scenario_level == "none":
-        desc_response = normalize_renderer_safe(desc_response)
 
-    _track_llm_usage(desc_usage, f"{problem_name}_description")
+    # A re-described problem invalidates naming, so reset the editable copy back to the raw
+    # input FIRST — reconciliation may repair that copy, and the reset would undo it.
+    _save_working_code(user_code, detected_lang)
+    optimal_path = _working_code_path(detected_lang)
+
+    if detected_lang.lower() == "python":
+        desc_response, recon = reconcile_description(
+            problem_name, desc_prompt, problem_content, optimal_path,
+            OUTPUT_DIR, scenario_level,
+        )
+        if recon["verified"]:
+            print(f"✓ Examples reconciled against the reference "
+                  f"({recon['attempts']} attempt(s), repairs={recon['repairs'] or 'none'})")
+        else:
+            print(f"⚠ Examples NOT reconciled — {recon['reason']}. "
+                  f"verify_io_contract will re-check at generate_testcases.")
+    else:
+        # `_run_reference_on_input` shells out to python3, so a C++/Java reference cannot
+        # be executed here. The generate_testcases checkpoint still covers it.
+        desc_response, desc_usage = call_llm(desc_prompt, problem_content, purpose="chat")
+        _track_llm_usage(desc_usage, f"{problem_name}_description")
+        desc_response = _strip_scratchpad(desc_response)
+        if scenario_level == "none":
+            desc_response = normalize_renderer_safe(desc_response)
+        print(f"ℹ Reference is {detected_lang}; skipping example reconciliation.")
+
     desc_response, open_ended, open_ended_reason = split_open_ended_marker(desc_response)
     save_problem_flags(open_ended, open_ended_reason, OUTPUT_DIR)
     _save_description(desc_response)
     print(f"✓ open_ended={open_ended}"
           + (f" — {open_ended_reason}" if open_ended_reason else ""))
-    # A re-described problem invalidates naming, so reset the editable copy back
-    # to the raw input rather than leaving a rename keyed to the old description.
-    _save_working_code(user_code, detected_lang)
     print(f"✓ Description created and saved to {_description_path()}")
     print(f"✓ Baseline solution saved to {os.path.relpath(_working_code_path(detected_lang), OUTPUT_DIR)}")
 
