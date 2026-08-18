@@ -520,6 +520,15 @@ You MUST use the `USER CODE` provided below as the absolute SOURCE OF TRUTH for 
 3. If the code explicitly reads a variable (like a length `n` or `m`) before reading a collection/array, you MUST include that variable in your "Input Format" and "Examples".
 4. If the code reads the collection/array directly (e.g., using `JSON.parse` or `getline` without an explicit size count), then you MUST NOT include a size variable.
 5. Your generated description's "Output Format" must reflect EXACTLY what the `USER CODE` prints or returns as the final result of execution.
+5a. **DETERMINISTIC ANSWER (CRITICAL):** if the task could admit MORE THAN ONE valid
+   output (e.g. "return the indices of a pair summing to k" when several pairs qualify,
+   any valid arrangement, multiple shortest paths), the "Output Format" MUST pin down a
+   SINGLE expected answer with an explicit tie-break rule — e.g. "return the pair with
+   the smallest first index, breaking ties by the smallest second index" or "return the
+   lexicographically smallest such sequence". The tie-break MUST match what `USER CODE`
+   actually produces: read its loop order and state the rule it already follows, never a
+   rule you invent. Grading compares against ONE exact answer, so an ambiguous Output
+   Format marks correct submissions wrong.
 6. Do NOT blindly copy the input/output format text from the original problem description text if it conflicts with how the `USER CODE` actually reads/writes data.
 7. **STRICT COMPLEX TYPE FORMATTING**: Any arrays, strings, or matrices mentioned in the description or examples MUST follow the exact input representation expected by the `USER CODE`. For example:
    - If the code reads a matrix row-by-row as space-separated values, describe it that way.

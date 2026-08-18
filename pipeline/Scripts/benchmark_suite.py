@@ -31,12 +31,10 @@ from typing import Any
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from Prompts.testcasesprompt_v4 import (  # noqa: E402
-    MAX_CASES_PER_SUBTASK,
     MAX_SUBTASKS,
     MIN_SUBTASKS,
     MIN_TESTCASES,
-    SIZE_CATEGORY_TARGETS,
-    SIZE_TOLERANCE_PP,
+    SIZE_MIN_PCT,
     tier_from_tags,
 )
 from testcase_helpers import (
@@ -833,17 +831,18 @@ def audit_coverage_shape(
         issues.append(f"subtask count {subtask_n} outside [{MIN_SUBTASKS}, {MAX_SUBTASKS}]")
         hard_fail = True
 
-    # per-subtask cap
-    if subtask_n > 0:
-        effective_cap = max(MAX_CASES_PER_SUBTASK, math.ceil(total / subtask_n))
+    # No per-subtask cap. A subtask is now WHAT a case validates, not a difficulty tier,
+    # so a group's size is a fact about the problem rather than a budget to stay inside:
+    # "answer positioning" legitimately held 42 of 147 cases on a real two-sum run.
+    # Capping it would only force fake subdivision into groups validating the same thing.
+    # A single group swallowing most of the suite still suggests the model did not group
+    # meaningfully, so warn — never fail — at that point.
+    if subtask_n > 0 and total > 0:
         for tier, cnt in subtask_counts.items():
-            if cnt > effective_cap:
-                issues.append(
-                    f"subtask_{tier} has {cnt} cases > effective_cap {effective_cap}"
+            if cnt > total * 0.5:
+                warnings.append(
+                    f"subtask_{tier} holds {cnt}/{total} cases — grouping may be too coarse"
                 )
-                hard_fail = True
-            elif cnt > math.ceil(total / subtask_n) + 2:
-                warnings.append(f"subtask_{tier} count {cnt} above average")
 
     # Buckets scale to THIS problem's size dimension: the constraint bound when
     # the description states one, else the largest size the suite itself contains.
@@ -867,12 +866,14 @@ def audit_coverage_shape(
     if total > 0:
         for b in SIZE_BUCKETS:
             size_split[b] = round(100.0 * bucket_counts[b] / total, 1)
-        for b, target in SIZE_CATEGORY_TARGETS.items():
+        # Floors, not two-sided targets — see SIZE_MIN_PCT for why. Only a missing CLASS
+        # of input is a defect; the exact mix is the model's call.
+        for b, floor in SIZE_MIN_PCT.items():
             actual = size_split.get(b, 0.0)
-            if abs(actual - target) > SIZE_TOLERANCE_PP:
+            if actual < floor:
                 msg = (
-                    f"size_{b}: {actual}% vs target {target}% "
-                    f"(tolerance +/-{SIZE_TOLERANCE_PP}pp)"
+                    f"size_{b}: {actual}% of the suite, below the {floor}% floor "
+                    f"— this class of input is effectively missing"
                 )
                 if advisory_size:
                     warnings.append(msg)
@@ -915,7 +916,6 @@ def audit_coverage_shape(
         "total": total,
         "subtask_count": subtask_n,
         "subtask_counts": subtask_counts,
-        "effective_cap": max(MAX_CASES_PER_SUBTASK, math.ceil(total / max(subtask_n, 1))),
         "size_split": size_split,
         "size_bucket_counts": bucket_counts,
         "problem_type": ptype,

@@ -33,6 +33,16 @@ SIZE_CATEGORY_TARGETS = {
     "large": 20.0,
 }
 SIZE_TOLERANCE_PP = 7.0  # +/- percentage points
+
+# What B3 actually enforces. FLOORS, not targets: the model chooses the suite's shape —
+# that is the point of the redesign, and this prompt deliberately no longer states
+# proportions — so the audit must not grade against a rulebook the model was never given.
+# Two-sided targets failed every suite once the prompt stopped stating them (a real run
+# scored edge 16% / small 76% / medium 0% / large 8% while killing 100% of injected bugs).
+# What still matters is that no whole CLASS of input is missing: degenerate cases, and
+# cases big enough to expose a slow solution. `medium` has no floor — the small/medium
+# boundary is a bucketing artifact, not a property anyone should have to hit.
+SIZE_MIN_PCT = {"edge": 5.0, "large": 5.0}
 SIZE_TAG_PREFIX = "size_"
 SIZE_BUCKETS = ("edge", "small", "medium", "large")
 
