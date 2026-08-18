@@ -97,3 +97,7 @@ scripts/import-db.mts
 /pipeline/Scripts/tests/test_freelancer_kit.py
 /freelancer-function-practice/
 /freelancer-function-practice.zip
+
+# drizzle-kit scratch output. This repo uses `push`, not generate/migrate, so nothing
+# here is a source artifact — it only appears when someone runs the CLI.
+drizzle/
