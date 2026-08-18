@@ -1,7 +1,43 @@
 # Open-Ended Problems: Grade With a Checker, Not a Stored Answer
 
-**Status:** approved design, not yet planned or implemented
+**Status:** approved design. Planned in `docs/superpowers/plans/2026-08-17-open-ended-checker.md`.
 **Depends on:** the testcase-generation redesign (`2026-08-13-...-design.md`) landing first
+
+> ## Corrections — read the plan, not this file, for implementation detail
+>
+> Writing the plan against the actual code found six factual errors below. The
+> **decisions** in this spec stand; several **descriptions of the codebase** do not.
+> Where they conflict, the plan is right.
+>
+> 1. **`descriptionPrompt.py:421` is dead code.** `get_description_spec_prompt` has no
+>    callers; only `get_description_prompt` and `get_nonfunction_description_prompt` are
+>    live. So the function-based path never had a deterministic-answer rule at all — the
+>    rule was missing, not ignored. (Fixed separately in `fc35523`; the live prompt now
+>    carries it.) The live prompts are also **four**, not two: each entry point
+>    early-returns to a structure-only variant when `scenario_level == "none"`.
+> 2. **The driver markers quoted here do not exist.** `# --- Output Area Start ---` lives
+>    only in a `zReferenceFiles/` sample no script reads. The real markers are inside
+>    `get_splitting_prompt`, spelled differently per language.
+> 3. **There is no `split_code` function** — it is a step id. `code_splitter.py` emits
+>    `default/solution/driver/debugger`; the main file is assembled later by
+>    `execution_manager_v3`. "Place the checker in the driver" means `driver_code`.
+> 4. **"`prepare_platform_json.py` needs no change" is false.** `load_source_testcases`
+>    force-defaults a missing `output` to `""`, so a multi-answer case never reaches the
+>    `output is None` guard and `outputs` is never validated. The execution managers do
+>    need no change.
+> 5. **The parsed-argument checker signature is not implementable.** B2, grounding and
+>    enumeration all run *before* the driver exists and only ever hold raw text. The plan
+>    uses a text-in/text-out contract — `reference_answer(stdin_text)`,
+>    `is_valid_answer(stdin_text, candidate_stdout)` — so one signature serves all four
+>    consumers.
+> 6. **The four `is_open_ended_problem` call sites do not agree.** One
+>    (`benchmark_suite.py:1557`) has *inverted* polarity: the regex tightens B4 there, so
+>    blanket deletion would silently downgrade B4 to advisory forever.
+>
+> Also worth knowing: reconciliation runs the reference via local `subprocess`, not the
+> compiler API, so it is skipped for a C++/Java reference; and Node.js has no language id
+> on the grading compiler, so B2 can never verify it — the plan requires the log to name
+> it as unverified rather than omit it.
 
 ## The problem
 
