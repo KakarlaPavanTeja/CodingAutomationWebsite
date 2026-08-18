@@ -37,6 +37,11 @@ Next.js API layer.
 - `npm run build` / `npm run start` — prod build / serve (also port 5001).
 - `npm run lint` — ESLint (flat config, `eslint.config.mjs`).
 - `npm run db:push` — push Drizzle schema to the DB (**`--force`** — be careful).
+  - **It goes wherever `.env.local` points, which is production.** `drizzle.config.ts`
+    loads `.env.local` with `override: true`, so prefixing the command with
+    `DATABASE_URL=...` is silently ignored. To target any other database you MUST use
+    `DRIZZLE_DATABASE_URL=postgres://… npm run db:push` — that one wins, and prints the
+    target it resolved.
 - `npm run db:studio` — Drizzle Studio.
 - `npm run db` — `tsx scripts/db.mts` (DB helper script).
 - `npm run test:json` — Python unittest for pipeline JSON prep.
