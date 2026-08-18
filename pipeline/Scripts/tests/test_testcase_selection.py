@@ -1,25 +1,11 @@
-import copy
 import unittest
-from collections import Counter
 
 from testcase_selection import (
-    CASE_CAP,
-    CASE_FLOOR,
     bucket_size,
+    bucket_case,
     normalize_input,
     dedup_by_input,
-    fill_target,
-    guarantee_pass,
-    select_suite,
-    format_funnel,
 )
-
-
-def mk(id, subtask, bucket, scenario, kills=(), is_edge=False, is_tle=False, size=10):
-    return {"id": id, "input": id, "output": "", "subtask": subtask,
-            "bucket": bucket, "scenario": scenario, "is_edge": is_edge,
-            "is_tle": is_tle, "size_metric": size, "max_n": 100,
-            "kills": set(kills)}
 
 
 class TestBucketSize(unittest.TestCase):
@@ -44,6 +30,18 @@ class TestBucketSize(unittest.TestCase):
         self.assertEqual(bucket_size(4, 4), "large")
 
 
+class TestBucketCase(unittest.TestCase):
+    def test_declared_edge_beats_size(self):
+        self.assertEqual(bucket_case({"size_metric": 30, "is_edge": True}, 100000), "edge")
+
+    def test_stress_size_beats_declared_edge(self):
+        # Marking cases `is_edge` must never drain the large bucket.
+        self.assertEqual(bucket_case({"size_metric": 90000, "is_edge": True}, 100000), "large")
+
+    def test_no_size_dimension_is_flat(self):
+        self.assertEqual(bucket_case({"size_metric": 7}, 0, size_kind="none"), "flat")
+
+
 class TestDedup(unittest.TestCase):
     def test_normalize_collapses_trailing_ws_and_newlines(self):
         self.assertEqual(normalize_input("1 2 3\n"), normalize_input("1 2 3"))
@@ -66,291 +64,6 @@ class TestDedup(unittest.TestCase):
         cases = [{"id": "a", "input": "1 1"}, {"id": "b", "input": "1 2"}]
         unique, dropped = dedup_by_input(cases)
         self.assertEqual(dropped, 0)
-
-
-class TestGuaranteePass(unittest.TestCase):
-    def test_all_edges_included(self):
-        cases = [mk("e1", "S1", "edge", "min", is_edge=True),
-                 mk("e2", "S1", "edge", "empty", is_edge=True),
-                 mk("n1", "S1", "small", "x")]
-        selected, rep = guarantee_pass(cases, wrong_ids=set())
-        ids = {c["id"] for c in selected}
-        self.assertIn("e1", ids)
-        self.assertIn("e2", ids)
-
-    def test_all_tle_included(self):
-        cases = [mk("t1", "S3", "large", "maxn", is_tle=True), mk("n1", "S1", "small", "x")]
-        selected, rep = guarantee_pass(cases, wrong_ids=set())
-        self.assertIn("t1", {c["id"] for c in selected})
-        self.assertEqual(rep["tle"], 1)
-
-    def test_each_slot_covered_once(self):
-        cases = [mk("a", "S1", "small", "x"), mk("b", "S1", "small", "x"),
-                 mk("c", "S1", "small", "y")]
-        selected, rep = guarantee_pass(cases, wrong_ids=set())
-        self.assertEqual(rep["slots_filled"], 2)
-
-    def test_kill_completion_covers_all_wrong(self):
-        cases = [mk("a", "S1", "small", "x", kills=("w1",)),
-                 mk("b", "S1", "small", "x", kills=("w2",))]
-        selected, rep = guarantee_pass(cases, wrong_ids={"w1", "w2"})
-        self.assertEqual(rep["kills_covered"], 2)
-        self.assertEqual(rep["uncatchable"], [])
-
-    def test_uncatchable_wrong_reported(self):
-        cases = [mk("a", "S1", "small", "x", kills=("w1",))]
-        selected, rep = guarantee_pass(cases, wrong_ids={"w1", "w2"})
-        self.assertEqual(rep["uncatchable"], ["w2"])
-
-
-class TestTruncatedSlotCoverageStaysSpread(unittest.TestCase):
-    """A slot set larger than the cap must still span every subtask and bucket.
-
-    Regression (problem 66f6b0a9, "Primality Test"): the generator named every case
-    uniquely ("single_value_1" ... "single_value_100000"), so a 160-case pool had 160
-    distinct slots. Slot coverage walked them ALPHABETICALLY, so a cap of 30 was spent
-    entirely inside S1/edge — the shipped suite was 29 single-value T=1 cases with no
-    small, medium or large case at all.
-    """
-
-    def _wide_pool(self):
-        # 4 subtasks x 4 buckets x 10 per-case-unique scenarios = 160 slots.
-        pool = []
-        for si, sub in enumerate(("S1", "S2", "S3", "S4")):
-            for bi, bucket in enumerate(("edge", "small", "medium", "large")):
-                for k in range(10):
-                    cid = f"c{si:01d}{bi:01d}{k:02d}"
-                    c = mk(cid, sub, bucket, f"single_value_{k}", size=10 * (bi + 1))
-                    c["input"] = cid
-                    pool.append(c)
-        return pool
-
-    def test_coverage_spans_all_buckets_and_subtasks(self):
-        sel, rep = guarantee_pass(self._wide_pool(), wrong_ids=set(), cap=30)
-        self.assertEqual(len(sel), 30)
-        self.assertEqual(rep["slots_total"], 160)
-        self.assertEqual({c["bucket"] for c in sel},
-                         {"edge", "small", "medium", "large"})
-        self.assertEqual({c["subtask"] for c in sel}, {"S1", "S2", "S3", "S4"})
-
-    def test_no_single_group_hogs_the_cap(self):
-        sel, _rep = guarantee_pass(self._wide_pool(), wrong_ids=set(), cap=30)
-        counts = Counter((c["subtask"], c["bucket"]) for c in sel)
-        # 16 groups, 30 slots: an even spread is 1-2 each. Alphabetical order gave 30/0/0...
-        self.assertLessEqual(max(counts.values()), 3)
-
-    def test_order_is_deterministic(self):
-        a, _ = guarantee_pass(self._wide_pool(), wrong_ids=set(), cap=30)
-        b, _ = guarantee_pass(self._wide_pool(), wrong_ids=set(), cap=30)
-        self.assertEqual([c["id"] for c in a], [c["id"] for c in b])
-
-
-class TestCapIsACeiling(unittest.TestCase):
-    """A pool where (almost) every case is a must-keep must still respect the cap.
-
-    Regression: a mis-derived `size_edge` tag once marked all 10531 generated cases
-    `is_edge`, and the unbounded guarantee pass shipped every one of them.
-    """
-
-    def _all_edge_pool(self, n):
-        # `bucket` is left in place so guarantee_pass can be called directly;
-        # select_suite recomputes it either way.
-        pool = []
-        for i in range(n):
-            c = mk(f"c{i:04d}", "S1", "small", f"s{i % 7}", is_edge=True)
-            c["input"] = c["id"]
-            pool.append(c)
-        return pool
-
-    def test_guarantee_pass_never_exceeds_cap(self):
-        sel, rep = guarantee_pass(self._all_edge_pool(500), wrong_ids=set(), cap=150)
-        self.assertEqual(len(sel), 150)
-        self.assertEqual(rep["edges_total"], 500)
-        self.assertTrue(rep["capped"])
-
-    def test_select_suite_never_exceeds_cap(self):
-        # `hard` targets the cap, so this asserts the ceiling itself, not the target.
-        selected, rep = select_suite(self._all_edge_pool(500), set(), max_n=100, cap=150,
-                                     difficulty="hard")
-        self.assertEqual(len(selected), 150)
-        self.assertEqual(rep["selected"], 150)
-
-    def test_examples_survive_the_cap(self):
-        pool = self._all_edge_pool(500)
-        pool[400]["scenario"] = "example"      # not first in id order
-        selected, _rep = select_suite(pool, set(), max_n=100, cap=10)
-        self.assertIn("c0400", {c["id"] for c in selected})
-        self.assertEqual(len(selected), 10)
-
-    def test_kill_cover_wins_over_edges_under_cap(self):
-        # Only one case kills w1, and it is NOT an edge — it must still be selected
-        # even though 500 edges are competing for a cap of 5.
-        pool = self._all_edge_pool(500)
-        killer = mk("z999", "S1", "small", "s0", kills=("w1",), is_edge=False)
-        killer["input"] = killer["id"]
-        selected, rep = select_suite(pool + [killer], {"w1"}, max_n=100, cap=5)
-        self.assertIn("z999", {c["id"] for c in selected})
-        self.assertEqual(rep["kills_covered"], 1)
-
-    def test_truncation_is_reported_not_silent(self):
-        _sel, rep = guarantee_pass(self._all_edge_pool(500), wrong_ids=set(), cap=150)
-        rep.update({"generated": 500, "unique": 500, "selected": 150})
-        self.assertIn("CAPPED: kept 150/500 edge(s)", format_funnel(rep))
-
-
-class TestSelectSuite(unittest.TestCase):
-    def _pool(self, n):
-        pool = []
-        for i in range(n):
-            c = mk(f"c{i:03d}", "S1", "small", f"s{i % 5}", size=10)
-            c["input"] = c["id"]
-            c.pop("bucket")
-            pool.append(c)
-        return pool
-
-    def test_fills_up_to_the_difficulty_target_not_the_cap(self):
-        # Regression: the fill pass used to run to `cap`, so EVERY suite with a pool
-        # of 150+ shipped exactly 150 cases regardless of problem or difficulty.
-        for difficulty, expected in (("easy", 80), ("medium", 110), ("hard", 150)):
-            selected, rep = select_suite(self._pool(300), wrong_ids=set(), max_n=100,
-                                         cap=150, difficulty=difficulty)
-            self.assertEqual(len(selected), expected, difficulty)
-            self.assertEqual(rep["target"], expected, difficulty)
-
-    def test_target_holds_when_every_case_names_its_own_scenario(self):
-        # Regression: the FILL pass respected the target, but the GUARANTEE pass was
-        # bounded by `cap`. Real generators name each case uniquely ("case_17"), so
-        # slots == pool size and slot coverage alone ran to 150 — every problem, at
-        # every difficulty, shipped exactly the cap and difficulty scaling did nothing.
-        pool = self._pool(300)
-        for i, c in enumerate(pool):
-            c["scenario"] = f"case_{i}"
-            c["is_edge"] = i % 5 == 0
-        for difficulty, expected in (("easy", 80), ("medium", 110), ("hard", 150)):
-            selected, _rep = select_suite(copy.deepcopy(pool), wrong_ids=set(),
-                                          max_n=100, cap=150, difficulty=difficulty)
-            self.assertEqual(len(selected), expected, difficulty)
-
-    def test_unknown_difficulty_routes_to_medium(self):
-        _sel, rep = select_suite(self._pool(300), set(), max_n=100, difficulty="brutal")
-        self.assertEqual(rep["target"], fill_target("medium"))
-
-    def test_cap_overrides_the_target(self):
-        # An explicit --cap must win over both the target and the floor.
-        selected, rep = select_suite(self._pool(300), set(), max_n=100, cap=30,
-                                     difficulty="hard")
-        self.assertEqual(len(selected), 30)
-        self.assertEqual(rep["target"], 30)
-
-    def test_owner_count_collapses_the_bounds_onto_itself(self):
-        # How run_annotation applies an owner-supplied --count: cap = floor = count.
-        # The suite must then be EXACTLY that many cases, whether the number sits
-        # below the floor (30 < 80) or above the difficulty target (200 > 150).
-        for count, difficulty in ((30, "hard"), (200, "easy")):
-            selected, rep = select_suite(self._pool(300), set(), max_n=100,
-                                         cap=count, floor=count, difficulty=difficulty)
-            self.assertEqual(len(selected), count, count)
-            self.assertEqual(rep["target"], count, count)
-            self.assertFalse(rep["below_floor"], count)
-
-    def test_dedup_before_select(self):
-        a = mk("a", "S1", "small", "x"); a["input"] = "same"; a.pop("bucket")
-        b = mk("b", "S1", "small", "x"); b["input"] = "same"; b.pop("bucket")
-        selected, rep = select_suite([a, b], wrong_ids=set(), max_n=100, cap=150)
-        self.assertEqual(rep["unique"], 1)
-        self.assertEqual(len(selected), 1)
-
-    def test_thin_pool_is_complete_not_a_shortfall(self):
-        # Some problems have only a handful of legal inputs. Selection cannot invent
-        # more, so all 3 available cases ARE the suite — reported, never flagged.
-        selected, rep = select_suite(self._pool(3), wrong_ids=set(), max_n=100, cap=150, floor=25)
-        self.assertEqual(len(selected), 3)
-        self.assertTrue(rep["small_space"])
-        self.assertFalse(rep["below_floor"])
-        self.assertIn("pool under floor 25: shipped all 3", format_funnel(rep))
-
-    def test_deterministic(self):
-        pool = self._pool(200)
-        a, _ = select_suite(copy.deepcopy(pool), set(), 100)
-        b, _ = select_suite(copy.deepcopy(pool), set(), 100)
-        self.assertEqual([c["id"] for c in a], [c["id"] for c in b])
-
-
-class TestSizeKindNone(unittest.TestCase):
-    def test_flat_bucket_when_no_size_dimension(self):
-        cases = []
-        for i in range(6):
-            c = mk(f"c{i}", "S1", "small", f"s{i % 3}")
-            c["input"] = c["id"]
-            c.pop("bucket")
-            cases.append(c)
-        selected, rep = select_suite(cases, set(), max_n=0, size_kind="none")
-        self.assertTrue(all(c["bucket"] == "flat" for c in selected))
-        self.assertEqual(rep["slots_total"], 3)   # subtask x scenario only
-        self.assertEqual(rep["size_kind"], "none")
-
-
-class TestExhaustive(unittest.TestCase):
-    def test_small_exhaustive_is_complete_not_below_floor(self):
-        cases = []
-        for i in range(10):
-            c = mk(f"c{i:02d}", "S1", "small", f"s{i}")
-            c["input"] = c["id"]
-            c.pop("bucket")
-            cases.append(c)
-        selected, rep = select_suite(cases, set(), max_n=100, floor=25,
-                                     space_mode="exhaustive")
-        self.assertEqual(len(selected), 10)          # shipped the whole space
-        self.assertFalse(rep["below_floor"])         # not a shortfall
-        self.assertTrue(rep["exhaustive_complete"])
-
-    def test_undeclared_tiny_pool_is_also_complete(self):
-        # Same 8-case reality, but the generator never declared space_mode. The pool
-        # size is the evidence: you cannot select cases that do not exist.
-        cases = []
-        for i in range(8):
-            c = mk(f"c{i}", "S1", "small", f"s{i}")
-            c["input"] = c["id"]
-            c.pop("bucket")
-            cases.append(c)
-        selected, rep = select_suite(cases, set(), max_n=100, floor=25,
-                                     space_mode="sampled")
-        self.assertEqual(len(selected), 8)
-        self.assertTrue(rep["small_space"])
-        self.assertFalse(rep["below_floor"])
-
-
-class TestBounds(unittest.TestCase):
-    def test_default_bounds(self):
-        self.assertEqual((CASE_FLOOR, CASE_CAP), (80, 150))
-
-    def test_target_stays_inside_the_bounds(self):
-        for d in ("easy", "medium", "hard", None, "nonsense"):
-            self.assertTrue(CASE_FLOOR <= fill_target(d) <= CASE_CAP, d)
-
-    def test_target_clamped_when_cap_is_below_the_floor(self):
-        self.assertEqual(fill_target("hard", cap=10, floor=60), 10)
-
-
-class TestFunnel(unittest.TestCase):
-    def test_one_line_summary(self):
-        rep = {"generated": 250, "unique": 231, "selected": 150, "edges": 9, "tle": 4,
-               "slots_filled": 30, "slots_total": 30, "kills_covered": 6, "kills_total": 6,
-               "uncatchable": [], "below_floor": False}
-        s = format_funnel(rep)
-        self.assertIn("generated 250", s)
-        self.assertIn("unique 231", s)
-        self.assertIn("selected 150", s)
-        self.assertIn("slots 30/30", s)
-        self.assertIn("kills 6/6", s)
-
-    def test_flags_uncatchable_and_floor(self):
-        rep = {"generated": 30, "unique": 20, "selected": 18, "edges": 2, "tle": 0,
-               "slots_filled": 5, "slots_total": 6, "kills_covered": 4, "kills_total": 5,
-               "uncatchable": ["w5"], "below_floor": True}
-        s = format_funnel(rep)
-        self.assertIn("BELOW FLOOR", s)
-        self.assertIn("uncatchable: w5", s)
 
 
 if __name__ == "__main__":

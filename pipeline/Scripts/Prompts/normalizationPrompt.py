@@ -1,18 +1,48 @@
 from Prompts.dataTypePrompt import get_data_type_selection_rules
 
+# Emitted only for open-ended problems: they accept more than one correct answer, so
+# grading cannot compare stdout to one stored string. Both rules below are silently fatal
+# — the driver does `from solution import solution`, and at grading time that class is the
+# STUDENT's, so a checker living inside it would grade every student against themselves.
+_OPEN_ENDED_CHECKER_BLOCK = '''
+**OPEN-ENDED PROBLEM — ALSO EMIT A CHECKER (mandatory):**
+This problem accepts more than one correct answer, so grading cannot compare text. After
+the `solution` class, append EXACTLY these two functions, with these EXACT names:
 
-def get_normalization_prompt(code, language, description_signature=None, desc_response=None, question_type="standard"):
+```
+def reference_answer(stdin_text):
+    """Return the exact stdout (no trailing newline) the reference prints for stdin_text."""
+
+def is_valid_answer(stdin_text, candidate_stdout):
+    """True iff candidate_stdout is a correct answer for the input in stdin_text."""
+```
+
+- Both MUST be **module-level** functions, NOT methods of `solution` and NOT nested.
+- `reference_answer` MUST be **self-contained**: it may not call, instantiate or reference
+  `solution` in any way. Duplicate whatever logic it needs.
+- `is_valid_answer` MUST verify the answer against the problem's real condition (e.g. that
+  the returned indices exist, are distinct and sum to the target). It MUST NOT simply
+  compare against `reference_answer` — that would reject every valid alternative and defeat
+  the point.
+- `is_valid_answer(stdin, reference_answer(stdin))` MUST be True for every valid input.
+- Keep the existing `solution` class and its stdin/stdout `main()` exactly as instructed
+  above; the two functions are ADDITIONAL.
+'''
+
+
+def get_normalization_prompt(code, language, description_signature=None, desc_response=None, question_type="standard", open_ended=False):
     """
     Prompt to normalize user code to follow strict coding standards
     while preserving logic and I/O format.
-    
+
     Args:
         code: User's source code
         language: Programming language
         description_signature: Optional dict with function name/params from description
         desc_response: The generated problem description string for validating input formatting
+        open_ended: The problem admits several correct answers -> also emit the checker
     """
-    
+
     data_structure_rules = ""
     if question_type in ["binary tree", "linked list"]:
         data_structure_rules = f"""
@@ -98,7 +128,10 @@ PROBLEM DESCRIPTION:
 3. **Remove Type Hints**: Strip all type hints like `list[int]`, `-> int`, etc., from function signatures and variable declarations.
 4. **Compact Code**: Remove excessive blank lines
 4. **Preserve logic**: Exact logic, variable names, algorithm.
-5. **CRITICAL - Optimal I/O**: You MUST update the driver code to use fast I/O (`sys.stdin.read().split()` or `sys.stdin.read().splitlines()` as appropriate) that matches the EXACT input format (space-separated vs newline-separated, token order, which values are even present) shown in the `PROBLEM DESCRIPTION`'s examples — not merely what the original driver happened to read. Do NOT enforce JSON parsing unless the description's examples are JSON. Use `sys.stdout.write()` for printing. Match the source code's output formatting logic strictly. Do NOT disturb the inner logic of `class solution`.
+5. **CRITICAL - Optimal I/O**: You MUST update the driver code to use fast I/O (`sys.stdin.read().split()` or `sys.stdin.read().splitlines()` as appropriate). Take the TOKEN ORDER and which values are present from the `PROBLEM DESCRIPTION`'s examples. Use `sys.stdout.write()` for printing. Match the source code's output formatting logic strictly. Do NOT disturb the inner logic of `class solution`.
+   * **stdin is RAW TOKENS, never `name = value`.** A function-based description RENDERS its examples as assignments (`numCourses = 6`, `arr = [1, 2, 3]`) because that reads better for a human. That is a DISPLAY form. The platform driver writes raw whitespace-separated values — `6`, then `1 2 3` — and never the assignment text. So take the token ORDER from the examples and NEVER the syntax: no `.split("=")`, no stripping of variable names, no `ast.literal_eval` of a displayed list.
+   * Why this is CRITICAL and not stylistic: a reference that parses the display form still reproduces every stated answer, so it grounds clean, verifies clean and passes every execution-based check — then scores zero against the real driver. That happened on 2026-08-18 and only a text audit caught it.
+   * Do NOT enforce JSON parsing unless the description's examples really are JSON on the wire.
 """
     elif language.lower() in ['javascript', 'node.js', 'nodejs', 'js']:
         lang_rules = """
@@ -129,12 +162,19 @@ The problem description REQUIRES these specific names:
 6. This is a HARD REQUIREMENT.
 """
 
+    # Python-shaped, so it is emitted only for a Python reference. The other three
+    # languages get their own shape when the checker is translated (conversionPrompt).
+    checker_rules = ""
+    if open_ended and language.lower() in ['python', 'py']:
+        checker_rules = _OPEN_ENDED_CHECKER_BLOCK
+
     prompt = f"""You are a Code Normalizer. Your task is to normalize the provided code to follow strict coding standards.
 
 {lang_rules}
 {signature_rules}
 {desc_rules}
 {data_structure_rules}
+{checker_rules}
 
 {get_data_type_selection_rules()}
 
@@ -146,6 +186,7 @@ The problem description REQUIRES these specific names:
 - **ONLY normalize**: libraries, class names, remove comments, compact formatting, and correct the I/O to match the description.
 - **CRITICAL - PRINTING FORMAT**: All code (especially Python) MUST print arrays/lists **WITHOUT spaces** after commas (e.g., `[1,2,3]` not `[1, 2, 3]`).
   - For Python, use `json.dumps(res, separators=(',', ':'))` or manual formatting if needed.
+  - This is the SAME form the description's Example **Output:** blocks use, so statement and code agree byte-for-byte. The spaced form `[1, 2, 3]` belongs only to prose and to named-variable Example **Input:** blocks, which are a display convenience and never the wire format.
 - **CRITICAL - HELPER FUNCTIONS**: Do NOT use nested functions or lambda functions (e.g., `std::function` in C++, inner `def` in Python, or arrow functions in JS) for helper logic. If the source uses nested helpers, extract them as separate methods within the `solution` class.
 
 **INPUT CODE:**

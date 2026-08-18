@@ -62,8 +62,20 @@ __pycache__/
 
 # pipeline runtime / generated workspaces (per-problem Inputs/Outputs, usage counters)
 pipeline/problems/
-pipeline/Outputs/usage_tracker.json
 pipeline/temp_compiler_sandbox/
+
+# The scratch problem slot. pipeline/Inputs holds whichever single problem is being
+# prepared right now, so it changes on every run and belongs to nobody.
+# topics_list.txt is NOT scratch: it is a shared reference input that
+# createTempWorkspace copies into every run's workspace, so it stays tracked. Ignoring
+# the whole directory would leave a fresh clone unable to generate topics.
+pipeline/Inputs/problem.md
+pipeline/Inputs/solution.*
+
+# Everything the pipeline generates. Regenerated from Inputs on every run, so a
+# checked-in copy is only ever someone else's leftover state.
+pipeline/Outputs/*
+!pipeline/Outputs/.gitkeep
 
 # stray working notes
 /clear picture.md
@@ -85,3 +97,7 @@ scripts/import-db.mts
 /pipeline/Scripts/tests/test_freelancer_kit.py
 /freelancer-function-practice/
 /freelancer-function-practice.zip
+
+# drizzle-kit scratch output. This repo uses `push`, not generate/migrate, so nothing
+# here is a source artifact — it only appears when someone runs the CLI.
+drizzle/

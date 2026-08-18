@@ -150,7 +150,9 @@ def _run_solution_validation(description: str, optimal_solution: str, brute_cont
             e for e in (slm.get("examples") or [])
             if isinstance(e, dict) and e.get("input")
         ]
-        exec_res = validate_examples(examples, optimal_solution, brute_content, description)
+        from open_ended_checker import checker_for
+        exec_res = validate_examples(examples, optimal_solution, brute_content, description,
+                                     checker=checker_for("Outputs"))
         optimal_v = slm.get("optimal") or {}
         brute_v = slm.get("brute") or {}
         _merge_slm_into_marker({
@@ -182,6 +184,81 @@ def _run_solution_validation(description: str, optimal_solution: str, brute_cont
         print(f"⚠ solution validation (advisory) skipped — {type(e).__name__}: {e}")
 
 
+def _verified_contract_pairs(description: str = "", optimal_path: str = "") -> list[dict]:
+    """The VERIFIED (stdin, expected) pairs for the CURRENT reference solution, or [].
+
+    Derived here rather than read off disk. A stored io_contract.json is frozen during the
+    DESCRIPTION step, against the pre-normalization reference; the naming step then
+    rewrites how that reference reads stdin, which is most of what normalization does. So
+    a stored contract can hold `name = value` display text as its `stdin` while the
+    reference now reads raw tokens — and testing the current solution against it produces
+    a confident, entirely false "the reference FAILS its own worked examples".
+
+    Only a verified contract is usable: an unverified one means no candidate layout
+    reproduced the stated answer, so its `stdin` values are guesses. Returns [] on any
+    failure — this is a coverage improvement, never a new hard failure.
+    """
+    contract = None
+    if description and optimal_path:
+        try:
+            from testcase_manager_v4 import verify_io_contract
+            contract = verify_io_contract(description, optimal_path, "Outputs")
+        except Exception as e:
+            print(f"(could not derive the I/O contract here: {e})")
+            contract = None
+    if contract is None:
+        try:
+            with open(os.path.join("Outputs", "io_contract.json"), encoding="utf-8") as f:
+                contract = json.load(f)
+        except (OSError, ValueError):
+            return []
+    if not isinstance(contract, dict) or not contract.get("verified"):
+        return []
+    return [p for p in (contract.get("pairs") or [])
+            if isinstance(p, dict) and str(p.get("stdin") or "").strip()]
+
+
+def _dedupe_failures(failures: list[dict]) -> list[dict]:
+    """Drop repeats, preserving order.
+
+    Both ground-truth sources can name the same input: a raw-stdin description's Examples
+    are visible to `optimal_example_failures` AND frozen into the I/O contract. Reporting
+    each twice makes one defect look like two, which is exactly the wrong impression to
+    give in a banner that says the reference is buggy.
+    """
+    seen, out = set(), []
+    for f in failures:
+        key = (f.get("input"), f.get("got"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f)
+    return out
+
+
+def _contract_ground_truth_failures(optimal_solution: str, pairs: list[dict]) -> list[dict]:
+    """Cases where the optimal does NOT print the description's stated answer.
+
+    Compared with `display_value_tokens`, matching how verify_io_contract accepted the
+    layout: the description writes a RETURN value (`[1, 2]`, `"NO"`) and the solution
+    PRINTS it (`1 2`, `NO`), so brackets, quotes, commas and case are display-only. A
+    byte comparison here would flag every function problem as buggy.
+    """
+    from benchmark_suite import display_value_tokens, normalize, run_solution
+
+    fails: list[dict] = []
+    for p in pairs:
+        stdin_str = p["stdin"]
+        want = str(p.get("expected") or "")
+        got, status = run_solution(optimal_solution, stdin_str)
+        if status != "ok":
+            fails.append({"input": stdin_str, "expected": want, "got": f"<{status}>"})
+        elif display_value_tokens(normalize(got)) != display_value_tokens(want):
+            fails.append({"input": stdin_str, "expected": want,
+                          "got": normalize(got)[:120]})
+    return fails
+
+
 def _crosscheck_optimal_vs_brute(description: str, optimal_solution: str, brute_content: str) -> None:
     """Run the just-generated brute against the optimal on the example inputs plus a
     structure-aware small-input sweep. Always writes a fresh verdict to
@@ -194,19 +271,36 @@ def _crosscheck_optimal_vs_brute(description: str, optimal_solution: str, brute_
             crosscheck_optimal_brute,
             extract_example_inputs,
             optimal_example_failures,
-            is_open_ended_problem,
         )
+        from open_ended_checker import checker_for
     except Exception as e:  # pragma: no cover - import guard
         print(f"(optimal-vs-brute cross-check skipped: cannot import benchmark_suite: {e})")
         _write_crosscheck_marker("skipped", f"could not import benchmark_suite: {e}")
         return
 
+    # 0. Executable example stdins. `extract_example_inputs` / `optimal_example_failures`
+    #    both SKIP named-variable example blocks, and that display form is the only one a
+    #    function-type description uses — so on every function problem they returned []
+    #    and this whole cross-check compared ZERO inputs while printing "PASSED". The
+    #    conversion is already solved: verify_io_contract runs candidate stdin layouts
+    #    against the reference and freezes the one reproducing the stated answer into
+    #    io_contract.json. Reuse those verified pairs instead of re-deriving them.
+    contract_pairs = _verified_contract_pairs(
+        description, os.path.join("Outputs", "generatedFullCode", "PYTHON.py"))
+
     # 1. GROUND TRUTH FIRST. Does the optimal reproduce the description's OWN worked
     #    examples (the canonical input→output pairs)? A failure here is definitive,
     #    brute-independent proof the optimal is buggy — and it cannot be explained
     #    away by tie-breaking, because the description states the exact expected output.
+    #    Worth re-running even though verify_io_contract already checked it: the contract
+    #    is frozen during the DESCRIPTION step and the naming step rewrites PYTHON.py
+    #    afterwards, so this is the first check the post-normalization code faces.
     try:
         example_failures = optimal_example_failures(optimal_solution, description)
+        if contract_pairs:
+            example_failures += _contract_ground_truth_failures(optimal_solution,
+                                                                contract_pairs)
+        example_failures = _dedupe_failures(example_failures)
     except Exception as e:
         print(f"(example ground-truth check skipped: {e})")
         example_failures = []
@@ -231,11 +325,9 @@ def _crosscheck_optimal_vs_brute(description: str, optimal_solution: str, brute_
         return
 
     # The optimal reproduces every worked example → it is NOT buggy on the canonical
-    # cases. From here a brute disagreement can only be a *different-but-valid* answer.
-    if is_open_ended_problem(description):
-        print("Optimal-vs-brute cross-check skipped (problem accepts multiple valid outputs).")
-        _write_crosscheck_marker("skipped", "problem accepts multiple valid outputs")
-        return
+    # cases. From here a brute disagreement can only be a *different-but-valid* answer —
+    # and the checker below tells the two apart, so the sweep runs on open-ended problems
+    # too instead of being skipped wholesale.
 
     # 2. Brute sweep is now ADVISORY. A correct optimal can legitimately differ from the
     #    brute on problems that admit several valid answers (e.g. "return the indices of
@@ -245,7 +337,25 @@ def _crosscheck_optimal_vs_brute(description: str, optimal_solution: str, brute_
     #    "mismatch" verdict here — only a non-blocking advisory note.
     try:
         examples = extract_example_inputs(description)
-        mismatches = crosscheck_optimal_brute(optimal_solution, brute_content, examples)
+        if not examples:
+            # Function-type problem: the description's blocks are display-form, so the
+            # extractor found nothing. Without a seed `structured_random_inputs` cannot
+            # infer the input shape either, so `candidates` was empty and the sweep
+            # silently compared nothing.
+            examples = [p["stdin"] for p in contract_pairs]
+        if not examples:
+            print("(brute sweep skipped: no executable example inputs — the description "
+                  "has no raw-stdin Examples and io_contract.json is missing or "
+                  "unverified, so there is no seed to infer the input shape from)")
+            _write_crosscheck_marker(
+                "skipped",
+                "optimal matches all worked examples; brute sweep had no executable "
+                "example inputs to seed from (no raw-stdin Examples, no verified "
+                "io_contract.json)")
+            return
+        mismatches = crosscheck_optimal_brute(optimal_solution, brute_content, examples,
+                                              checker=checker_for("Outputs"))
+        print(f"(brute sweep seeded with {len(examples)} example input(s))")
     except Exception as e:
         print(f"(brute sweep skipped: {e})")
         _write_crosscheck_marker("ok", f"optimal matches all worked examples; brute sweep skipped: {e}")

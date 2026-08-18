@@ -191,12 +191,13 @@ CLASS NAMING — CRITICAL:
 - Python class name: `solution` (lowercase s) — always.
 - Java class name: `Solution` (uppercase S) — always.
 - JavaScript class name: `Solution` (uppercase S) — always.
+- Java driver class: `class Main` — NEVER `public class Main` (the editorial file is not named Main.java, so a public Main will not compile).
 - For Tree and Linked List problems, the `Node` class is defined OUTSIDE and ABOVE the solution class; the solution class itself is STILL always present and wraps all solution methods.
 
 DRIVER / main() RULE — CRITICAL:
-- At the bottom of EACH language, include a `main()` / driver that is FULLY COMMENTED OUT. This is a generic template only — DO NOT paste or reconstruct the real driver harness from the provided driver code.
-- main() must read ALL input dynamically from stdin — NEVER hardcode any value. C++: use `cin`. Python: use `input()` / `map()`. Java: use `Scanner` (`nextInt()` / `next()`). JavaScript: use `fs.readFileSync(0)` and parse the data array.
-- No print/output statements and no solution logic outside the commented main block.
+- FUNCTION-BASED problems (the user message includes DRIVER CODE): at the bottom of EACH language, include a `main()` / driver that is FULLY COMMENTED OUT. This is a generic template only — DO NOT paste or reconstruct the real driver harness from the provided driver code. No print/output statements and no solution logic outside the commented main block.
+- NON-FUNCTION problems (the user message's DRIVER CODE section says "none — this is a non-function problem"): the main()/driver is LIVE, never commented out. It must call the solution and PRINT the result to stdout, so the program runs standalone and produces the expected output exactly as the problem specifies.
+- Either way, main() must read ALL input dynamically from stdin — NEVER hardcode any value. C++: use `cin`. Python: use `input()` / `map()`. Java: use `Scanner` (`nextInt()` / `next()`). JavaScript: use `fs.readFileSync(0)` and parse the data array.
 
 STANDARD TEMPLATE (ARRAY / STRING PROBLEMS) — replace methodName/params/returnType with the real ones:
 <MultiLanguageCodeBlock>
@@ -252,7 +253,7 @@ class Solution {
 }
 
 /*
-public class Main {
+class Main {
     public static void main(String[] args) {
         Scanner scanner = new Scanner(System.in);
         int n = scanner.nextInt();
@@ -292,6 +293,13 @@ main();
 */
 ```
 </MultiLanguageCodeBlock>
+
+NON-FUNCTION TEMPLATE — identical to the templates here, except the main()/driver block is UNCOMMENTED and prints the answer:
+- C++: drop the `/* */` around `int main()`; it ends with `cout << result` (plus `endl`/`"\n"` when the expected output needs it) then `return 0;`.
+- Python: drop the `''' '''` wrapper so the driver lines run at module level, ending in `print(result)`. If you use a `if __name__ == "__main__":` guard, it must be live, not commented.
+- Java: drop the `/* */` around `class Main`; `main` ends with `System.out.println(result)`.
+- JavaScript: drop the `/* */` around `function main()`; it ends with `console.log(result)` and the `main();` call stays live.
+Print EXACTLY what the problem's expected output requires — same order, separators, and line breaks; no labels or extra prompts.
 
 TREE / LINKED LIST TEMPLATE — when the problem involves Trees or Linked Lists, define the `Node` class OUTSIDE and ABOVE the solution class. Still emit all four languages inside a single `<MultiLanguageCodeBlock>`:
 <MultiLanguageCodeBlock>
@@ -360,7 +368,7 @@ class Solution {
 }
 
 /*
-public class Main {
+class Main {
     public static void main(String[] args) {
         Scanner scanner = new Scanner(System.in);
         // dynamically read tree/list input from stdin, build the structure
@@ -422,7 +430,7 @@ STEP 5 — GLOBAL FORMATTING RULES
 - NEVER bold variable names anywhere — use backticks instead.
 - NEVER use backticks inside the Intuition or Approach sections.
 - Use backticks for identifiers, function names, and numeric values ONLY inside the Complexity Analysis section (inside Pseudocode and Code Implementation the content is already raw code, so no backticks there).
-- NEVER skip any approach you identified. NEVER leave main() uncommented. NEVER mix solution logic into main(). NEVER hardcode a value inside main().
+- NEVER skip any approach you identified. NEVER mix solution logic into main(). NEVER hardcode a value inside main(). For function-based problems NEVER leave main() uncommented; for non-function problems NEVER leave it commented — it must run and print.
 - NEVER add any text before the title or after the last Complexity Analysis. Output ONLY the editorial Markdown — do not wrap the whole document in a code fence.
 
 ═══════════════════════════════════════════════════
@@ -433,7 +441,7 @@ STEP 6 — FINAL CHECKLIST (verify before finishing)
 - Each solution has all five sections (Intuition, Approach, Pseudocode, Code Implementation, Complexity Analysis)?
 - Intuition is plain English with no code keywords and no backticks? Approach is plain-English bullets within the difficulty length limits?
 - Pseudocode is inside `<CodeBlock language={customtext} showNumberOfLines={15} fontStyle={Normal Code}>` wrapping a single ```pseudocode fence, uses only `/* */` comments, and has a comment above every logical block?
-- Code is inside `<MultiLanguageCodeBlock>` with cpp/python/java/js fences, real method name/signature, correct class names, and a fully commented-out dynamic-input main()?
+- Code is inside `<MultiLanguageCodeBlock>` with cpp/python/java/js fences, real method name/signature, correct class names (Java driver is `class Main`, never `public class Main`), and a dynamic-input main() that is commented out for function-based problems / live and printing for non-function problems?
 - Complexity Analysis uses the exact bold-header + `*` sub-bullet format with every `O(...)` in backticks?
 - No problem statement, no dividers, no tables, no preamble or conclusion?
 

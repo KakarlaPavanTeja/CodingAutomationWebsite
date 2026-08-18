@@ -101,16 +101,37 @@ class TestValidateExamples(unittest.TestCase):
         self.assertFalse(res["optimal_ok"])
         self.assertFalse(res["brute_ok"])
 
-    def test_open_ended_never_fails_brute(self):
+    def test_the_checker_decides_open_ended_agreement(self):
+        """Open-endedness used to short-circuit `brute_agrees` to True — the check
+        passed without being run. The checker answers the same question for real."""
         from validate_solutions import validate_examples
         examples = [{"input": "1\n", "expected_output": "1\n"}]
+
+        class Checker:
+            @staticmethod
+            def reference_answer(stdin_text):
+                return "1"
+
+            @staticmethod
+            def is_valid_answer(stdin_text, candidate_stdout):
+                return candidate_stdout.strip() in ("1", "99")
 
         def fake_batch(code, inputs):
             return [("1\n", "ok")] if code == "OPT" else [("99\n", "ok")]
 
-        res = validate_examples(examples, "OPT", "BRUTE", "Return any valid answer.", _batch=fake_batch)
-        self.assertTrue(res["example_results"][0]["brute_agrees"])
-        self.assertTrue(res["brute_ok"])
+        accepted = validate_examples(examples, "OPT", "BRUTE", "Return any valid answer.",
+                                     _batch=fake_batch, checker=Checker)
+        self.assertTrue(accepted["example_results"][0]["brute_agrees"])
+        self.assertTrue(accepted["brute_ok"])
+
+        def rejected_batch(code, inputs):
+            return [("1\n", "ok")] if code == "OPT" else [("7\n", "ok")]
+
+        rejected = validate_examples(examples, "OPT", "BRUTE", "Return any valid answer.",
+                                     _batch=rejected_batch, checker=Checker)
+        self.assertFalse(rejected["example_results"][0]["brute_agrees"],
+                         "an answer the checker rejects is a real disagreement")
+        self.assertFalse(rejected["brute_ok"])
 
     def test_no_examples_is_ok(self):
         from validate_solutions import validate_examples

@@ -1,9 +1,16 @@
 from Prompts.dataTypePrompt import get_data_type_selection_rules
 
 
-def get_splitting_prompt(language, code, desc_response=None, question_type="standard"):
+def get_splitting_prompt(language, code, desc_response=None, question_type="standard",
+                         open_ended=False):
     """
     Returns the system and user prompt for splitting solution code.
+
+    `open_ended` means the problem admits more than one correct answer, so the driver has to
+    grade with the checker the reference carries instead of comparing against one stored
+    string. Phase 1 is Python only — the rules block below is Python source, and pasting it
+    into a C++/Java/Node.js prompt would ask the model to emit Python. Task 9 adds the other
+    three; until then those languages fall through to the ordinary single-answer template.
     """
     node_injection_rules = ""
     if question_type in ["binary tree", "linked list"]:
@@ -193,6 +200,39 @@ class Node {
 }
 """
 
+    open_ended_rules = ""
+    if open_ended and language == "Python":
+        open_ended_rules = """
+**OPEN-ENDED PROBLEM — THE DRIVER GRADES WITH A CHECKER:**
+The source you were given contains two module-level functions, `reference_answer(stdin_text)`
+and `is_valid_answer(stdin_text, candidate_stdout)`. They are NOT part of the user's task.
+
+1. Put BOTH functions **verbatim** in `driver_code`, between the markers
+   `# Checker Area Start` and `# Checker Area End`, immediately before the Input Area.
+   Keep their names EXACTLY — the driver calls them by name.
+2. They MUST NOT appear in `solution_code` or in `default_code`. Those are shown to the
+   user and would hand them the reference implementation.
+3. Immediately after the `# Dont change or modify any lines before this point` line, add:
+       RAW_STDIN = sys.stdin.read()
+       sys.stdin = io.StringIO(RAW_STDIN)
+   and add `import io` to the driver's imports. The Input Area then parses from RAW_STDIN
+   through the normal `input()` calls, unchanged.
+4. The Output Area becomes EXACTLY this shape:
+       _candidate = str(result)
+       if is_valid_answer(RAW_STDIN, _candidate):
+           sys.stdout.write(reference_answer(RAW_STDIN) + '\\n')
+       else:
+           sys.stdout.write(_candidate + '\\n')
+   Replace `str(result)` with whatever stringification the single-answer driver would have
+   printed, so an invalid answer is echoed back in exactly the format the user produced.
+5. **NEVER print `VALID`, `INVALID`, `CORRECT`, `WRONG` or any other verdict word.** On an
+   invalid answer the driver prints the USER'S OWN output so they can see what they
+   produced. A verdict hides exactly that.
+6. The checker calls stay in the Output Area, AFTER `end_time_ns`. Nothing may go between
+   `start_time_ns` and `end_time_ns` — that window is the user's measured runtime.
+7. `debugger_code` keeps its ordinary printing. It is a local convenience, not a grader.
+"""
+
     if language == "Node.js":
         instantiation_rules = "**CRITICAL - STATIC METHOD REQUIREMENT:**\n- You MUST use `static` methods for the core logic functions inside the `Solution` class.\n- You MUST NOT instantiate the class in the Driver code. Call the method directly on the class.\n  - Node.js: `const result = Solution.FUNCTION_NAME();`\n"
     else:
@@ -215,7 +255,7 @@ class Node {
 The generated Driver Code MUST print outputs EXACTLY as shown in the Problem Description below. 
 If the description says the result is a raw string, print/cout it directly. Do NOT wrap in quotes unless explicitly shown in the Examples.
 Match the return type of the main function to the output printing logic.
-
+{open_ended_rules}
 (Output Format):
 Return a strictly valid JSON object with keys: "default_code", "solution_code", "driver_code", "debugger_code".
 Do NOT return markdown. Return ONLY the JSON string.

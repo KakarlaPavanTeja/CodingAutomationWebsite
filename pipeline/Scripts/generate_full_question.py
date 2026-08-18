@@ -14,7 +14,10 @@ from Prompts.topicsPrompt import get_topics_prompt
 
 from llm_client import call_llm
 from usage_tracker import update_usage
-from code_cleaner import clean_generated_code
+from problem_flags import (OPEN_ENDED_MARKER_RE, checker_defects, load_open_ended,
+                           stdin_parsing_defects,
+                           save_problem_flags, split_open_ended_marker)
+from code_cleaner import clean_generated_code, strip_code_fence
 
 # Directory constants
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -65,7 +68,7 @@ def _table_to_bullets(table_lines):
 
 
 def normalize_renderer_safe(text):
-    """Deterministic renderer-safe normalization for the 'none' scenario description.
+    """Deterministic renderer-safe normalization, applied to EVERY description.
 
     The platform's custom markdown renderer cannot display ATX headings, horizontal
     rules, language-tagged code fences, or markdown tables. This pass guarantees
@@ -128,12 +131,17 @@ def normalize_renderer_safe(text):
 
 
 def parse_problem_md(file_path):
-    """Parse problem.md to extract metadata"""
+    """Parse problem.md to extract metadata.
+
+    Read as UTF-8 explicitly: problem statements routinely carry ≤, ≥, ×, · and other
+    non-ASCII from the notation-normalization rules, and relying on the platform's
+    default encoding makes the step's success depend on the machine's locale.
+    """
     if not os.path.exists(file_path):
         print(f"Error: {file_path} not found.")
         sys.exit(1)
-    
-    with open(file_path, 'r') as f:
+
+    with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
     
     lines = content.split('\n')
@@ -204,25 +212,48 @@ def to_camel_case(name):
     return ''.join(_norm(t, i == 0) for i, t in enumerate(tokens))
 
 
+def _first_json_object(text):
+    """The first syntactically complete JSON object in `text`, or None.
+
+    Prefers an object carrying `function_name` when several are present.
+
+    Replaces `re.search(r'\\{.*\\}', text, re.DOTALL)`, which is GREEDY: it spans from
+    the first `{` to the LAST `}` in the reply, so a model that emits the object plus
+    any other braced text — a second candidate, an inline example, a trailing note —
+    produced a span that is not valid JSON. That used to degrade to "no signature" and
+    warn; naming now hard-fails, so a parse this fragile would block the pipeline on a
+    reply that actually contained a perfectly good object. `raw_decode` stops at the
+    end of the first complete value and handles nested braces and strings correctly.
+    """
+    decoder = json.JSONDecoder()
+    fallback = None
+    for i, ch in enumerate(text):
+        if ch != '{':
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text[i:])
+        except ValueError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if str(obj.get("function_name") or "").strip():
+            return obj
+        if fallback is None:
+            fallback = obj
+    return fallback
+
+
 def _parse_signature(raw):
     """Robustly parse the function-signature JSON the extractor returns.
 
-    The model may wrap the JSON in a code fence or add stray prose, so we strip
-    fences and grab the first {...} block before parsing. Returns a normalized
-    dict (with a non-empty function_name and a clean parameter list) or None.
+    The model may wrap the JSON in a code fence or add stray prose, so strip fences and
+    take the first complete {...} object before parsing. Returns a normalized dict
+    (with a non-empty function_name and a clean parameter list) or None.
     """
     if not raw:
         return None
-    text = raw.strip()
-    if text.startswith("```"):
-        # Drop the opening fence line and any trailing fence.
-        text = text.split('\n', 1)[-1].rsplit('```', 1)[0]
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    if match:
-        text = match.group(0)
-    try:
-        data = json.loads(text)
-    except Exception:
+    data = _first_json_object(strip_code_fence(raw))
+    if data is None:
         return None
     if not isinstance(data, dict):
         return None
@@ -313,6 +344,15 @@ def _working_code_path(detected_lang):
     return os.path.join(_generated_full_code_dir(), FILE_MAPPINGS[key])
 
 
+def _read_text(path):
+    """Read a file, tolerating its absence — a missing reference must not kill the step."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 def _description_path():
     return os.path.join(OUTPUT_DIR, 'generated_description.md')
 
@@ -383,22 +423,165 @@ def _save_solution_file(lang_key, code):
 
 
 def detect_user_solution():
-    """Find user's solution file in Inputs/ directory"""
-    extensions = {
-        '*.py': 'python',
-        '*.cpp': 'c++',
-        '*.java': 'java',
-        '*.js': 'node.js'
-    }
-    
-    for pattern, lang in extensions.items():
-        matches = glob.glob(os.path.join(INPUT_DIR, pattern))
-        if matches:
-            return matches[0], lang
-    
+    """Find the user's Python reference solution in Inputs/. Returns (path, 'python').
+
+    PYTHON ONLY, enforced rather than assumed. The rest of the pipeline has no path for
+    any other source language: there is no `translate_python` sub-step (the translation
+    targets are defined by EXCLUDING python — see getPipelineTargetLanguages), so
+    `Outputs/generatedFullCode/PYTHON.py` would never be written, and both
+    generate_brute_force and testcase_manager_v4 exit on its absence. This used to accept
+    .cpp/.java/.js and fail three steps later on a missing file, while the description and
+    naming steps carried non-Python branches implying support that never existed.
+    """
+    exact = os.path.join(INPUT_DIR, 'solution.py')
+    if os.path.exists(exact):
+        return exact, 'python'
+
+    matches = sorted(glob.glob(os.path.join(INPUT_DIR, '*.py')))
+    if matches:
+        # Prefer solution.py above; anything else is a guess worth naming out loud.
+        print(f"Warning: no Inputs/solution.py — using {os.path.basename(matches[0])}"
+              + (f" (ignoring {len(matches) - 1} other .py file(s))" if len(matches) > 1 else ""))
+        return matches[0], 'python'
+
+    others = sorted(
+        os.path.basename(p)
+        for pattern in ('*.cpp', '*.java', '*.js')
+        for p in glob.glob(os.path.join(INPUT_DIR, pattern))
+    )
+    if others:
+        print(f"Error: the reference solution must be Python. Found: {', '.join(others)}.")
+        print("This pipeline translates Python INTO C++/Java/Node.js; it cannot start from"
+              " them (no PYTHON.py would ever be produced, and the testcase and brute-force"
+              " steps both require it).")
+        sys.exit(1)
+
     print("Error: No solution file found in Inputs/")
-    print("Please provide one of: solution.py, solution.cpp, Solution.java, solution.js")
+    print("Please provide Inputs/solution.py")
     sys.exit(1)
+
+MAX_DESCRIPTION_ATTEMPTS = 3
+
+_DESC_REPAIR_SYSTEM = (
+    "You are correcting a coding-problem statement. The reference solution is the source "
+    "of truth: it RAN and printed the outputs shown below. Rewrite the statement so its "
+    "worked Examples show what the reference actually prints, and so the Output Format "
+    "describes that. Change nothing else — same scenario, same variable names, same "
+    "constraints. Return the FULL corrected statement in the same markdown format, and "
+    "keep the trailing OPEN_ENDED marker line."
+)
+
+_CODE_REPAIR_SYSTEM = (
+    "You are repairing a reference solution that CRASHED or timed out on the problem "
+    "statement's own worked Example inputs. Do NOT change the problem statement. Return "
+    "ONLY the corrected full solution source, no markdown fences and no commentary."
+)
+
+
+def _mismatch_side(contract):
+    """'code' when the reference did not run, 'description' when it ran and disagreed.
+
+    These look alike from a distance and have opposite fixes. `verify_io_contract` writes
+    `got` as `<error>` / `<timeout>` for a failed run and as the real stdout otherwise;
+    an unconvertible display block carries its reason in `detail`."""
+    for m in contract.get("mismatches") or []:
+        blob = f"{m.get('got', '')} {m.get('detail', '')}"
+        if "<error>" in blob or "<timeout>" in blob:
+            return "code"
+    return "description"
+
+
+def _format_mismatches(contract):
+    lines = []
+    for m in contract.get("mismatches") or []:
+        lines.append(
+            f"- example {m.get('example')}:\n"
+            f"    stdin           : {m.get('stdin')!r}\n"
+            f"    statement claims: {m.get('expected')!r}\n"
+            f"    reference printed: {m.get('got')!r}"
+            + (f"  ({m.get('detail')!r})" if m.get("detail") else "")
+        )
+    return "\n".join(lines)
+
+
+def reconcile_description(problem_name, desc_prompt, problem_content, optimal_path,
+                          outputs_dir, llm=None, verifier=None,
+                          code_writer=None, max_attempts=MAX_DESCRIPTION_ATTEMPTS):
+    """Generate the statement, execute the reference against its own Examples, reconcile.
+
+    The reference solution is an INPUT to this pipeline — it exists before the statement is
+    written — so execution decides the example outputs and the model only writes prose.
+    That removes a whole class of wrong-worked-example bugs instead of detecting them three
+    steps later.
+
+    Returns (description, {"verified", "attempts", "repairs", "reason"}).
+    """
+    if llm is None:
+        llm = call_llm
+    if verifier is None:
+        from testcase_manager_v4 import verify_io_contract as verifier
+    if code_writer is None:
+        def code_writer(_key, code):
+            with open(optimal_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+
+    description = ""
+    marker = ""
+    repairs = []
+    system, user = desc_prompt, problem_content
+    for attempt in range(1, max_attempts + 1):
+        content, usage = llm(system, user, purpose="chat")
+        _track_llm_usage(usage, f"{problem_name}_description")
+        content = _strip_scratchpad(content)
+        if repairs and repairs[-1] == "code":
+            # The model returned SOURCE, not a statement: keep the statement we had.
+            code_writer("code", clean_generated_code(strip_code_fence(content), "python"))
+        else:
+            # UNCONDITIONAL. This pass removes the four constructs the platform's
+            # renderer cannot display (ATX headings, horizontal rules, fence language
+            # tags, pipe tables) and alters no value, so gating it on
+            # scenario_level == "none" only meant light/moderate/heavy descriptions
+            # relied on the model having obeyed the prompt. It is deterministic; there
+            # is no reason for the other three levels to go without it.
+            description = normalize_renderer_safe(content)
+            # The repair prompt ASKS for the OPEN_ENDED marker back; a model that forgets
+            # it would silently downgrade the problem to "not open-ended" — no checker,
+            # no complaint. Carry the last decision forward instead of re-asking for it.
+            found = list(OPEN_ENDED_MARKER_RE.finditer(description))
+            if found:
+                marker = found[-1].group(0)
+            elif marker:
+                description = f"{description.rstrip()}\n\n{marker}"
+
+        contract = verifier(description, optimal_path, outputs_dir, llm=llm)
+        if contract.get("verified"):
+            return description, {"verified": True, "attempts": attempt,
+                                 "repairs": repairs, "reason": ""}
+        if not (contract.get("mismatches") or []):
+            # Nothing parseable to reconcile against — not a defect we can repair.
+            return description, {"verified": False, "attempts": attempt,
+                                 "repairs": repairs,
+                                 "reason": contract.get("reason") or "no parseable Examples"}
+        if attempt == max_attempts:
+            break
+        side = _mismatch_side(contract)
+        repairs.append(side)
+        detail = _format_mismatches(contract)
+        if side == "code":
+            system = _CODE_REPAIR_SYSTEM
+            user = (f"STATEMENT:\n{description}\n\n"
+                    f"CURRENT SOLUTION:\n{_read_text(optimal_path)}\n\n"
+                    f"It failed on the statement's own Examples:\n{detail}")
+        else:
+            system = _DESC_REPAIR_SYSTEM
+            user = (f"CURRENT STATEMENT:\n{description}\n\n"
+                    f"The reference solution disagrees with it:\n{detail}")
+
+    side = repairs[-1] if repairs else "description"
+    return description, {"verified": False, "attempts": max_attempts, "repairs": repairs,
+                         "reason": f"gave up after {max_attempts} attempts while "
+                                   f"repairing the {side}"}
+
 
 def run_description_step(problem_name, structure_type, scenario_level, problem_content, user_code, detected_lang, question_kind="function"):
     print("\n" + "=" * 60)
@@ -411,16 +594,32 @@ def run_description_step(problem_name, structure_type, scenario_level, problem_c
         )
     else:
         desc_prompt = get_description_prompt(problem_name, structure_type, user_code, scenario_level)
-    desc_response, desc_usage = call_llm(desc_prompt, problem_content, purpose="chat")
-    desc_response = _strip_scratchpad(desc_response)
-    if scenario_level == "none":
-        desc_response = normalize_renderer_safe(desc_response)
 
-    _track_llm_usage(desc_usage, f"{problem_name}_description")
-    _save_description(desc_response)
-    # A re-described problem invalidates naming, so reset the editable copy back
-    # to the raw input rather than leaving a rename keyed to the old description.
+    # A re-described problem invalidates naming, so reset the editable copy back to the raw
+    # input FIRST — reconciliation may repair that copy, and the reset would undo it.
     _save_working_code(user_code, detected_lang)
+    optimal_path = _working_code_path(detected_lang)
+
+    # Always reconciled: the reference is always Python (see detect_user_solution), so
+    # `_run_reference_on_input` can always execute it. The old `else` branch here wrote the
+    # statement with a bare LLM call and skipped reconciliation entirely for a C++/Java
+    # reference — a path that could never reach generate_testcases anyway.
+    desc_response, recon = reconcile_description(
+        problem_name, desc_prompt, problem_content, optimal_path,
+        OUTPUT_DIR,
+    )
+    if recon["verified"]:
+        print(f"✓ Examples reconciled against the reference "
+              f"({recon['attempts']} attempt(s), repairs={recon['repairs'] or 'none'})")
+    else:
+        print(f"⚠ Examples NOT reconciled — {recon['reason']}. "
+              f"verify_io_contract will block at generate_testcases.")
+
+    desc_response, open_ended, open_ended_reason = split_open_ended_marker(desc_response)
+    save_problem_flags(open_ended, open_ended_reason, OUTPUT_DIR)
+    _save_description(desc_response)
+    print(f"✓ open_ended={open_ended}"
+          + (f" — {open_ended_reason}" if open_ended_reason else ""))
     print(f"✓ Description created and saved to {_description_path()}")
     print(f"✓ Baseline solution saved to {os.path.relpath(_working_code_path(detected_lang), OUTPUT_DIR)}")
 
@@ -432,14 +631,25 @@ def run_naming_step(problem_name, structure_type, question_kind, user_code, dete
 
     if question_kind == "nonfunction":
         print("ℹ Non-function problem — skipping function-signature naming enforcement.")
+        # DELETE, don't just skip. description_signature.json is the ONLY signal
+        # testcase_manager_v4 uses to decide function vs STDIN/STDOUT, and nothing else
+        # ever removes it — so a problem switched function -> nonfunction kept the old
+        # file, `is_function` flipped back to True, and the suite was built with
+        # function-style raw-stdin cases for a problem the rest of the pipeline treats as
+        # a full program.
+        stale = _signature_path()
+        if os.path.exists(stale):
+            os.remove(stale)
+            print(f"✓ Removed stale {os.path.relpath(stale, OUTPUT_DIR)} left by an "
+                  f"earlier function-mode run.")
         return
 
     from Prompts.signatureExtractionPrompt import get_signature_extraction_prompt
 
     desc_response = _load_description()
     if not desc_response.strip():
-        print("⚠ No description available — cannot extract a canonical signature.")
-        return
+        print("ERROR: no description available — cannot extract a canonical signature.")
+        sys.exit(1)
 
     sig_prompt = get_signature_extraction_prompt(desc_response)
     sig_response, sig_usage = call_llm(sig_prompt, "", purpose="chat")
@@ -447,22 +657,72 @@ def run_naming_step(problem_name, structure_type, question_kind, user_code, dete
     description_signature = _parse_signature(sig_response)
 
     if not description_signature:
-        print("⚠ Could not extract a function signature from the description; skipping rename.")
-        return
+        # Never a warning-and-continue. Without description_signature.json,
+        # testcase_manager_v4 sets is_function=False and builds a STDIN/STDOUT suite for
+        # a function problem; and the rename never runs, so neither static gate below
+        # ever sees the code. Both stay invisible until execute_tests scores zero.
+        print("ERROR: could not extract a function signature from the description. "
+              "The rename and the stdin/checker gates cannot run, and the testcase step "
+              "would silently treat this function problem as STDIN/STDOUT.")
+        sys.exit(1)
 
     print(f"Enforcing function name: {description_signature.get('function_name')}")
+    open_ended = load_open_ended(OUTPUT_DIR)
+    # The WORKING copy, not the raw input: the description step may have REPAIRED this
+    # solution (reconcile_description writes corrected source when the reference crashed
+    # on the statement's own Examples), and a reviewer may have hand-edited it.
+    # Normalizing from Inputs/ throws both away — every other step here already reads
+    # the working copy.
+    working_code = _load_working_code(detected_lang, user_code)
     refactor_prompt = get_normalization_prompt(
-        user_code, detected_lang, description_signature, desc_response, structure_type
+        working_code, detected_lang, description_signature, desc_response, structure_type,
+        open_ended=open_ended,
     )
     renamed_code, refactor_usage = call_llm(refactor_prompt, "", purpose="chat")
     _track_llm_usage(refactor_usage, f"{problem_name}_refactor")
 
-    if renamed_code.strip().startswith("```"):
-        renamed_code = renamed_code.strip().split('\n', 1)[1].rsplit('\n', 1)[0].strip()
-    renamed_code = clean_generated_code(renamed_code, detected_lang)
+    renamed_code = clean_generated_code(strip_code_fence(renamed_code), detected_lang)
+
+    # EVERY problem, not only open-ended ones. A reference that parses the description's
+    # `name = value` display form reproduces every stated answer, so it grounds clean,
+    # verifies clean and passes every execution-based check — then scores zero against the
+    # real driver. Static gate, because execution cannot see it.
+    # Unconditional: the reference is always Python (see detect_user_solution). This used
+    # to be guarded on the detected language, which meant the guard silently switched
+    # itself off for exactly the inputs nobody had tested.
+    io_defects = stdin_parsing_defects(renamed_code)
+    if io_defects:
+        print("ERROR: the normalized reference does not read raw stdin:")
+        for d in io_defects:
+            print(f"  - {d}")
+        sys.exit(1)
+
+    if open_ended:
+        # Every defect here is invisible at grading time — fail loudly now instead.
+        defects = checker_defects(renamed_code)
+        if defects:
+            print("ERROR: the emitted open-ended checker is malformed:")
+            for d in defects:
+                print(f"  - {d}")
+            sys.exit(1)
 
     _save_signature(description_signature)
     _save_working_code(renamed_code, detected_lang)
+
+    # INVALIDATE the I/O contract. It was frozen during the description step against the
+    # PRE-normalization reference, and normalization is entitled to change how stdin is
+    # read — indeed that is most of its job. On 2026-08-18 a reference that parsed the
+    # `name = value` display form verified cleanly at description time; naming then
+    # correctly rewrote it to read raw tokens, and the frozen contract still held display
+    # text as its `stdin`. Anything consuming that file afterwards tests the current
+    # reference against a format it no longer reads. generate_testcases re-derives and
+    # blocks on the result, so deleting it here loses nothing and makes the stale state
+    # impossible to consume.
+    contract_path = os.path.join(OUTPUT_DIR, "io_contract.json")
+    if os.path.exists(contract_path):
+        os.remove(contract_path)
+        print("✓ Invalidated io_contract.json — it was verified against the "
+              "pre-normalization reference and will be re-derived downstream.")
     print(
         "✓ Given code updated with description naming and normalization "
         f"({os.path.relpath(_working_code_path(detected_lang), OUTPUT_DIR)})"
@@ -551,15 +811,16 @@ def run_topics_step(problem_name, user_code, detected_lang):
 
     topics_out_path = os.path.join(OUTPUT_DIR, 'generated_topics.json')
     try:
-        clean_topics = topics_response.strip()
-        if clean_topics.startswith("```"):
-            clean_topics = clean_topics.split('\n', 1)[1].rsplit('\n', 1)[0].strip()
-        topic_data = json.loads(clean_topics)
-        with open(topics_out_path, 'w', encoding='utf-8') as f:
-            json.dump(topic_data, f, indent=4)
-        print(f"✓ Topics generated and saved to {topics_out_path}")
-    except Exception as e:
-        print(f"Warning: Failed to parse generated topics JSON. {e}")
+        topic_data = json.loads(strip_code_fence(topics_response))
+    except ValueError as e:
+        # The LLM call was made and paid for. Warning-and-continue left the step GREEN
+        # with no generated_topics.json at all, so the omission only surfaced at packaging.
+        print(f"ERROR: could not parse the generated topics JSON — {e}")
+        print(f"Raw response:\n{topics_response[:2000]}")
+        sys.exit(1)
+    with open(topics_out_path, 'w', encoding='utf-8') as f:
+        json.dump(topic_data, f, indent=4)
+    print(f"✓ Topics generated and saved to {topics_out_path}")
 
 
 def run_translate_step(problem_name, structure_type, user_code, detected_lang, selected_langs):
@@ -592,10 +853,7 @@ def run_translate_step(problem_name, structure_type, user_code, detected_lang, s
         conv_response, conv_usage = call_llm(conv_prompt, "", purpose="code")
         _track_llm_usage(conv_usage, f"{problem_name}_convert_{lang}", purpose="code")
 
-        clean_code = conv_response.strip()
-        if clean_code.startswith("```"):
-            clean_code = clean_code.split('\n', 1)[1].rsplit('\n', 1)[0].strip()
-        clean_code = clean_generated_code(clean_code, lang)
+        clean_code = clean_generated_code(strip_code_fence(conv_response), lang)
         _save_solution_file(key, clean_code)
 
     print(f"✓ Solutions saved to {_generated_full_code_dir()}")

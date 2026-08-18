@@ -31,14 +31,14 @@ from typing import Any
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from Prompts.testcasesprompt_v4 import (  # noqa: E402
-    MAX_CASES_PER_SUBTASK,
     MAX_SUBTASKS,
     MIN_SUBTASKS,
     MIN_TESTCASES,
-    SIZE_CATEGORY_TARGETS,
-    SIZE_TOLERANCE_PP,
+    SIZE_MIN_PCT,
     tier_from_tags,
 )
+from open_ended_checker import accepts, checker_for  # noqa: E402
+from problem_flags import load_open_ended  # noqa: E402
 from testcase_helpers import (
     bucket_for_case,
     detect_problem_type,
@@ -306,7 +306,7 @@ def load_testcases(path: str | None = None) -> list[dict]:
 
 
 def load_suite_complete(path: str | None = None) -> bool:
-    """Root-level `suite_complete` flag stamped by testcase selection.
+    """Root-level `suite_complete` flag stamped by the derive step.
 
     True means the suite holds the WHOLE available input space — a problem with only
     a handful of legal inputs ships a handful of cases, and that is finished work, not
@@ -695,18 +695,62 @@ def run_mutation_benchmark(
 # --------------------------------------------------------------------------- #
 # B2 — Wrong-approach gate
 # --------------------------------------------------------------------------- #
+# There is deliberately NO float-tolerance exception here. It looks like there should
+# be one — `3.14159` vs `3.141590` differs textually, so a "correct" solution reads as
+# killed — but the grading compiler itself compares EXACT TEXT. Probed against
+# nw-compiler on 2026-08-14: `0.30` vs `0.3`, `0.3000000000000001` vs `0.3`,
+# `3` vs `3.0` and a 1e-9 difference all returned INCORRECT. So a solution whose
+# decimals differ from the reference genuinely fails grading, and calling it killed is
+# accurate. Abstaining on decimal suites would only blind B2 to real survivors.
+
+
+def b2_verdict(
+    wrong_files: int,
+    failures: list,
+    test_cases: list,
+    description: str | None = "",
+) -> dict[str, Any]:
+    """The one B2 verdict shape, shared by the live gate and testcase_annotate's
+    reuse of its own kill data. B2 is the only blocking quality gate, so it always
+    judges: it blocks, or it passes on evidence. It never silently no-ops.
+
+    It used to abstain (`cannot_judge`) when a prose regex read the description as
+    accepting multiple valid outputs. That regex also matched the wording a description
+    MUST use when it DOES pin an answer down ("if there are multiple pairs, print the
+    smallest first index"), so the gate switched itself off on well-written
+    deterministic problems. Multiple valid answers are handled where they belong now —
+    kill scoring asks the problem's checker, or its enumerated `outputs`, whether an
+    answer is valid — so the evidence arriving here is meaningful either way.
+    `cannot_judge` stays in the shape (callers read the key) but is always False.
+
+    `description` is still accepted because callers pass it; nothing reads it.
+    """
+    if not wrong_files:
+        return {"skipped": False, "cannot_judge": False, "missing": True,
+                "reason": "no wrong_solutions/*.py found", "wrong_files": 0,
+                "failures": [], "hard_fail": True}
+    return {"skipped": False, "cannot_judge": False, "missing": False,
+            "reason": "", "wrong_files": wrong_files, "failures": failures,
+            "hard_fail": len(failures) > 0}
+
+
 def run_wrong_approach_gate(
     test_cases: list[dict],
     wrong_dir: str | None = None,
     timeout: float = BENCHMARK_RUN_TIMEOUT,
     progress: bool = False,
+    description: str | None = None,
 ) -> dict[str, Any]:
+    # This is already the "no wrong solutions" verdict, kept for the empty-dir return.
+    verdict = b2_verdict(0, [], test_cases, description)
+
     wrong_dir = wrong_dir or os.path.join("Outputs", "wrong_solutions")
     paths = sorted(glob.glob(os.path.join(wrong_dir, "*.py")))
     if not paths:
-        if progress:
-            _log_warn("No wrong_solutions/*.py found — skipping B2")
-        return {"skipped": True, "note": "no wrong_solutions/*.py found", "hard_fail": False}
+        _log_fail("[B2] no wrong_solutions/*.py found. B2 is the only blocking quality "
+                  "gate; without it the suite is unvalidated. "
+                  "Run Generate Wrong Solutions first.")
+        return verdict
 
     if progress:
         _log_detail(f"Checking {len(paths)} wrong-approach file(s) against {len(test_cases)} cases…")
@@ -738,12 +782,7 @@ def run_wrong_approach_gate(
                 "file": name,
                 "passed_cases": [i for i, p, _ in results if p],
             })
-    return {
-        "skipped": False,
-        "wrong_files": len(paths),
-        "failures": failures,
-        "hard_fail": len(failures) > 0,
-    }
+    return b2_verdict(len(paths), failures, test_cases, description)
 
 
 # --------------------------------------------------------------------------- #
@@ -789,17 +828,18 @@ def audit_coverage_shape(
         issues.append(f"subtask count {subtask_n} outside [{MIN_SUBTASKS}, {MAX_SUBTASKS}]")
         hard_fail = True
 
-    # per-subtask cap
-    if subtask_n > 0:
-        effective_cap = max(MAX_CASES_PER_SUBTASK, math.ceil(total / subtask_n))
+    # No per-subtask cap. A subtask is now WHAT a case validates, not a difficulty tier,
+    # so a group's size is a fact about the problem rather than a budget to stay inside:
+    # "answer positioning" legitimately held 42 of 147 cases on a real two-sum run.
+    # Capping it would only force fake subdivision into groups validating the same thing.
+    # A single group swallowing most of the suite still suggests the model did not group
+    # meaningfully, so warn — never fail — at that point.
+    if subtask_n > 0 and total > 0:
         for tier, cnt in subtask_counts.items():
-            if cnt > effective_cap:
-                issues.append(
-                    f"subtask_{tier} has {cnt} cases > effective_cap {effective_cap}"
+            if cnt > total * 0.5:
+                warnings.append(
+                    f"subtask_{tier} holds {cnt}/{total} cases — grouping may be too coarse"
                 )
-                hard_fail = True
-            elif cnt > math.ceil(total / subtask_n) + 2:
-                warnings.append(f"subtask_{tier} count {cnt} above average")
 
     # Buckets scale to THIS problem's size dimension: the constraint bound when
     # the description states one, else the largest size the suite itself contains.
@@ -823,12 +863,14 @@ def audit_coverage_shape(
     if total > 0:
         for b in SIZE_BUCKETS:
             size_split[b] = round(100.0 * bucket_counts[b] / total, 1)
-        for b, target in SIZE_CATEGORY_TARGETS.items():
+        # Floors, not two-sided targets — see SIZE_MIN_PCT for why. Only a missing CLASS
+        # of input is a defect; the exact mix is the model's call.
+        for b, floor in SIZE_MIN_PCT.items():
             actual = size_split.get(b, 0.0)
-            if abs(actual - target) > SIZE_TOLERANCE_PP:
+            if actual < floor:
                 msg = (
-                    f"size_{b}: {actual}% vs target {target}% "
-                    f"(tolerance +/-{SIZE_TOLERANCE_PP}pp)"
+                    f"size_{b}: {actual}% of the suite, below the {floor}% floor "
+                    f"— this class of input is effectively missing"
                 )
                 if advisory_size:
                     warnings.append(msg)
@@ -871,7 +913,6 @@ def audit_coverage_shape(
         "total": total,
         "subtask_count": subtask_n,
         "subtask_counts": subtask_counts,
-        "effective_cap": max(MAX_CASES_PER_SUBTASK, math.ceil(total / max(subtask_n, 1))),
         "size_split": size_split,
         "size_bucket_counts": bucket_counts,
         "problem_type": ptype,
@@ -891,8 +932,14 @@ def run_differential_fuzz(
     test_cases: list[dict] | None = None,
     count: int = BENCHMARK_FUZZ_COUNT,
     timeout: float = BENCHMARK_RUN_TIMEOUT,
+    checker=None,
 ) -> dict[str, Any]:
     """Cross-check the optimal against the brute force to catch a WRONG optimal.
+
+    `checker` is the problem's `is_valid_answer` (see open_ended_checker). A
+    different-but-valid brute answer is not a disagreement — the driver would accept
+    it too — so with a checker a surviving disagreement on an open-ended problem is
+    real evidence rather than a tie-break artifact.
 
     Inputs are FORMAT-PRESERVING: the real test cases plus value-perturbations of
     them. A generic numeric fuzz is only a fallback when no test cases are given —
@@ -927,17 +974,19 @@ def run_differential_fuzz(
         bru_results = run_solutions_batch(brute_code, batch, timeout)
         ran += len(batch)
         for inp, (opt_out, s1), (bru_out, s2) in zip(batch, opt_results, bru_results):
-            agree = s1 == "ok" and s2 == "ok" and normalize(opt_out) == normalize(bru_out)
+            agree = s1 == "ok" and s2 == "ok" and (
+                normalize(opt_out) == normalize(bru_out)
+                or accepts(checker, inp, normalize(bru_out))
+            )
             tested.append({
                 "input": inp,
                 "optimal": opt_out if s1 == "ok" else f"<{s1}>",
                 "brute": bru_out if s2 == "ok" else f"<{s2}>",
                 "agree": agree,
             })
-            if s1 != "ok" or s2 != "ok":
+            if s1 != "ok" or s2 != "ok" or agree:
                 continue
-            if normalize(opt_out) != normalize(bru_out):
-                disagreements.append({"input": inp[:200], "optimal": opt_out[:100], "brute": bru_out[:100]})
+            disagreements.append({"input": inp[:200], "optimal": opt_out[:100], "brute": bru_out[:100]})
         if len(disagreements) >= 5:
             break
 
@@ -1090,7 +1139,14 @@ def _perturb_numeric_inputs(
 
 _EXAMPLE_INPUT_RE = re.compile(r"\*\*Input:\*\*\s*```[^\n]*\n(.*?)```", re.S)
 _EXAMPLE_OUTPUT_RE = re.compile(r"\*\*Output:\*\*\s*```[^\n]*\n(.*?)```", re.S)
-_NAMED_VAR_LINE_RE = re.compile(r"^\s*[A-Za-z_]\w*\s*=\s*\S")
+# An optional bracketed index is part of the DISPLAY form. A description rendering a
+# list of pairs one element per line — `prerequisites[0] = [2, 0]` — is still showing
+# named variables, but without the index this pattern rejected those lines, so the whole
+# block failed `is_named_var_example_block`, was taken for RAW STDIN, and the display
+# text got piped to the reference. It printed nothing, and the pipeline reported that the
+# reference "FAILS the description's own worked examples" — a false accusation against a
+# correct solution, and (since verify_io_contract now blocks) a refusal to generate.
+_NAMED_VAR_LINE_RE = re.compile(r"^\s*[A-Za-z_]\w*(?:\s*\[\s*\d+\s*\])*\s*=\s*\S")
 
 
 def is_named_var_example_block(block: str) -> bool:
@@ -1166,7 +1222,11 @@ def extract_named_var_example_io(description: str) -> list[tuple[str, str]]:
     ]
 
 
-_NAMED_VAR_ASSIGN_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s*=\s*(.+?)\s*$")
+# Must accept the same indexed form as _NAMED_VAR_LINE_RE, or a block that classifies as
+# named-variable would silently lose its indexed lines here and the candidate stdin would
+# be missing the data rows entirely.
+_NAMED_VAR_ASSIGN_RE = re.compile(
+    r"^\s*([A-Za-z_]\w*(?:\s*\[\s*\d+\s*\])*)\s*=\s*(.+?)\s*$")
 
 
 def _scalar_token(val) -> str:
@@ -1332,24 +1392,6 @@ def structured_random_inputs(examples: list[str], count: int = 100, seed: int = 
     return out
 
 
-_OPEN_ENDED_RE = re.compile(
-    r"\b(return|print|output|construct|produce|find|report|give|build)\s+any\b"
-    r"|\bany\s+(valid|such|one|correct)\b"
-    r"|\bmultiple\s+(valid|correct|possible|right)\b"
-    r"|\bmore than one\b"
-    r"|\bif there (are|is)\s+(multiple|several|many)\b"
-    r"|\bany of (them|the)\b",
-    re.I,
-)
-
-
-def is_open_ended_problem(description: str) -> bool:
-    """True when the statement accepts more than one correct output (e.g. "return
-    any grid such that ..."). For these, optimal and brute legitimately differ
-    textually, so a plain output comparison would false-positive."""
-    return bool(_OPEN_ENDED_RE.search(description or ""))
-
-
 def crosscheck_optimal_brute(
     optimal_code: str,
     brute_code: str,
@@ -1357,10 +1399,16 @@ def crosscheck_optimal_brute(
     count: int = 100,
     timeout: float = BENCHMARK_RUN_TIMEOUT,
     max_report: int = 5,
+    checker=None,
 ) -> list[dict]:
     """Run the optimal and the (independent) brute on the example inputs plus a
     structure-aware small-input sweep; return the inputs where they disagree. A
-    disagreement strongly indicates the reference/optimal solution is buggy."""
+    disagreement strongly indicates the reference/optimal solution is buggy.
+
+    `checker` is the problem's `is_valid_answer` (see open_ended_checker): a
+    different-but-valid brute answer is not a disagreement, because the driver would
+    accept it too. Without it every open-ended problem reports fake mismatches — which
+    is exactly why this sweep used to be skipped outright on them."""
     candidates = list(examples) + structured_random_inputs(examples, count)
     if not candidates:
         return []
@@ -1368,7 +1416,20 @@ def crosscheck_optimal_brute(
     bru = run_solutions_batch(brute_code, candidates, timeout)
     out: list[dict] = []
     for inp, (o, s1), (br, s2) in zip(candidates, opt, bru):
-        if s1 == "ok" and s2 == "ok" and normalize(o) != normalize(br):
+        if s1 != "ok" or s2 != "ok":
+            continue
+        # An EMPTY answer from EITHER oracle means that oracle did not parse the input
+        # into anything it recognized, not that the two disagree. `structured_random_inputs`
+        # infers the layout from the examples and cannot reproduce a nested shape — for a
+        # "count line, then N pairs" problem it emitted rows of 3-4 numbers, on which one
+        # side printed nothing and the other printed -1. Both directions were observed on
+        # 2026-08-18, so this must not be one-sided. Nothing can be concluded from an
+        # oracle that produced no output, and reporting these buries any real disagreement
+        # in noise. Inputs both DO answer are unaffected, and the worked-example
+        # ground-truth check upstream already covers correctness on known-valid inputs.
+        if not normalize(o) or not normalize(br):
+            continue
+        if normalize(o) != normalize(br) and not accepts(checker, inp, normalize(br)):
             out.append({"input": inp, "optimal": normalize(o)[:80], "brute": normalize(br)[:80]})
             if len(out) >= max_report:
                 break
@@ -1447,17 +1508,20 @@ def run_benchmark(
         )
 
     if precomputed_b2 is not None:
-        # Merged select+benchmark step: select_testcases already ran every wrong
-        # solution over the pool and knows which the selected suite fails to catch
+        # Merged validate+benchmark step: run_annotation already ran every wrong
+        # solution over the shipped suite and knows which ones it fails to catch
         # (`uncatchable`). Reuse that verdict instead of re-executing every wrong
         # solution over the suite — same answer, one fewer full-suite pass.
-        print("[B2] Wrong-approach gate (reused from selection)", flush=True)
+        print("[B2] Wrong-approach gate (reused from the annotation pass)", flush=True)
         report.b2 = precomputed_b2
     else:
         print("[B2] Wrong-approach gate", flush=True)
-        report.b2 = run_wrong_approach_gate(test_cases, timeout=timeout, progress=True)
+        report.b2 = run_wrong_approach_gate(test_cases, timeout=timeout, progress=True,
+                                            description=description)
     if report.b2.get("skipped"):
         pass
+    elif report.b2.get("missing"):
+        report.hard_failures.append(f"B2: {report.b2.get('reason')}")
     elif report.b2.get("hard_fail"):
         _log_fail(f"[B2] FAIL — wrong solution(s) passed tests")
         report.hard_failures.append(
@@ -1490,9 +1554,14 @@ def run_benchmark(
     if brute_code:
         print("[B4] Differential fuzz vs brute force", flush=True)
         _log_detail(f"Generating up to {fuzz_count} random inputs…")
+        # The flag is authored once by the description step; `optimal_path` is
+        # <outputs_dir>/generatedFullCode/PYTHON.py, so its grandparent IS outputs_dir.
+        outputs_dir = os.path.dirname(os.path.dirname(optimal_path)) or "Outputs"
+        open_ended = load_open_ended(outputs_dir)
         report.b4 = run_differential_fuzz(
             optimal_code, brute_code, description,
             test_cases=test_cases, count=fuzz_count, timeout=timeout,
+            checker=checker_for(outputs_dir),
         )
         d = len(report.b4.get("disagreements", []))
         if report.b4.get("hard_fail"):
@@ -1504,10 +1573,15 @@ def run_benchmark(
             # almost always multiple-valid-answer artifacts or precondition-sensitive
             # fuzz inputs (e.g. a "sorted" array perturbed into an unsorted one) —
             # advisory, not a hard fail.
+            # This clause TIGHTENS B4 (open-ended => stays a hard fail); it is the one
+            # place the deleted regex did not relax a check, so it keeps its polarity
+            # and only changes source: the author-time flag, not prose matching. It is
+            # meaningful now because the fuzz above already discarded every
+            # different-but-valid brute answer, so what is left is a real disagreement.
             opt_fails_examples = bool(
                 optimal_example_failures(optimal_code, description, timeout=timeout)
             )
-            if not opt_fails_examples and not is_open_ended_problem(description):
+            if not opt_fails_examples and not open_ended:
                 report.b4["hard_fail"] = False
                 report.b4["advisory"] = True
                 report.b4["advisory_reason"] = (
@@ -1549,7 +1623,10 @@ def print_report(report: BenchmarkReport, min_kill: float, report_only: bool = F
             _log_detail(f"… and {len(report.b1['survivors']) - 10} more (see benchmark output JSON if saved)")
 
     if report.b2.get("skipped"):
-        _log_warn(f"B2 Wrong-approach gate: SKIPPED ({report.b2.get('note')})")
+        _log_warn(f"B2 Wrong-approach gate: CANNOT JUDGE ({report.b2.get('reason')}) "
+                  "— abstained, not a pass")
+    elif report.b2.get("missing"):
+        _log_fail(f"B2 Wrong-approach gate: BLOCKED ({report.b2.get('reason')})")
     else:
         if report.b2.get("hard_fail"):
             _log_fail(f"B2 Wrong-approach gate: FAIL ({report.b2.get('wrong_files', 0)} files checked)")
@@ -1589,17 +1666,16 @@ def print_report(report: BenchmarkReport, min_kill: float, report_only: bool = F
         for w in report.warnings[:8]:
             _log_detail(w)
 
-    # Report-only mode (redesign): the deterministic selector owns the final suite,
-    # and there is no longer a Strengthen/regeneration step to act on distribution
-    # gaps — so B1/B2/B4 are the real signals and coverage-shape items are advisory
-    # notes, never a pipeline failure.
+    # Report-only mode (redesign): the generated suite ships as-is and there is no
+    # Strengthen/regeneration step to act on distribution gaps — so B1/B2/B4 are the
+    # real signals and coverage-shape items are advisory notes, never a failure.
     if report_only:
         real_pass = report.b1.get("kill_rate", 0.0) >= min_kill and not report.b2.get("hard_fail")
         print(f"\nBenchmark report (informational — not a gate). "
               f"Quality: {'STRONG' if real_pass else 'REVIEW'}", flush=True)
         if report.hard_failures:
             _log_warn(f"{len(report.hard_failures)} coverage-shape note(s) "
-                      f"(distribution is owned by Select Test Cases; not blocking):")
+                      f"(the generated suite ships as-is; not blocking):")
             for hf in report.hard_failures:
                 _log_detail(str(hf))
         return
@@ -1610,7 +1686,7 @@ def print_report(report: BenchmarkReport, min_kill: float, report_only: bool = F
         _log_ok("Benchmark gate passed — test suite is strong enough to continue")
     else:
         _log_fail("Benchmark gate failed — review survivors/issues above; "
-                  "re-run Generate → Select Test Cases to rebuild the suite")
+                  "re-run Generate Test Cases to rebuild the suite")
     if report.hard_failures:
         _log_fail(f"{len(report.hard_failures)} hard failure(s):")
         for hf in report.hard_failures:

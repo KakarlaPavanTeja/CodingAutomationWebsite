@@ -335,7 +335,19 @@ export async function POST(request: NextRequest) {
     5_000,
     parseInt(process.env.PIPELINE_LOG_SYNC_MS || "12000", 10) || 12_000,
   );
-  const periodicSync = startPeriodicSync(safeProblemId, outputsDir, outputSyncMs);
+  // Everything the workspace was hydrated with is ALREADY in storage, so only files
+  // this step writes may be published. Without this bound each step re-uploads its
+  // whole hydrated Outputs copy and parallel steps revert each other — naming's
+  // normalized PYTHON.py lost to whichever sibling finished last. Captured before
+  // spawn so nothing the step writes is missed; one second of slack absorbs
+  // filesystem mtime granularity.
+  const runStartedAtMs = Date.now() - 1_000;
+  const periodicSync = startPeriodicSync(
+    safeProblemId,
+    outputsDir,
+    outputSyncMs,
+    runStartedAtMs,
+  );
 
   let logSyncInterval: ReturnType<typeof setInterval> | null = null;
   if (runId) {
@@ -459,7 +471,7 @@ export async function POST(request: NextRequest) {
     await periodicSync.stop();
 
     try {
-      await uploadOutputsFromDir(safeProblemId, outputsDir);
+      await uploadOutputsFromDir(safeProblemId, outputsDir, runStartedAtMs);
     } catch {
       // Non-fatal
     }

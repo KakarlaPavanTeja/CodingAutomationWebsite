@@ -304,7 +304,15 @@ def sync_example_testcases(test_cases: list, description: str, io_contract=None)
         want_out = out.rstrip("\n") if isinstance(out, str) else str(out)
         cur_inp = tc.get("input", "") or ""
         cur_out = tc.get("output", "") or ""
-        if cur_inp != want_inp or cur_out != want_out:
+        if tc.get("multiple_possible_output"):
+            # A multi-answer case stores every valid answer and no `output` at all;
+            # writing one here would both contradict `outputs` and trip
+            # `multi_answer_defects`. The stated answer is enforced there instead:
+            # it must be a MEMBER of `outputs`.
+            if cur_inp != want_inp:
+                tc["input"] = want_inp
+                changed += 1
+        elif cur_inp != want_inp or cur_out != want_out:
             tc["input"] = want_inp
             tc["output"] = want_out
             changed += 1
@@ -785,3 +793,101 @@ def reorder_testcases_json_root(data) -> bool:
     if isinstance(data, dict) and "test_cases" in data:
         return _reorder_list(data["test_cases"])
     return False
+
+
+# --------------------------------------------------------------------------- #
+# Semantic subtasks: the model names WHAT a case validates; we number the groups
+# by demand and give every case in a group the same weight. Numbering by demand is
+# what makes weights monotonic without a weight table.
+# --------------------------------------------------------------------------- #
+_DEMAND_RANK = {"edge": 0, "small": 1, "medium": 2, "large": 3}
+_DEMAND_WEIGHT = {"edge": 1.0, "small": 1.0, "medium": 2.0, "large": 4.0}
+STRESS_WEIGHT_MULTIPLIER = 1.5
+
+
+def _subtask_display_name(slug: str) -> str:
+    """"max_constraint_performance" -> "Max Constraint Performance"."""
+    return " ".join(word.capitalize() for word in str(slug).split("_") if word) or "General"
+
+
+def _case_is_stress(tc: dict) -> bool:
+    from Prompts.testcasesprompt_v4 import STRESS_SCENARIO_TAGS
+    names = {str(t) for t in (tc.get("tags") or []) if isinstance(t, str)}
+    names.add(str(tc.get("scenario") or ""))
+    return bool(names & set(STRESS_SCENARIO_TAGS))
+
+
+def derive_subtasks(test_cases: list, kind: str, max_n: int) -> dict:
+    """Group by the model's `subtask` name, number groups by demand, set weights.
+
+    Mutates each case's `tags` (exactly one `subtask_<n>`, stale ones stripped) and
+    `weightage` (one value per group). Returns {"subtask_1": "Display Name", ...} for
+    the root-level `subtask_names` map — tags stay plain strings so `tier_from_tags`
+    and `_scenario_of` keep parsing them unchanged.
+    """
+    cases = [tc for tc in (test_cases or []) if isinstance(tc, dict)]
+    if not cases:
+        return {}
+
+    groups: dict[str, list] = {}
+    for tc in cases:
+        name = str(tc.get("subtask") or "").strip() or "general"
+        groups.setdefault(name, []).append(tc)
+
+    def _demand(members: list) -> tuple:
+        rank = max(_DEMAND_RANK.get(bucket_for_case(tc, max_n, kind), 1) for tc in members)
+        size = max(case_size_metric(tc, kind, max_n) or 0 for tc in members)
+        return rank, size
+
+    # Ascending demand; name breaks ties so numbering does not depend on input order.
+    ordered = sorted(groups.items(), key=lambda kv: (_demand(kv[1]), kv[0]))
+
+    names: dict[str, str] = {}
+    for tier, (name, members) in enumerate(ordered, start=1):
+        rank, _ = _demand(members)
+        bucket = next(b for b, r in _DEMAND_RANK.items() if r == rank)
+        weight = _DEMAND_WEIGHT[bucket]
+        if any(_case_is_stress(tc) for tc in members):
+            weight *= STRESS_WEIGHT_MULTIPLIER
+        enum = subtask_tag(tier)
+        names[enum] = _subtask_display_name(name)
+        for tc in members:
+            tc["tags"] = dedupe_tags(_strip_subtask_tags(tc.get("tags") or []) + [enum])
+            tc["weightage"] = weight
+    return names
+
+
+def multi_answer_defects(test_cases, description):
+    """Defects in a multi-answer suite. Empty list means it is shippable.
+
+    The statement check is the one that matters: `sync_example_testcases` forces cases 1-2
+    to the description's worked Examples, so if the answer printed in the statement is not
+    in the enumerated list, the student who copies the worked example is marked wrong.
+    """
+    from benchmark_suite import extract_example_io, normalize
+
+    examples = extract_example_io(description or "") or []
+    stated = {i + 1: normalize(out) for i, (_inp, out) in enumerate(examples[:2])}
+    defects = []
+    for tc in test_cases or []:
+        if not isinstance(tc, dict) or not tc.get("multiple_possible_output"):
+            continue
+        order = tc.get("order")
+        outs = tc.get("outputs")
+        if not isinstance(outs, list) or not outs:
+            defects.append(f"case order={order}: multiple_possible_output with an empty "
+                           f"or missing `outputs` list")
+            continue
+        if tc.get("output") is not None:
+            defects.append(f"case order={order}: carries both `output` and `outputs`; a "
+                           f"multi-answer case must carry only `outputs`")
+        normed = [normalize(str(o)) for o in outs]
+        if len(set(normed)) != len(normed):
+            defects.append(f"case order={order}: `outputs` holds duplicate answers, so the "
+                           f"enumeration did not walk a well-defined space")
+        want = stated.get(order)
+        if want is not None and want not in normed:
+            defects.append(f"case order={order}: the answer Example {order} prints "
+                           f"({want!r}) is not in `outputs`; the statement and the grader "
+                           f"disagree")
+    return defects

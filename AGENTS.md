@@ -37,11 +37,24 @@ Next.js API layer.
 - `npm run build` / `npm run start` — prod build / serve (also port 5001).
 - `npm run lint` — ESLint (flat config, `eslint.config.mjs`).
 - `npm run db:push` — push Drizzle schema to the DB (**`--force`** — be careful).
+  - **It goes wherever `.env.local` points, which is production.** `drizzle.config.ts`
+    loads `.env.local` with `override: true`, so prefixing the command with
+    `DATABASE_URL=...` is silently ignored. To target any other database you MUST use
+    `DRIZZLE_DATABASE_URL=postgres://… npm run db:push` — that one wins, and prints the
+    target it resolved.
 - `npm run db:studio` — Drizzle Studio.
 - `npm run db` — `tsx scripts/db.mts` (DB helper script).
 - `npm run test:json` — Python unittest for pipeline JSON prep.
 
-There is currently **no JS/TS test runner** — only the Python `test:json` suite.
+**Two test suites exist and both must stay green:**
+
+- `npm run test:ts` — `tsx --test "src/**/*.test.ts"`, Node's built-in runner.
+- `npm run test:json` — Python unittest for the pipeline.
+
+This line used to claim there was no JS/TS runner. That was wrong, and it cost real
+work: a TypeScript fix was "proved" with a throwaway script that re-implemented the
+logic, instead of a test against the actual function. If you add TypeScript
+behaviour, add a `*.test.ts` beside it.
 
 ## Layout
 

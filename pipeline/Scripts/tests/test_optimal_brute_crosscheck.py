@@ -111,19 +111,6 @@ class StructuredRandomInputsTests(unittest.TestCase):
         self.assertEqual(bs.structured_random_inputs([], count=10), [])
 
 
-class OpenEndedDetectorTests(unittest.TestCase):
-    def test_flags_return_any(self):
-        self.assertTrue(bs.is_open_ended_problem("Return any grid such that there is exactly one path."))
-        self.assertTrue(bs.is_open_ended_problem("Print any valid arrangement."))
-        self.assertTrue(bs.is_open_ended_problem("If there are multiple answers, output any of them."))
-        self.assertTrue(bs.is_open_ended_problem("There may be multiple valid solutions."))
-
-    def test_does_not_flag_deterministic(self):
-        self.assertFalse(bs.is_open_ended_problem("Return the sum of all elements."))
-        self.assertFalse(bs.is_open_ended_problem("Find the maximum total value."))
-        self.assertFalse(bs.is_open_ended_problem(""))
-
-
 class CrosscheckTests(unittest.TestCase):
     def test_flags_buggy_optimal(self):
         ex = bs.extract_example_inputs(SUM_DESC)
