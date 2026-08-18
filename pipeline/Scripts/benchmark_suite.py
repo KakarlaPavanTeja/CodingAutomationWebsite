@@ -1139,7 +1139,14 @@ def _perturb_numeric_inputs(
 
 _EXAMPLE_INPUT_RE = re.compile(r"\*\*Input:\*\*\s*```[^\n]*\n(.*?)```", re.S)
 _EXAMPLE_OUTPUT_RE = re.compile(r"\*\*Output:\*\*\s*```[^\n]*\n(.*?)```", re.S)
-_NAMED_VAR_LINE_RE = re.compile(r"^\s*[A-Za-z_]\w*\s*=\s*\S")
+# An optional bracketed index is part of the DISPLAY form. A description rendering a
+# list of pairs one element per line — `prerequisites[0] = [2, 0]` — is still showing
+# named variables, but without the index this pattern rejected those lines, so the whole
+# block failed `is_named_var_example_block`, was taken for RAW STDIN, and the display
+# text got piped to the reference. It printed nothing, and the pipeline reported that the
+# reference "FAILS the description's own worked examples" — a false accusation against a
+# correct solution, and (since verify_io_contract now blocks) a refusal to generate.
+_NAMED_VAR_LINE_RE = re.compile(r"^\s*[A-Za-z_]\w*(?:\s*\[\s*\d+\s*\])*\s*=\s*\S")
 
 
 def is_named_var_example_block(block: str) -> bool:
@@ -1215,7 +1222,11 @@ def extract_named_var_example_io(description: str) -> list[tuple[str, str]]:
     ]
 
 
-_NAMED_VAR_ASSIGN_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s*=\s*(.+?)\s*$")
+# Must accept the same indexed form as _NAMED_VAR_LINE_RE, or a block that classifies as
+# named-variable would silently lose its indexed lines here and the candidate stdin would
+# be missing the data rows entirely.
+_NAMED_VAR_ASSIGN_RE = re.compile(
+    r"^\s*([A-Za-z_]\w*(?:\s*\[\s*\d+\s*\])*)\s*=\s*(.+?)\s*$")
 
 
 def _scalar_token(val) -> str:
@@ -1405,8 +1416,20 @@ def crosscheck_optimal_brute(
     bru = run_solutions_batch(brute_code, candidates, timeout)
     out: list[dict] = []
     for inp, (o, s1), (br, s2) in zip(candidates, opt, bru):
-        if (s1 == "ok" and s2 == "ok" and normalize(o) != normalize(br)
-                and not accepts(checker, inp, normalize(br))):
+        if s1 != "ok" or s2 != "ok":
+            continue
+        # An EMPTY answer from EITHER oracle means that oracle did not parse the input
+        # into anything it recognized, not that the two disagree. `structured_random_inputs`
+        # infers the layout from the examples and cannot reproduce a nested shape — for a
+        # "count line, then N pairs" problem it emitted rows of 3-4 numbers, on which one
+        # side printed nothing and the other printed -1. Both directions were observed on
+        # 2026-08-18, so this must not be one-sided. Nothing can be concluded from an
+        # oracle that produced no output, and reporting these buries any real disagreement
+        # in noise. Inputs both DO answer are unaffected, and the worked-example
+        # ground-truth check upstream already covers correctness on known-valid inputs.
+        if not normalize(o) or not normalize(br):
+            continue
+        if normalize(o) != normalize(br) and not accepts(checker, inp, normalize(br)):
             out.append({"input": inp, "optimal": normalize(o)[:80], "brute": normalize(br)[:80]})
             if len(out) >= max_report:
                 break

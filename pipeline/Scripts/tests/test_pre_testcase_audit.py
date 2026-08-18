@@ -156,6 +156,33 @@ class ContractPairsTest(unittest.TestCase):
     def test_missing_file_returns_empty(self):
         self.assertEqual(self.gbf._verified_contract_pairs(), [])
 
+    def test_a_stored_contract_is_not_trusted_when_it_can_be_derived(self):
+        """A stored contract is frozen against the PRE-normalization reference.
+
+        On 2026-08-18 a reference parsed the `name = value` display form and so verified
+        at description time; naming then rewrote it to read raw tokens, leaving a
+        contract whose `stdin` was display text. Testing the current reference against it
+        reported "the reference FAILS its own worked examples" — confidently, and wrongly.
+        """
+        self._write_contract({
+            "verified": True,
+            "pairs": [{"example": 1, "stdin": "n = 3\na = [1, 2, 3]\n", "stdout": "6",
+                       "expected": "6"}],
+            "mismatches": [], "reason": "",
+        })
+        # A reference that reads RAW tokens, as normalization would have left it.
+        code = "import sys\nd=sys.stdin.read().split()\nprint(sum(map(int,d[1:])))\n"
+        opt = os.path.join("Outputs", "PY.py")
+        with open(opt, "w", encoding="utf-8") as f:
+            f.write(code)
+        desc = ("**Example 1:**\n\n**Input:**\n\n```\nn = 3\na = [1, 2, 3]\n```\n\n"
+                "**Output:**\n\n```\n6\n```\n")
+
+        pairs = self.gbf._verified_contract_pairs(desc, opt)
+        for p in pairs:
+            self.assertNotIn("=", p["stdin"],
+                             "a derived contract must carry raw stdin, not display text")
+
     def test_unverified_contract_is_not_used(self):
         # An unverified contract's stdin values are guesses — no layout reproduced the
         # stated answer — so seeding a sweep from them is worse than skipping.
@@ -339,6 +366,166 @@ class SignatureExtractionPromptTest(unittest.TestCase):
         # solution's entry point to something the description never mentions.
         for bad in ("solve", "main", "functionName"):
             self.assertIn(bad, self.prompt)
+
+
+@unittest.skipIf(_gfq is None, "generate_full_question deps unavailable in this env")
+class ParseSignatureTest(unittest.TestCase):
+    """The old extractor used `re.search(r'\\{.*\\}', ..., re.DOTALL)` — greedy, so it
+    spanned the FIRST `{` to the LAST `}`. Harmless while a parse failure only warned;
+    now that naming hard-fails it would block the pipeline on a good reply."""
+
+    def test_plain_object(self):
+        sig = _gfq._parse_signature('{"function_name": "findPairs", "parameters": ["a"]}')
+        self.assertEqual(sig["function_name"], "findPairs")
+        self.assertEqual(sig["parameters"], ["a"])
+
+    def test_fenced_object(self):
+        raw = '```json\n{"function_name": "find_pairs", "parameters": ["a", "b"]}\n```'
+        self.assertEqual(_gfq._parse_signature(raw)["function_name"], "findPairs")
+
+    def test_object_followed_by_prose_containing_braces(self):
+        # The greedy regex spanned into the note and produced invalid JSON.
+        raw = ('{"function_name": "findPairs", "parameters": ["a"]}\n\n'
+               'Note: the driver calls it as {func}(a) at grading time.')
+        sig = _gfq._parse_signature(raw)
+        self.assertIsNotNone(sig, "prose with braces after the object must not break it")
+        self.assertEqual(sig["function_name"], "findPairs")
+
+    def test_two_objects_prefers_the_one_with_a_function_name(self):
+        raw = ('{"note": "here is the signature"}\n'
+               '{"function_name": "arrangeCourseSequence", "parameters": ["n"]}')
+        self.assertEqual(_gfq._parse_signature(raw)["function_name"],
+                         "arrangeCourseSequence")
+
+    def test_nested_object_is_not_truncated(self):
+        raw = '{"function_name": "foo", "parameters": ["a"], "meta": {"x": {"y": 1}}}'
+        self.assertEqual(_gfq._parse_signature(raw)["function_name"], "foo")
+
+    def test_no_json_returns_none(self):
+        self.assertIsNone(_gfq._parse_signature("I could not find a signature."))
+        self.assertIsNone(_gfq._parse_signature(""))
+        self.assertIsNone(_gfq._parse_signature("```"))
+
+    def test_empty_function_name_returns_none(self):
+        # Must be None, not a dict with a blank name — naming exits 1 on None, whereas a
+        # blank name would rename the reference's entry point to nothing.
+        self.assertIsNone(_gfq._parse_signature('{"function_name": "", "parameters": []}'))
+
+
+@unittest.skipIf(_gfq is None, "generate_full_question deps unavailable in this env")
+class RendererSafePassTest(unittest.TestCase):
+    """P2-11. The pass ran only at scenario_level == "none", so light/moderate/heavy
+    descriptions relied on the model having obeyed the no-headings/no-tables rules."""
+
+    def test_reconcile_normalizes_at_every_scenario_level(self):
+        # reconcile_description no longer takes scenario_level at all: there is one
+        # behaviour, so there is no level at which the pass can be skipped.
+        import inspect
+        params = inspect.signature(_gfq.reconcile_description).parameters
+        self.assertNotIn("scenario_level", params)
+
+    def test_atx_headings_and_tables_are_converted(self):
+        raw = ("## Input Format\n\n---\n\n```python\ncode\n```\n\n"
+               "| a | b |\n|---|---|\n| 1 | 2 |\n")
+        out = _gfq.normalize_renderer_safe(raw)
+        self.assertNotIn("## ", out)
+        self.assertIn("**Input Format**", out)
+        self.assertNotIn("```python", out)
+        self.assertNotIn("|---|", out)
+        self.assertIn("1", out)      # values preserved
+        self.assertIn("2", out)
+
+    def test_values_inside_fences_are_untouched(self):
+        raw = "```\n# not a heading\n| not | a table |\n```\n"
+        self.assertIn("# not a heading", _gfq.normalize_renderer_safe(raw))
+
+
+class IndexedNamedVarBlockTest(unittest.TestCase):
+    """A description that renders a list of pairs one element per line —
+    `prerequisites[0] = [2, 0]` — is still showing named variables.
+
+    _NAMED_VAR_LINE_RE rejected the index, so the block failed
+    is_named_var_example_block, was taken for RAW STDIN, and the display text was piped
+    to the reference. It printed nothing, and the pipeline announced that the reference
+    "FAILS the description's own worked examples" — a false accusation against a correct
+    solution. Caught by a live run, where the model happened to pick this rendering.
+    """
+
+    BLOCK = ("numCourses = 6\nm = 6\n"
+             "prerequisites[0] = [2, 0]\nprerequisites[1] = [2, 1]\n"
+             "prerequisites[2] = [3, 1]")
+
+    def _desc(self, block, out):
+        return (f"**Example 1:**\n\n**Input:**\n\n```\n{block}\n```\n\n"
+                f"**Output:**\n\n```\n{out}\n```\n")
+
+    def test_indexed_assignments_count_as_a_named_var_block(self):
+        from benchmark_suite import is_named_var_example_block
+        self.assertTrue(is_named_var_example_block(self.BLOCK))
+
+    def test_plain_named_vars_still_count(self):
+        from benchmark_suite import is_named_var_example_block
+        self.assertTrue(is_named_var_example_block("n = 4\na = [1, 2]"))
+
+    def test_raw_stdin_blocks_are_still_not_named_var(self):
+        from benchmark_suite import is_named_var_example_block
+        self.assertFalse(is_named_var_example_block("6\n6\n2 0\n2 1"))
+
+    def test_display_block_is_never_offered_as_raw_stdin(self):
+        from benchmark_suite import extract_example_io, extract_named_var_example_io
+        desc = self._desc(self.BLOCK, "0 1 2 3 4 5")
+        self.assertEqual(extract_example_io(desc), [],
+                         "piping the display form to the reference falsely brands it buggy")
+        self.assertEqual(len(extract_named_var_example_io(desc)), 1)
+
+    def test_indexed_lines_survive_parsing_into_stdin(self):
+        from benchmark_suite import named_var_stdin_candidates
+        # Losing the indexed lines would yield a candidate with the counts but no data.
+        self.assertEqual(named_var_stdin_candidates(self.BLOCK)[0],
+                         "6\n6\n2 0\n2 1\n3 1\n")
+
+    def test_variable_names_keep_their_index(self):
+        from benchmark_suite import parse_named_var_block
+        names = [n for n, _ in parse_named_var_block(self.BLOCK)]
+        self.assertEqual(names,
+                         ["numCourses", "m", "prerequisites[0]",
+                          "prerequisites[1]", "prerequisites[2]"])
+
+
+class CrosscheckNoiseTest(unittest.TestCase):
+    """The sweep reported disagreements on synthesized inputs the reference could not
+    parse. structured_random_inputs cannot reproduce a nested "count then N pairs"
+    shape, so the reference printed nothing and the brute printed -1."""
+
+    def test_empty_reference_output_is_not_a_disagreement(self):
+        from benchmark_suite import crosscheck_optimal_brute
+        # Reference prints nothing; brute prints -1. Malformed input, not a defect.
+        optimal = "import sys\nsys.stdin.read()\n"
+        brute = "import sys\nsys.stdin.read()\nprint(-1)\n"
+        self.assertEqual(
+            crosscheck_optimal_brute(optimal, brute, ["1 2\n"], count=0), [])
+
+    def test_empty_BRUTE_output_is_not_a_disagreement_either(self):
+        """The filter must not be one-sided.
+
+        Both directions were seen live on the same problem: first `optimal='' brute=-1`,
+        then after other fixes `optimal=-1 brute=''`. Nothing can be concluded from an
+        oracle that produced no output, whichever oracle it is.
+        """
+        from benchmark_suite import crosscheck_optimal_brute
+        optimal = "import sys\nsys.stdin.read()\nprint(-1)\n"
+        brute = "import sys\nsys.stdin.read()\n"
+        self.assertEqual(
+            crosscheck_optimal_brute(optimal, brute, ["1 2\n"], count=0), [])
+
+    def test_a_real_disagreement_is_still_reported(self):
+        from benchmark_suite import crosscheck_optimal_brute
+        optimal = "import sys\nsys.stdin.read()\nprint(1)\n"
+        brute = "import sys\nsys.stdin.read()\nprint(2)\n"
+        found = crosscheck_optimal_brute(optimal, brute, ["1 2\n"], count=0)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["optimal"], "1")
+        self.assertEqual(found[0]["brute"], "2")
 
 
 class PromptFormatAgreementTest(unittest.TestCase):

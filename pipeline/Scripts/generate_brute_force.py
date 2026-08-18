@@ -184,18 +184,34 @@ def _run_solution_validation(description: str, optimal_solution: str, brute_cont
         print(f"⚠ solution validation (advisory) skipped — {type(e).__name__}: {e}")
 
 
-def _verified_contract_pairs() -> list[dict]:
-    """The VERIFIED (stdin, expected) pairs frozen by verify_io_contract, or [].
+def _verified_contract_pairs(description: str = "", optimal_path: str = "") -> list[dict]:
+    """The VERIFIED (stdin, expected) pairs for the CURRENT reference solution, or [].
 
-    Only a verified contract is usable: an unverified one means no candidate stdin layout
-    reproduced the stated answer, so its `stdin` values are guesses. Returns [] on a
-    missing or unreadable file — this is a coverage improvement, never a new hard failure.
+    Derived here rather than read off disk. A stored io_contract.json is frozen during the
+    DESCRIPTION step, against the pre-normalization reference; the naming step then
+    rewrites how that reference reads stdin, which is most of what normalization does. So
+    a stored contract can hold `name = value` display text as its `stdin` while the
+    reference now reads raw tokens — and testing the current solution against it produces
+    a confident, entirely false "the reference FAILS its own worked examples".
+
+    Only a verified contract is usable: an unverified one means no candidate layout
+    reproduced the stated answer, so its `stdin` values are guesses. Returns [] on any
+    failure — this is a coverage improvement, never a new hard failure.
     """
-    try:
-        with open(os.path.join("Outputs", "io_contract.json"), encoding="utf-8") as f:
-            contract = json.load(f)
-    except (OSError, ValueError):
-        return []
+    contract = None
+    if description and optimal_path:
+        try:
+            from testcase_manager_v4 import verify_io_contract
+            contract = verify_io_contract(description, optimal_path, "Outputs")
+        except Exception as e:
+            print(f"(could not derive the I/O contract here: {e})")
+            contract = None
+    if contract is None:
+        try:
+            with open(os.path.join("Outputs", "io_contract.json"), encoding="utf-8") as f:
+                contract = json.load(f)
+        except (OSError, ValueError):
+            return []
     if not isinstance(contract, dict) or not contract.get("verified"):
         return []
     return [p for p in (contract.get("pairs") or [])
@@ -251,7 +267,8 @@ def _crosscheck_optimal_vs_brute(description: str, optimal_solution: str, brute_
     #    conversion is already solved: verify_io_contract runs candidate stdin layouts
     #    against the reference and freezes the one reproducing the stated answer into
     #    io_contract.json. Reuse those verified pairs instead of re-deriving them.
-    contract_pairs = _verified_contract_pairs()
+    contract_pairs = _verified_contract_pairs(
+        description, os.path.join("Outputs", "generatedFullCode", "PYTHON.py"))
 
     # 1. GROUND TRUTH FIRST. Does the optimal reproduce the description's OWN worked
     #    examples (the canonical input→output pairs)? A failure here is definitive,
@@ -265,6 +282,16 @@ def _crosscheck_optimal_vs_brute(description: str, optimal_solution: str, brute_
         if contract_pairs:
             example_failures += _contract_ground_truth_failures(optimal_solution,
                                                                 contract_pairs)
+        # Both sources can name the same input — a raw-stdin description's Examples are
+        # visible to `optimal_example_failures` AND frozen into the contract. Reporting
+        # each twice makes one defect look like two.
+        _seen, _deduped = set(), []
+        for _f in example_failures:
+            _key = (_f["input"], _f["got"])
+            if _key not in _seen:
+                _seen.add(_key)
+                _deduped.append(_f)
+        example_failures = _deduped
     except Exception as e:
         print(f"(example ground-truth check skipped: {e})")
         example_failures = []

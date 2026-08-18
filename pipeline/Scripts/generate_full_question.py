@@ -68,7 +68,7 @@ def _table_to_bullets(table_lines):
 
 
 def normalize_renderer_safe(text):
-    """Deterministic renderer-safe normalization for the 'none' scenario description.
+    """Deterministic renderer-safe normalization, applied to EVERY description.
 
     The platform's custom markdown renderer cannot display ATX headings, horizontal
     rules, language-tagged code fences, or markdown tables. This pass guarantees
@@ -131,12 +131,17 @@ def normalize_renderer_safe(text):
 
 
 def parse_problem_md(file_path):
-    """Parse problem.md to extract metadata"""
+    """Parse problem.md to extract metadata.
+
+    Read as UTF-8 explicitly: problem statements routinely carry ≤, ≥, ×, · and other
+    non-ASCII from the notation-normalization rules, and relying on the platform's
+    default encoding makes the step's success depend on the machine's locale.
+    """
     if not os.path.exists(file_path):
         print(f"Error: {file_path} not found.")
         sys.exit(1)
-    
-    with open(file_path, 'r') as f:
+
+    with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
     
     lines = content.split('\n')
@@ -207,25 +212,48 @@ def to_camel_case(name):
     return ''.join(_norm(t, i == 0) for i, t in enumerate(tokens))
 
 
+def _first_json_object(text):
+    """The first syntactically complete JSON object in `text`, or None.
+
+    Prefers an object carrying `function_name` when several are present.
+
+    Replaces `re.search(r'\\{.*\\}', text, re.DOTALL)`, which is GREEDY: it spans from
+    the first `{` to the LAST `}` in the reply, so a model that emits the object plus
+    any other braced text — a second candidate, an inline example, a trailing note —
+    produced a span that is not valid JSON. That used to degrade to "no signature" and
+    warn; naming now hard-fails, so a parse this fragile would block the pipeline on a
+    reply that actually contained a perfectly good object. `raw_decode` stops at the
+    end of the first complete value and handles nested braces and strings correctly.
+    """
+    decoder = json.JSONDecoder()
+    fallback = None
+    for i, ch in enumerate(text):
+        if ch != '{':
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text[i:])
+        except ValueError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if str(obj.get("function_name") or "").strip():
+            return obj
+        if fallback is None:
+            fallback = obj
+    return fallback
+
+
 def _parse_signature(raw):
     """Robustly parse the function-signature JSON the extractor returns.
 
-    The model may wrap the JSON in a code fence or add stray prose, so we strip
-    fences and grab the first {...} block before parsing. Returns a normalized
-    dict (with a non-empty function_name and a clean parameter list) or None.
+    The model may wrap the JSON in a code fence or add stray prose, so strip fences and
+    take the first complete {...} object before parsing. Returns a normalized dict
+    (with a non-empty function_name and a clean parameter list) or None.
     """
     if not raw:
         return None
-    text = raw.strip()
-    if text.startswith("```"):
-        # Drop the opening fence line and any trailing fence.
-        text = text.split('\n', 1)[-1].rsplit('```', 1)[0]
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    if match:
-        text = match.group(0)
-    try:
-        data = json.loads(text)
-    except Exception:
+    data = _first_json_object(strip_code_fence(raw))
+    if data is None:
         return None
     if not isinstance(data, dict):
         return None
@@ -477,7 +505,7 @@ def _format_mismatches(contract):
 
 
 def reconcile_description(problem_name, desc_prompt, problem_content, optimal_path,
-                          outputs_dir, scenario_level, llm=None, verifier=None,
+                          outputs_dir, llm=None, verifier=None,
                           code_writer=None, max_attempts=MAX_DESCRIPTION_ATTEMPTS):
     """Generate the statement, execute the reference against its own Examples, reconcile.
 
@@ -509,7 +537,13 @@ def reconcile_description(problem_name, desc_prompt, problem_content, optimal_pa
             # The model returned SOURCE, not a statement: keep the statement we had.
             code_writer("code", clean_generated_code(strip_code_fence(content), "python"))
         else:
-            description = normalize_renderer_safe(content) if scenario_level == "none" else content
+            # UNCONDITIONAL. This pass removes the four constructs the platform's
+            # renderer cannot display (ATX headings, horizontal rules, fence language
+            # tags, pipe tables) and alters no value, so gating it on
+            # scenario_level == "none" only meant light/moderate/heavy descriptions
+            # relied on the model having obeyed the prompt. It is deterministic; there
+            # is no reason for the other three levels to go without it.
+            description = normalize_renderer_safe(content)
             # The repair prompt ASKS for the OPEN_ENDED marker back; a model that forgets
             # it would silently downgrade the problem to "not open-ended" — no checker,
             # no complaint. Carry the last decision forward instead of re-asking for it.
@@ -572,7 +606,7 @@ def run_description_step(problem_name, structure_type, scenario_level, problem_c
     # reference — a path that could never reach generate_testcases anyway.
     desc_response, recon = reconcile_description(
         problem_name, desc_prompt, problem_content, optimal_path,
-        OUTPUT_DIR, scenario_level,
+        OUTPUT_DIR,
     )
     if recon["verified"]:
         print(f"✓ Examples reconciled against the reference "
@@ -674,6 +708,21 @@ def run_naming_step(problem_name, structure_type, question_kind, user_code, dete
 
     _save_signature(description_signature)
     _save_working_code(renamed_code, detected_lang)
+
+    # INVALIDATE the I/O contract. It was frozen during the description step against the
+    # PRE-normalization reference, and normalization is entitled to change how stdin is
+    # read — indeed that is most of its job. On 2026-08-18 a reference that parsed the
+    # `name = value` display form verified cleanly at description time; naming then
+    # correctly rewrote it to read raw tokens, and the frozen contract still held display
+    # text as its `stdin`. Anything consuming that file afterwards tests the current
+    # reference against a format it no longer reads. generate_testcases re-derives and
+    # blocks on the result, so deleting it here loses nothing and makes the stale state
+    # impossible to consume.
+    contract_path = os.path.join(OUTPUT_DIR, "io_contract.json")
+    if os.path.exists(contract_path):
+        os.remove(contract_path)
+        print("✓ Invalidated io_contract.json — it was verified against the "
+              "pre-normalization reference and will be re-derived downstream.")
     print(
         "✓ Given code updated with description naming and normalization "
         f"({os.path.relpath(_working_code_path(detected_lang), OUTPUT_DIR)})"

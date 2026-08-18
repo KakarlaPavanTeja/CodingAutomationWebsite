@@ -91,7 +91,7 @@ class TestReconcileDescription(unittest.TestCase):
     def test_agreement_costs_one_generation_and_no_repair(self):
         llm = FakeLLM("DESC v1")
         desc, info = gfq.reconcile_description(
-            "P", "SYS", "raw", self.optimal, self.tmp.name, "moderate", llm=llm, verifier=ok)
+            "P", "SYS", "raw", self.optimal, self.tmp.name, llm=llm, verifier=ok)
         self.assertEqual(desc, "DESC v1")
         self.assertTrue(info["verified"])
         self.assertEqual(info["attempts"], 1)
@@ -102,7 +102,7 @@ class TestReconcileDescription(unittest.TestCase):
         seq = iter([disagrees, ok])
         llm = FakeLLM("DESC v1", "DESC v2")
         desc, info = gfq.reconcile_description(
-            "P", "SYS", "raw", self.optimal, self.tmp.name, "moderate", llm=llm,
+            "P", "SYS", "raw", self.optimal, self.tmp.name, llm=llm,
             verifier=lambda *a, **k: next(seq)(*a, **k))
         self.assertEqual(desc, "DESC v2")
         self.assertEqual(info["repairs"], ["description"])
@@ -118,7 +118,7 @@ class TestReconcileDescription(unittest.TestCase):
         llm = FakeLLM("DESC v1", "def solve():\n    return 1\n")
         written = {}
         desc, info = gfq.reconcile_description(
-            "P", "SYS", "raw", self.optimal, self.tmp.name, "moderate", llm=llm,
+            "P", "SYS", "raw", self.optimal, self.tmp.name, llm=llm,
             verifier=lambda *a, **k: next(seq)(*a, **k), code_writer=written.__setitem__)
         self.assertEqual(info["repairs"], ["code"])
         self.assertEqual(desc, "DESC v1", "a crashing reference must NOT rewrite the statement")
@@ -131,7 +131,7 @@ class TestReconcileDescription(unittest.TestCase):
     def test_the_default_code_writer_writes_the_reference_back(self):
         seq = iter([crashes, ok])
         gfq.reconcile_description(
-            "P", "SYS", "raw", self.optimal, self.tmp.name, "moderate",
+            "P", "SYS", "raw", self.optimal, self.tmp.name,
             llm=FakeLLM("DESC v1", "```python\nprint(2)\n```"),
             verifier=lambda *a, **k: next(seq)(*a, **k))
         with open(self.optimal, encoding="utf-8") as f:
@@ -140,7 +140,7 @@ class TestReconcileDescription(unittest.TestCase):
     def test_the_loop_is_bounded_and_names_the_side_it_was_repairing(self):
         llm = FakeLLM("v1", "v2", "v3")
         desc, info = gfq.reconcile_description(
-            "P", "SYS", "raw", self.optimal, self.tmp.name, "moderate", llm=llm,
+            "P", "SYS", "raw", self.optimal, self.tmp.name, llm=llm,
             verifier=disagrees, max_attempts=3)
         self.assertFalse(info["verified"])
         self.assertEqual(info["attempts"], 3, "never more than max_attempts generations")
@@ -150,7 +150,7 @@ class TestReconcileDescription(unittest.TestCase):
     def test_nothing_parseable_to_reconcile_is_not_a_repairable_defect(self):
         llm = FakeLLM("DESC v1")
         desc, info = gfq.reconcile_description(
-            "P", "SYS", "raw", self.optimal, self.tmp.name, "moderate", llm=llm,
+            "P", "SYS", "raw", self.optimal, self.tmp.name, llm=llm,
             verifier=unparseable)
         self.assertFalse(info["verified"])
         self.assertEqual(info["attempts"], 1, "an unparseable statement must not burn retries")
@@ -160,7 +160,7 @@ class TestReconcileDescription(unittest.TestCase):
     def test_usage_is_recorded_for_every_call_including_repairs(self):
         seq = iter([disagrees, ok])
         gfq.reconcile_description(
-            "P", "SYS", "raw", self.optimal, self.tmp.name, "moderate",
+            "P", "SYS", "raw", self.optimal, self.tmp.name,
             llm=FakeLLM("v1", "v2"),
             verifier=lambda *a, **k: next(seq)(*a, **k))
         self.assertEqual(len(self.tracked), 2,
@@ -190,7 +190,7 @@ class TestOpenEndedMarkerSurvivesRepair(unittest.TestCase):
     def _reconcile(self, *replies):
         seq = iter([disagrees, ok])
         desc, _ = gfq.reconcile_description(
-            "P", "SYS", "raw", self.optimal, self.tmp.name, "moderate",
+            "P", "SYS", "raw", self.optimal, self.tmp.name,
             llm=FakeLLM(*replies), verifier=lambda *a, **k: next(seq)(*a, **k))
         return gfq.split_open_ended_marker(desc)
 
