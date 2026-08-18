@@ -89,6 +89,20 @@ class GroundingTest(unittest.TestCase):
         self.assertEqual(len(fails), 1)
         self.assertEqual(fails[0]["got"], "7 8")
 
+    def test_a_multi_answer_case_passes_when_the_reference_answer_is_in_the_list(self):
+        # No single `output` to compare against; membership in `outputs` is the check.
+        self._write_suite([{"input": "2\n7 8\n", "multiple_possible_output": True,
+                            "outputs": ["8 7", "7 8"], "order": 1}])
+        self.assertEqual(_m._ground_against_reference(self.out, self.sol), [])
+
+    def test_a_multi_answer_case_whose_list_omits_the_reference_answer_is_flagged(self):
+        # The list is not exhaustive: the reference's own answer is missing from it.
+        self._write_suite([{"input": "2\n7 8\n", "multiple_possible_output": True,
+                            "outputs": ["8 7"], "order": 1}])
+        fails = _m._ground_against_reference(self.out, self.sol)
+        self.assertEqual(len(fails), 1)
+        self.assertEqual(fails[0]["got"], "7 8")
+
 
 if __name__ == "__main__":
     unittest.main()

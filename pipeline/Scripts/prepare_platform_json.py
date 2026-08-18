@@ -290,8 +290,14 @@ def load_source_testcases():
         tc_list = container["test_cases"]
         print(f"Validating {len(tc_list)} test cases...")
         for idx, tc in enumerate(tc_list, 1):
-            # Ensure all keys are present.
-            for key in ["input", "output", "weightage", "order"]:
+            # Ensure all keys are present. A multi-answer case legitimately has no
+            # `output` — defaulting one in would mask a missing/empty `outputs` list
+            # from every validation downstream (the `output is None` guard in
+            # practice_parse_test_cases could then never fire).
+            required = (["input", "outputs", "weightage", "order"]
+                        if tc.get("multiple_possible_output")
+                        else ["input", "output", "weightage", "order"])
+            for key in required:
                 if key not in tc:
                     if key == "weightage":
                         tc[key] = 5

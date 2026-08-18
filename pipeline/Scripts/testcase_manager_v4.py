@@ -17,9 +17,11 @@ from Prompts.testcasesprompt_v4 import (
 )
 from llm_client import apply_testcases_routing, call_llm, resolve_pipeline_difficulty
 from usage_tracker import update_usage
+from problem_flags import load_open_ended
 from testcase_helpers import (
     audit_io_shape,
     format_io_shape,
+    multi_answer_defects,
     sync_example_testcases,
 )
 
@@ -518,18 +520,32 @@ def format_io_contract(contract: dict) -> str:
 def _ground_against_reference(out_path: str, optimal_path: str) -> list[dict]:
     """Run the reference solution on every case's `input` and return the cases it
     fails to reproduce (crash/timeout, or stdout != stored `output`). An empty list
-    means the whole suite is executable by the real solution."""
+    means the whole suite is executable by the real solution.
+
+    A multi-answer case has no single `output`; the equivalent check is that the
+    reference's own answer is a MEMBER of the enumerated `outputs` — if it is not, the
+    list is missing at least one valid answer and so is not exhaustive."""
     cases = _load_testcases_from(out_path)
     timeout = _grounding_timeout_sec()
     failures: list[dict] = []
     for tc in cases:
         inp = tc.get("input", "") or ""
-        expected = _normalize_output(tc.get("output", ""))
+        multi = bool(tc.get("multiple_possible_output"))
+        allowed = ([_normalize_output(str(o)) for o in (tc.get("outputs") or [])]
+                   if multi else None)
+        expected = (" | ".join(allowed) if multi
+                    else _normalize_output(tc.get("output", "")))
         got, status = _run_reference_on_input(optimal_path, inp, timeout)
         if status != "ok":
             failures.append({"order": tc.get("order"), "input": inp,
                              "expected": expected, "got": f"<{status}>",
                              "detail": _normalize_output(got)[:300]})
+        elif multi:
+            if _normalize_output(got) not in allowed:
+                failures.append({"order": tc.get("order"), "input": inp,
+                                 "expected": expected,
+                                 "got": _normalize_output(got)[:300],
+                                 "detail": "reference answer is not in `outputs`"})
         elif _normalize_output(got) != expected:
             failures.append({"order": tc.get("order"), "input": inp,
                              "expected": expected, "got": _normalize_output(got)[:300],
@@ -875,6 +891,9 @@ def main():
     print(format_io_contract(io_contract))
 
     # 5. Prompt
+    open_ended = load_open_ended("Outputs")
+    if open_ended and not is_function:
+        print("      open-ended, non-function: cases must enumerate every valid answer.")
     system_prompt, user_prompt = get_testcases_prompt(
         description,
         optimal_solution,
@@ -884,6 +903,7 @@ def main():
         is_function=is_function,
         signature_params=signature_params,
         io_contract=io_contract,
+        open_ended=open_ended,
     )
     # Repair calls (crash-retry, grounding-fix) reuse this so they keep the same
     # contract instead of shipping a bare "fix this script" instruction.
@@ -1004,6 +1024,18 @@ def main():
                 print("Grounding passed after repair: reference solution reproduces all cases.")
             else:
                 print("Grounding passed: reference solution reproduces every case's output.")
+
+        # 11. Multi-answer gate. A stored `outputs` list that is not exhaustive, or that
+        #     omits the answer the statement itself prints, marks correct submissions
+        #     wrong — which is the exact bug the open-ended design exists to remove. It
+        #     is invisible at runtime, so refuse to ship instead.
+        if open_ended and not is_function:
+            defects = multi_answer_defects(_load_testcases_from(out_path), description)
+            if defects:
+                print("ERROR: the multi-answer suite is not shippable:")
+                for d in defects:
+                    print(f"  - {d}")
+                sys.exit(1)
 
     except Exception as e:
         print(f"An error occurred: {e}")

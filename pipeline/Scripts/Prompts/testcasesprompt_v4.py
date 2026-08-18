@@ -171,6 +171,38 @@ def _count_hint(difficulty, num_testcases):
             f"legal input space actually is")
 
 
+_ENUMERATE_BLOCK = """
+(THIS PROBLEM ACCEPTS MORE THAN ONE CORRECT ANSWER):
+There is no driver to wrap a stdin/stdout program in, so each multi-answer case must ship
+EVERY valid answer instead of one.
+
+For such a case emit, in place of `output`:
+    "multiple_possible_output": true,
+    "outputs": ["<answer 1>", "<answer 2>", ...]
+Emit `output` OR `outputs`, never both.
+
+  * Write an `is_valid_answer(stdin_text, candidate_stdout)` helper inside the generator
+    script and use it to filter. It is a generation-time tool and is never shipped.
+  * The list must be provably EXHAUSTIVE. Walk the candidate space to completion and keep
+    everything the helper accepts. A truncated list marks correct answers wrong, which is
+    the exact bug this exists to remove — so if you cannot enumerate a case completely, do
+    NOT ship it as multi-answer: reshape its input so the answer is unique.
+  * The answer shown in the problem statement's Example 1 / Example 2 MUST be in that
+    case's `outputs`. Test cases 1 and 2 are synced to the worked examples, so a list that
+    omits the stated answer fails the student who copied it.
+  * Stress and large cases MUST have a UNIQUE answer. They carry the timing coverage, so
+    shape them so only one output is valid (a chain rather than a sparse graph). Small
+    cases carry the multi-answer coverage. This is what keeps enumeration bounded without
+    a cap: enumeration cost is superexponential in the free choices (8 unconstrained nodes
+    = 40,320 orderings, 10 = 3.6M, 12 = 479M), and you control that through the input you
+    choose.
+  * There is deliberately NO fixed cap on the number of stored answers. The bound is the
+    input shape you pick, not a constant.
+  * A case whose answer IS unique stays an ordinary `output` case. Do not wrap a single
+    answer in `outputs`.
+"""
+
+
 def get_testcases_prompt(
     description,
     optimal_solution,
@@ -180,6 +212,7 @@ def get_testcases_prompt(
     is_function=False,
     signature_params=None,
     io_contract=None,
+    open_ended=False,
 ):
     """
     Build (system_prompt, user_prompt) for v4 generation.
@@ -188,6 +221,12 @@ def get_testcases_prompt(
         oracle. When provided, the generated script must cross-check every case
         (optimal vs brute) and abort on any mismatch. When None, the script
         falls back to self-consistency checks only and notes the weaker guarantee.
+
+    open_ended : the problem legitimately admits more than one correct answer (decided
+        at authoring time, read from Outputs/problem_flags.json). Only NON-function
+        problems change here: they have no driver to run a checker in, so each
+        multi-answer case must ship EVERY valid answer. Function-based problems are
+        graded by the driver's checker and must NOT also enumerate.
 
     is_function / signature_params : whether this is a function-based problem and,
         if so, the reference function's parameter names. Both function-based and
@@ -324,6 +363,12 @@ written. So:
     boundary, singleton). Mark them accurately — they are reported separately.
 Emit NO other keys: no per-case weight, no `tags`, no `order`. Those are derived.
 """
+
+    # Non-function open-ended problems only. There is no driver around a stdin/stdout
+    # program, so nothing of ours can run a checker at grading time — the valid answers
+    # have to be worked out here and stored. Function-based problems keep the reference's
+    # single answer; their driver's `is_valid_answer` does the accepting.
+    enumerate_block = _ENUMERATE_BLOCK if (open_ended and not is_function) else ""
 
     size_model_block = """
 (PROBLEM SIZE MODEL — REQUIRED at the ROOT dict, alongside `test_cases`):
@@ -497,7 +542,7 @@ ORACLE MISMATCH (a real correctness bug, which must stop the run).
     `from tc_harness import run_solution` (the IO harness above), and maybe `import math`.
 
 {final_suite_block}
-{declared_metadata_block}
+{declared_metadata_block}{enumerate_block}
 {size_model_block}
 (OUTPUT JSON SHAPE):
 Root: a LIST containing EXACTLY ONE dict with keys `"test_cases"`, `"size_model"`, `"space_mode"`.

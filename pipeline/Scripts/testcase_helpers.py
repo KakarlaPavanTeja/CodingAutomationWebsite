@@ -304,7 +304,15 @@ def sync_example_testcases(test_cases: list, description: str, io_contract=None)
         want_out = out.rstrip("\n") if isinstance(out, str) else str(out)
         cur_inp = tc.get("input", "") or ""
         cur_out = tc.get("output", "") or ""
-        if cur_inp != want_inp or cur_out != want_out:
+        if tc.get("multiple_possible_output"):
+            # A multi-answer case stores every valid answer and no `output` at all;
+            # writing one here would both contradict `outputs` and trip
+            # `multi_answer_defects`. The stated answer is enforced there instead:
+            # it must be a MEMBER of `outputs`.
+            if cur_inp != want_inp:
+                tc["input"] = want_inp
+                changed += 1
+        elif cur_inp != want_inp or cur_out != want_out:
             tc["input"] = want_inp
             tc["output"] = want_out
             changed += 1
@@ -847,3 +855,39 @@ def derive_subtasks(test_cases: list, kind: str, max_n: int) -> dict:
             tc["tags"] = dedupe_tags(_strip_subtask_tags(tc.get("tags") or []) + [enum])
             tc["weightage"] = weight
     return names
+
+
+def multi_answer_defects(test_cases, description):
+    """Defects in a multi-answer suite. Empty list means it is shippable.
+
+    The statement check is the one that matters: `sync_example_testcases` forces cases 1-2
+    to the description's worked Examples, so if the answer printed in the statement is not
+    in the enumerated list, the student who copies the worked example is marked wrong.
+    """
+    from benchmark_suite import extract_example_io, normalize
+
+    examples = extract_example_io(description or "") or []
+    stated = {i + 1: normalize(out) for i, (_inp, out) in enumerate(examples[:2])}
+    defects = []
+    for tc in test_cases or []:
+        if not isinstance(tc, dict) or not tc.get("multiple_possible_output"):
+            continue
+        order = tc.get("order")
+        outs = tc.get("outputs")
+        if not isinstance(outs, list) or not outs:
+            defects.append(f"case order={order}: multiple_possible_output with an empty "
+                           f"or missing `outputs` list")
+            continue
+        if tc.get("output") is not None:
+            defects.append(f"case order={order}: carries both `output` and `outputs`; a "
+                           f"multi-answer case must carry only `outputs`")
+        normed = [normalize(str(o)) for o in outs]
+        if len(set(normed)) != len(normed):
+            defects.append(f"case order={order}: `outputs` holds duplicate answers, so the "
+                           f"enumeration did not walk a well-defined space")
+        want = stated.get(order)
+        if want is not None and want not in normed:
+            defects.append(f"case order={order}: the answer Example {order} prints "
+                           f"({want!r}) is not in `outputs`; the statement and the grader "
+                           f"disagree")
+    return defects
