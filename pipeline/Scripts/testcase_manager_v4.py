@@ -17,6 +17,7 @@ from Prompts.testcasesprompt_v4 import (
 )
 from llm_client import apply_testcases_routing, call_llm, resolve_pipeline_difficulty
 from usage_tracker import update_usage
+from open_ended_checker import accepts, load_checker
 from problem_flags import load_open_ended
 from testcase_helpers import (
     audit_io_shape,
@@ -553,6 +554,42 @@ def _ground_against_reference(out_path: str, optimal_path: str) -> list[dict]:
     return failures
 
 
+def _ground_checker(cases: list[dict], checker) -> list[dict]:
+    """The reference, run through its own driver, must reproduce every stored output.
+
+    `_ground_against_reference` runs the reference as a PROGRAM; this runs it as the DRIVER
+    will. Both assertions below fail silently in production:
+      - `reference_answer(input) != output` makes the driver print something the platform
+        never stores, so the case fails for EVERY student including a perfect one. Cases
+        1-2 are the description's worked examples (`sync_example_testcases`), so this is
+        where a statement/driver disagreement surfaces.
+      - `is_valid_answer(input, output)` False means the checker rejects its own reference's
+        answer, so it rejects correct submissions too.
+    """
+    if checker is None:
+        return []
+    failures: list[dict] = []
+    for tc in cases:
+        inp = tc.get("input", "") or ""
+        stored = _normalize_output(tc.get("output", ""))
+        try:
+            produced = _normalize_output(checker.reference_answer(inp))
+        except Exception as e:
+            failures.append({"order": tc.get("order"), "input": inp, "expected": stored,
+                             "got": "<error>",
+                             "detail": f"reference_answer raised {type(e).__name__}: {e}"})
+            continue
+        if produced != stored:
+            failures.append({"order": tc.get("order"), "input": inp, "expected": stored,
+                             "got": produced[:300],
+                             "detail": "reference_answer disagrees with the stored output"})
+        elif not accepts(checker, inp, stored):
+            failures.append({"order": tc.get("order"), "input": inp, "expected": stored,
+                             "got": stored[:300],
+                             "detail": "is_valid_answer rejects its own reference answer"})
+    return failures
+
+
 def _format_grounding_failures(failures: list[dict], limit: int = 12) -> str:
     lines = []
     for f in failures[:limit]:
@@ -1024,6 +1061,30 @@ def main():
                 print("Grounding passed after repair: reference solution reproduces all cases.")
             else:
                 print("Grounding passed: reference solution reproduces every case's output.")
+
+            # 10b. The same suite, run the way the DRIVER will run it. Grounding above ran
+            #      the reference as a program, so its stdout matches by construction; what
+            #      nobody has exercised is the checker the driver actually calls. A
+            #      `reference_answer` that disagrees with a stored output fails that case
+            #      for every student including a perfect one — and cases 1-2 come from the
+            #      description's worked examples, so that is exactly where a statement /
+            #      checker disagreement hides. Not repairable by _repair_from_grounding:
+            #      the defect is in the naming step's output, not in the generator script.
+            if open_ended and is_function:
+                checker = load_checker(optimal_path)
+                if checker is None:
+                    print("ERROR: this problem is flagged open_ended but the reference "
+                          "exposes no reference_answer/is_valid_answer. Re-run the naming "
+                          "step.")
+                    sys.exit(1)
+                cases = _load_testcases_from(out_path)
+                checker_failures = _ground_checker(cases, checker)
+                if checker_failures:
+                    print("ERROR: CHECKER GROUNDING FAILED — the reference does not "
+                          "reproduce its own stored outputs through the driver:")
+                    print(_format_grounding_failures(checker_failures))
+                    sys.exit(1)
+                print(f"✓ Checker grounded on {len(cases)} case(s).")
 
         # 11. Multi-answer gate. A stored `outputs` list that is not exhaustive, or that
         #     omits the answer the statement itself prints, marks correct submissions
