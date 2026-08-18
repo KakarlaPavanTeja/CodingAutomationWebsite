@@ -764,6 +764,55 @@ class CrosscheckNoiseTest(unittest.TestCase):
         self.assertEqual(found[0]["brute"], "2")
 
 
+class ValidateExamplesCheckerTest(unittest.TestCase):
+    """The advisory ground-truth line reported "optimal disagrees with expected" on an
+    open-ended problem where the optimal was correct.
+
+    `matches_expected` compared byte-for-byte and ignored the checker, while
+    `brute_agrees` two lines below it used the checker. The function's own docstring
+    describes fixing exactly this defect — the fix reached one of the two comparisons.
+    """
+
+    # Echoes stdin, so its "answer" is whatever was fed in.
+    ECHO = "import sys\nprint(sys.stdin.read().strip())\n"
+
+    class _Checker:
+        """Accepts any permutation of the input tokens — a stand-in for a real
+        is_valid_answer on a problem with several correct orderings."""
+        @staticmethod
+        def is_valid_answer(stdin_text, candidate_stdout):
+            return sorted(stdin_text.split()) == sorted(candidate_stdout.split())
+
+    # Prints something that is NOT a permutation of the input: a genuinely wrong optimal.
+    WRONG = "import sys\nsys.stdin.read()\nprint('9 9 9')\n"
+
+    def _run(self, expected, checker, optimal=None):
+        from validate_solutions import validate_examples
+        return validate_examples(
+            [{"input": "1 2 3\n", "expected_output": expected}],
+            optimal or self.ECHO, None, "desc", checker=checker)["example_results"][0]
+
+    def test_a_different_but_valid_answer_is_accepted_when_a_checker_exists(self):
+        # Optimal prints "1 2 3"; the SLM invented "3 2 1". Both valid; not a defect.
+        # This is the exact case that produced the spurious warning on a live run.
+        self.assertTrue(self._run("3 2 1", self._Checker)["matches_expected"])
+
+    def test_an_exact_match_still_passes_with_a_checker(self):
+        self.assertTrue(self._run("1 2 3", self._Checker)["matches_expected"])
+
+    def test_a_genuinely_wrong_OPTIMAL_is_still_reported(self):
+        # The checker judges the OPTIMAL's own output, not the SLM's guess at it — an
+        # invented expected_output is not authoritative on an open-ended problem. So a
+        # real failure means the optimal produced something the checker rejects.
+        self.assertFalse(
+            self._run("1 2 3", self._Checker, optimal=self.WRONG)["matches_expected"])
+
+    def test_deterministic_problems_keep_exact_text_comparison(self):
+        # checker=None -> accepts() is False -> byte comparison only. Unchanged behaviour.
+        self.assertFalse(self._run("3 2 1", None)["matches_expected"])
+        self.assertTrue(self._run("1 2 3", None)["matches_expected"])
+
+
 class PromptFormatAgreementTest(unittest.TestCase):
     """P1-6. descriptionPrompt said write `[1, 2, 3]`; normalizationPrompt said print
     `[1,2,3]`. verify_io_contract then compared the two byte-for-byte."""

@@ -41,7 +41,15 @@ Next.js API layer.
 - `npm run db` — `tsx scripts/db.mts` (DB helper script).
 - `npm run test:json` — Python unittest for pipeline JSON prep.
 
-There is currently **no JS/TS test runner** — only the Python `test:json` suite.
+**Two test suites exist and both must stay green:**
+
+- `npm run test:ts` — `tsx --test "src/**/*.test.ts"`, Node's built-in runner.
+- `npm run test:json` — Python unittest for the pipeline.
+
+This line used to claim there was no JS/TS runner. That was wrong, and it cost real
+work: a TypeScript fix was "proved" with a throwaway script that re-implemented the
+logic, instead of a test against the actual function. If you add TypeScript
+behaviour, add a `*.test.ts` beside it.
 
 ## Layout
 

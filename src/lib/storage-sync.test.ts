@@ -174,6 +174,68 @@ test("omitting the bound uploads everything — the old, unsafe behaviour", asyn
   assert.equal(count, Object.keys(HYDRATED).length);
 });
 
+test("the real hydrate-then-publish cycle survives two steps racing", async () => {
+  // The closest reproduction of the production race that does not require the shared
+  // cloud database. Everything here is the REAL code path a pipeline step takes:
+  // createTempWorkspace downloads the problem's whole Outputs tree from storage, the
+  // step writes its files, uploadOutputsFromDir publishes. The tests above hand-build
+  // the workspace; this one lets hydration build it, which is where the stale copies
+  // actually come from.
+  //
+  // Not covered without a live server: the HTTP handler, auth, and spawn. Those are
+  // asserted at source level in pipeline-question.test.ts.
+  const { createTempWorkspace, uploadOutputsFromDir, cleanupTempDir } = await load();
+  const P = "77777777-7777-4777-8777-777777777777";
+  const key = path.join(ROOT, `${P}/outputs/generatedFullCode/PYTHON.py`);
+
+  // The description step has finished: storage holds the pre-naming reference.
+  const seed = mkdtempSync(path.join(tmpdir(), "seed-"));
+  for (const [rel, body] of Object.entries(HYDRATED)) {
+    const p = path.join(seed, rel);
+    await mkdir(path.dirname(p), { recursive: true });
+    await writeFile(p, body);
+  }
+  await uploadOutputsFromDir(P, seed);
+
+  // Both steps launch. Each hydrates its OWN workspace from storage — so both now hold
+  // a copy of the PRE-NAMING PYTHON.py, which is the whole problem.
+  const namingWs = await createTempWorkspace(P);
+  const topicsWs = await createTempWorkspace(P);
+  await new Promise((r) => setTimeout(r, 1_100));
+  const namingBound = Date.now() - 1_000;
+  const topicsBound = Date.now() - 1_000;
+
+  assert.equal(
+    await readFile(path.join(topicsWs, "Outputs/generatedFullCode/PYTHON.py"), "utf-8"),
+    "PRE-NAMING",
+    "hydration must really have handed topics the stale copy, or this proves nothing",
+  );
+
+  // naming finishes first and publishes the normalized reference.
+  await new Promise((r) => setTimeout(r, 1_100));
+  await writeFile(path.join(namingWs, "Outputs/generatedFullCode/PYTHON.py"), "NORMALIZED");
+  await uploadOutputsFromDir(P, path.join(namingWs, "Outputs"), namingBound);
+  assert.equal(await readFile(key, "utf-8"), "NORMALIZED");
+
+  // topics finishes second, having written only its own artefact.
+  await writeFile(path.join(topicsWs, "Outputs/generated_topics.json"), '["graphs"]');
+  await uploadOutputsFromDir(P, path.join(topicsWs, "Outputs"), topicsBound);
+
+  assert.equal(
+    await readFile(key, "utf-8"),
+    "NORMALIZED",
+    "the later step republished its stale hydrated copy and reverted the rename",
+  );
+  assert.equal(
+    await readFile(path.join(ROOT, `${P}/outputs/generated_topics.json`), "utf-8"),
+    '["graphs"]',
+    "topics must still publish what it did write",
+  );
+
+  await cleanupTempDir(namingWs);
+  await cleanupTempDir(topicsWs);
+});
+
 test("the periodic sync's first tick does not republish hydrated files", async () => {
   // `knownFiles` starts empty, so without the bound the first tick treats every
   // hydrated file as changed and republishes the whole workspace mid-run — the same

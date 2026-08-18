@@ -94,7 +94,18 @@ def validate_examples(examples, optimal_code, brute_code, description, *, _batch
     for e, o, b in zip(examples, opt, brute):
         out, status = o
         fmt_ok = status != "error"
-        matches = status == "ok" and normalize(out) == normalize(e.get("expected_output", ""))
+        # The checker decides here too, not only for `brute_agrees` below. On an
+        # open-ended problem the SLM invents an example and states ONE valid answer; the
+        # optimal legitimately produces a different, equally valid one, and a byte
+        # comparison then reports "optimal disagrees with expected" about a correct
+        # solution. That is the same defect this function's docstring describes fixing for
+        # brute agreement — the fix was applied to one of the two comparisons and not the
+        # other. `accepts` returns False when there is no checker, so deterministic
+        # problems keep the exact-text behaviour unchanged.
+        matches = status == "ok" and (
+            normalize(out) == normalize(e.get("expected_output", ""))
+            or accepts(checker, e.get("input", ""), normalize(out))
+        )
         if not fmt_ok or not matches:
             optimal_ok = False
         rec = {
