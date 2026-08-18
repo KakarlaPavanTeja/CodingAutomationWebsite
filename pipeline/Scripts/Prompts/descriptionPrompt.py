@@ -1,3 +1,34 @@
+# Applied to the Output Format of EVERY live builder. The description step is the only
+# place that knows whether the problem legitimately admits several correct answers, so it
+# decides once and records the decision in a trailing HTML comment which
+# `problem_flags.split_open_ended_marker` strips before the description is saved.
+# Nothing downstream re-derives this from prose.
+_ANSWER_DETERMINACY_RULE = """
+**ANSWER DETERMINACY (you MUST end your reply with the marker below):**
+- If the task could admit MORE THAN ONE valid output (e.g. "the indices of a pair summing
+  to k" when several pairs qualify, "any valid arrangement", multiple shortest paths),
+  decide ONE of two things and say which:
+  - **Add a tie-break** when a tie-break is natural to the problem and costs it nothing —
+    e.g. "return the pair with the smallest first index, breaking ties by the smallest
+    second index". Put the rule in **Output Format**. Prefer this whenever it applies.
+  - **Leave it open** when a tie-break would change what the problem tests — demanding the
+    lexicographically smallest topological ordering turns a graph problem into a
+    graph-plus-sorting problem. Then the statement must say the answer is not unique
+    (e.g. "any valid ordering is accepted") and MUST NOT claim the shown answer is the
+    only one.
+- NEVER state a tie-break that `USER CODE` does not already follow. If no rule you can
+  state matches what `USER CODE` actually produces, leave it open instead.
+- Worked examples ALWAYS show exactly one concrete answer either way — the reader needs to
+  see the shape of a valid output.
+- Finish your reply with EXACTLY ONE of these two lines and nothing after it:
+      <!-- OPEN_ENDED: false reason=<why one answer is pinned down> -->
+      <!-- OPEN_ENDED: true reason=<why a tie-break would distort the problem> -->
+  Emit `true` only when you left it open. If a tie-break is stated, emit `false`.
+- This one marker line is the ONLY thing allowed after the final section; it is an
+  exception to the document-termination rule, not a violation of it.
+"""
+
+
 _CONSTRAINTS_NO_META = """
 - **NO preparer meta-notes in Constraints.** List only the bounds/invariants themselves — e.g. `1 ≤ N ≤ 10^5`. NEVER append editorial asides such as `(inferred; ...)`, `*(inferred; the source omitted explicit bounds — adjust to the actual judge limits)*`, or similar notes about how a bound was chosen. If the input statement contains such notes, drop them and keep only the numeric limits.
 """
@@ -154,6 +185,7 @@ Your response MUST END immediately after the **Output Format** section.
 - **CRITICAL: DO NOT use the word "Print" at the start of bullets.**
 - **PRINT VS RETURN**: You MUST explicitly state whether the final result is **printed** to standard output or **returned**, exactly as handled in the `USER CODE`.
 - **CONSISTENCY**: The output representation MUST match exactly what the original examples show.
+{_ANSWER_DETERMINACY_RULE}
 
 **FINAL CONFLICT-RESOLUTION RULE (READ LAST):**
 If any instruction above ever conflicts with the FOUR PILLARS (scenario, variable names & function meaning, example values, constraint values), **THE FOUR PILLARS WIN** — never change them to satisfy a formatting or rewriting rule. (The function name is still written in camelCase per pillar 2 — that is a re-casing, not a rename, so it does not conflict with this rule.)
@@ -167,95 +199,6 @@ If any instruction above ever conflicts with the FOUR PILLARS (scenario, variabl
     - `null` represents a null node.
 """
     return prompt
-
-
-def _get_rephrasing_mode(scenario_level: str) -> str:
-    """Scenario-level rephrasing instructions shared by split description prompts."""
-    if scenario_level == "light":
-        return """
-**REPHRASING WITH LIGHT SCENARIO:**
-- Add a subtle real-world context to frame the problem, but keep it minimal (1-2 sentences max).
-- The core problem description should remain mostly technical and algorithmic.
-- Use the context only to introduce the variables naturally, then shift to direct problem language.
-- Example: Instead of "Given an array of integers", say "A sensor array records `n` readings. Given these readings as a sequence `values`..." then proceed technically.
-- Do NOT build an elaborate story. The scenario is just a thin wrapper to make variables feel grounded.
-- **Vary themes**: Use diverse contexts (sensors, logs, inventories, schedules, measurements — NOT always space themes).
-- Example transformations:
-  * "array of numbers" → "sequence of readings", "list of recorded values"
-  * "find indices" → "locate the positions", "identify which entries"
-  * "target sum" → "desired total", "target threshold"
-"""
-    if scenario_level == "moderate":
-        return """
-**REPHRASING WITH MODERATE SCENARIO:**
-- Create a NEW scenario/story completely different from typical examples.
-- **Vary themes**: Use diverse contexts (Banking, Nature/Science, Games, Technology, Social - NOT always space themes).
-- The scenario should naturally lead to the same algorithmic problem.
-- Keep it concise - don't over-elaborate.
-- Example transformations:
-  * "array of numbers" → "sequence of measurements", "list of scores", "collection of readings"
-  * "find indices" → "locate positions", "identify locations", "determine placements"
-  * "target sum" → "desired total", "goal value", "required amount"
-"""
-    if scenario_level == "heavy":
-        return """
-**REPHRASING WITH HEAVY/IMMERSIVE SCENARIO:**
-- Create a rich, detailed narrative scenario that fully disguises the underlying algorithm.
-- Build a vivid, engaging story world with specific characters, settings, or situations.
-- The reader should feel immersed in the scenario before realizing it maps to an algorithmic challenge.
-- **Vary themes**: Use creative, diverse contexts — fantasy worlds, detective investigations, cooking competitions, archaeological expeditions, space missions, wildlife research, city planning, etc.
-- Every technical element should be naturally mapped to the story:
-  * "array of numbers" → "the ancient scroll contains a sequence of rune power levels"
-  * "find indices" → "identify which runes in the sequence"
-  * "target sum" → "the ritual requires a combined power of exactly"
-  * "return true/false" → "determine whether the expedition can succeed"
-- The scenario should be 3-5 sentences of narrative context before the actual task description.
-- Make the problem feel like a puzzle within the story, not a math problem with a coat of paint.
-"""
-    return ""
-
-
-def _get_naming_requirements() -> str:
-    return """
-**NAMING REQUIREMENTS (ALWAYS APPLY):**
-
-**CRITICAL - YOU MUST CHANGE THESE:**
-- **Function Name**: Generate a NEW camelCase name different from these common ones:
-  * FORBIDDEN: twoSum, findPair, searchPair, getPair, findIndices, getIndices
-  * GOOD: locatePairPositions, findMatchingElements, identifyTargetPair, seekElementPair
-
-- **Variable Names in Description**: You MUST use DIFFERENT names from standard examples:
-  * FORBIDDEN: nums, arr, array, target, sum
-  * For array/list: Use "elements", "values", "data", "sequence", "collection", "items"
-  * For target/goal: Use "goal", "required", "desired", "expected", "threshold"
-  * For size: Keep as single letter `n` or `m` (this is OK)
-
-- **Consistency**: Use your NEW chosen names consistently in every section you write.
-"""
-
-
-def _get_io_truth_context(user_code: str) -> str:
-    return f"""
-**SOURCE OF TRUTH FOR I/O FORMAT:**
-You MUST use the `USER CODE` provided below as the absolute SOURCE OF TRUTH for input/output behavior.
-
-**USER CODE:**
-```cpp
-{user_code}
-```
-
-**INSTRUCTION UPDATE:**
-1. Carefully analyze the ENTITY of the `USER CODE`, including any `main` function or top-level input reading logic (e.g., `cin`, `scanf`, `input()`, `fs.readFileSync`).
-2. If the code explicitly reads a variable (like a length `n` or `m`) before reading a collection/array, you MUST include that variable in examples and formats.
-3. If the code reads the collection/array directly (e.g., using `JSON.parse` or `getline` without an explicit size count), then you MUST NOT include a size variable.
-4. Your output must reflect EXACTLY what the `USER CODE` prints or returns as the final result of execution.
-5. Do NOT blindly copy the input/output format text from the original problem description text if it conflicts with how the `USER CODE` actually reads/writes data.
-6. **STRICT COMPLEX TYPE FORMATTING**: Any arrays, strings, or matrices mentioned MUST follow the exact input representation expected by the `USER CODE`.
-
-**CRITICAL: DO NOT mention time/space complexity constraints in the description.**
-"""
-
-
 
 
 def _function_example_format_addon(question_type: str) -> str:
@@ -279,167 +222,6 @@ def _node_type_addon(question_type: str) -> str:
 - `null` represents a null node.
 """
     return ""
-
-
-def get_description_prose_prompt(problem_name, question_type, user_code, scenario_level="moderate"):
-    """Step 1a: problem statement / scenario only — establishes names for later steps."""
-    rephrasing_mode = _get_rephrasing_mode(scenario_level)
-    return f"""You are an expert technical content writer for a coding interview platform.
-{_get_io_truth_context(user_code)}
-
-**YOUR OBJECTIVE:**
-Write ONLY the **problem statement prose** for a rephrased coding question. Use NEW variable and function names.
-
-{rephrasing_mode}
-{_get_naming_requirements()}
-
-**FORBIDDEN PHRASES (DO NOT USE):**
-- "Given an array of integers"
-- "return indices of"
-- "find two numbers"
-- "add up to target"
-- "You may assume"
-- "return the answer in any order"
-
-**OUTPUT RULES:**
-1. Do NOT use `###`, `---`, or ATX headings.
-2. Do NOT include a "Problem Statement" title — start directly with the description text.
-3. Do NOT write Examples, Your Task, Constraints, Input Format, or Output Format.
-4. Use backticks for literal values in prose.
-5. Break text into short lines with blank lines between distinct rules or objectives.
-6. End after the problem statement prose — nothing else.
-
-**At the very end**, on its own lines, emit a machine-readable naming block so later steps stay consistent:
-
-**Naming Block:**
-- function: `yourChosenFunctionName`
-- variables: `name1`, `name2`, ...
-{_node_type_addon(question_type)}
-{_function_example_format_addon(question_type)}
-"""
-
-
-def get_description_examples_prompt(problem_prose, question_type, user_code):
-    """Step 1b: two fresh examples using names from the prose step."""
-    return f"""You are an expert technical content writer for a coding interview platform.
-{_get_io_truth_context(user_code)}
-
-**PROBLEM STATEMENT (already written — use the SAME variable/function names):**
-{problem_prose}
-
-**YOUR OBJECTIVE:**
-Write ONLY the **Examples** section (exactly 2 examples). Do NOT rewrite the problem statement.
-
-**CRITICAL RULES:**
-- **ABSOLUTELY NO COPYING** from the original input problem text.
-- Invent completely new numbers, arrays, strings, and outputs.
-- Provide exactly 2 examples — no more, no fewer.
-- Use the SAME naming as the problem statement above.
-- Format arrays with spaces after commas: `[1, 2, 3]` not `[1,2,3]`.
-- Use backticks for literals in explanations.
-- Do NOT use language tags after code fences — bare ``` only.
-
-**OUTPUT FORMAT (follow exactly, including blank lines):**
-
-    **Example 1:**
-
-    **Input:**
-
-    ```
-    ...
-    ```
-
-    **Output:**
-
-    ```
-    ...
-    ```
-
-    **Explanation:**
-
-    - ...
-
-    **Example 2:**
-
-    **Input:**
-
-    ```
-    ...
-    ```
-
-    **Output:**
-
-    ```
-    ...
-    ```
-
-    **Explanation:**
-
-    - ...
-
-Your response MUST contain ONLY the two examples — no other sections.
-{_node_type_addon(question_type)}
-"""
-
-
-def get_description_spec_prompt(problem_prose, examples_text, question_type, user_code):
-    """Step 1c: Your Task, Constraints, Input Format, Output Format."""
-    return f"""You are an expert technical content writer for a coding interview platform.
-{_get_io_truth_context(user_code)}
-
-**PROBLEM STATEMENT:**
-{problem_prose}
-
-**EXAMPLES (already written — stay consistent):**
-{examples_text}
-
-**YOUR OBJECTIVE:**
-Write ONLY these four sections, in order: **Your Task**, **Constraints**, **Input Format**, **Output Format**.
-
-**Your Task**
-- Use the function name from the problem statement.
-- Format:
-    **Your Task**
-
-    - Complete the provided `functionName` function that takes `arg` and returns `result`.
-
-**Constraints**
-- Bullet points with backticks.
-- Every numeric range MUST have explicit bounds (e.g. `0 ≤ n ≤ 10^5`).
-- Infer reasonable bounds from the problem and examples if unspecified.
-{_CONSTRAINTS_NO_META}
-
-**Input Format**
-- Title: **Input Format** followed by a blank line.
-- Bullet points describing inputs line-by-line, matching `USER CODE` and the examples above.
-
-**Output Format**
-- Title: **Output Format** followed by a blank line.
-- Bullet points describing outputs, matching `USER CODE` and the examples above.
-- State whether the result is **printed** or **returned**, exactly as in `USER CODE`.
-- Do NOT start bullets with the word "Print".
-- **DETERMINISTIC ANSWER (CRITICAL):** if the task could admit MORE THAN ONE valid
-  output (e.g. "return the indices of a pair summing to k" when several pairs qualify,
-  "any valid arrangement", multiple shortest paths), the Output Format MUST pin down a
-  SINGLE expected answer with an explicit tie-break rule — e.g. "return the pair with
-  the smallest first index, breaking ties by the smallest second index" or "return the
-  lexicographically smallest such sequence". The tie-break MUST be consistent with the
-  worked examples and with what `USER CODE` actually produces. Never leave the expected
-  output ambiguous; grading compares against one exact answer.
-
-**OUTPUT RULES:**
-1. Do NOT rewrite the problem statement or examples.
-2. Use `**` for section titles with a blank line after each title.
-3. Add a blank line between every bullet point.
-4. Your response MUST END immediately after the **Output Format** section.
-{_node_type_addon(question_type)}
-"""
-
-
-def assemble_description_parts(prose: str, examples: str, spec: str) -> str:
-    """Join the three description LLM outputs into one markdown file."""
-    parts = [p.strip() for p in (prose, examples, spec) if p and p.strip()]
-    return "\n\n".join(parts) + "\n"
 
 
 def get_description_prompt(problem_name, question_type, user_code, scenario_level="moderate"):
@@ -520,15 +302,7 @@ You MUST use the `USER CODE` provided below as the absolute SOURCE OF TRUTH for 
 3. If the code explicitly reads a variable (like a length `n` or `m`) before reading a collection/array, you MUST include that variable in your "Input Format" and "Examples".
 4. If the code reads the collection/array directly (e.g., using `JSON.parse` or `getline` without an explicit size count), then you MUST NOT include a size variable.
 5. Your generated description's "Output Format" must reflect EXACTLY what the `USER CODE` prints or returns as the final result of execution.
-5a. **DETERMINISTIC ANSWER (CRITICAL):** if the task could admit MORE THAN ONE valid
-   output (e.g. "return the indices of a pair summing to k" when several pairs qualify,
-   any valid arrangement, multiple shortest paths), the "Output Format" MUST pin down a
-   SINGLE expected answer with an explicit tie-break rule — e.g. "return the pair with
-   the smallest first index, breaking ties by the smallest second index" or "return the
-   lexicographically smallest such sequence". The tie-break MUST match what `USER CODE`
-   actually produces: read its loop order and state the rule it already follows, never a
-   rule you invent. Grading compares against ONE exact answer, so an ambiguous Output
-   Format marks correct submissions wrong.
+{_ANSWER_DETERMINACY_RULE}
 6. Do NOT blindly copy the input/output format text from the original problem description text if it conflicts with how the `USER CODE` actually reads/writes data.
 7. **STRICT COMPLEX TYPE FORMATTING**: Any arrays, strings, or matrices mentioned in the description or examples MUST follow the exact input representation expected by the `USER CODE`. For example:
    - If the code reads a matrix row-by-row as space-separated values, describe it that way.
@@ -762,6 +536,7 @@ The rendered page does NOT support LaTeX/MathJax. Convert all math notation to c
 **Output Format**
 - Title: **Output Format** then a blank line. Bullet points describing stdout, consistent with the ORIGINAL examples and `USER CODE`.
 - **MANDATORY — the word "Print" is COMPULSORY here.** Start the output bullet(s) with `Print ...` (e.g. "Print a single integer ...", "Print each result on a new line"). The result is **printed** to standard output (full-program style).
+{_ANSWER_DETERMINACY_RULE}
 
 **Constraints**
 - Present the ORIGINAL constraints as bullet points with backticks and normalized notation (e.g. `5 ≤ |s| ≤ 10^5`). Do NOT change any values.
@@ -846,13 +621,7 @@ Use the `USER CODE` below as the absolute source of truth for **Input Format** a
 **Input Format / Output Format:**
 - Describe stdin/stdout line-by-line based on USER CODE{_INPUT_LAYOUT_RULE}
 - **MANDATORY — the word "Print" is COMPULSORY in **Output Format**.** Start the output bullet(s) with `Print ...` (e.g. "Print a single integer ...", "Print each result on a new line"), since a full program writes its result to standard output.
-- **DETERMINISTIC ANSWER (CRITICAL):** if the task could admit MORE THAN ONE valid output
-  (e.g. indices of a pair summing to k when several pairs qualify, "any valid arrangement",
-  multiple shortest paths), the Output Format MUST pin down a SINGLE expected answer with an
-  explicit tie-break rule (e.g. "smallest first index, then smallest second index";
-  "lexicographically smallest sequence") that is consistent with the examples and with what
-  USER CODE produces. Never leave the expected output ambiguous — grading compares against one
-  exact answer.
+{_ANSWER_DETERMINACY_RULE}
 
 **Constraints:**
 - Explicit numeric bounds with inequalities, e.g. `1 ≤ n ≤ 10^5`

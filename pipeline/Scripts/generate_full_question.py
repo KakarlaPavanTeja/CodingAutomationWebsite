@@ -14,6 +14,7 @@ from Prompts.topicsPrompt import get_topics_prompt
 
 from llm_client import call_llm
 from usage_tracker import update_usage
+from problem_flags import save_problem_flags, split_open_ended_marker
 from code_cleaner import clean_generated_code
 
 # Directory constants
@@ -417,7 +418,11 @@ def run_description_step(problem_name, structure_type, scenario_level, problem_c
         desc_response = normalize_renderer_safe(desc_response)
 
     _track_llm_usage(desc_usage, f"{problem_name}_description")
+    desc_response, open_ended, open_ended_reason = split_open_ended_marker(desc_response)
+    save_problem_flags(open_ended, open_ended_reason, OUTPUT_DIR)
     _save_description(desc_response)
+    print(f"✓ open_ended={open_ended}"
+          + (f" — {open_ended_reason}" if open_ended_reason else ""))
     # A re-described problem invalidates naming, so reset the editable copy back
     # to the raw input rather than leaving a rename keyed to the old description.
     _save_working_code(user_code, detected_lang)

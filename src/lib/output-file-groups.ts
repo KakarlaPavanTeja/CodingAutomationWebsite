@@ -77,6 +77,7 @@ const QUESTION_ROOT_FILES = new Set([
   "generated_difficulty.txt",
   "generated_topics.json",
   "description_signature.json",
+  "problem_flags.json",
   "normalized_source.py",
   "Companies",
 ]);
