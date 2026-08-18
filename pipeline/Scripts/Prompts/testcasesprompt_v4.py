@@ -416,6 +416,24 @@ stress cases. Do this explicitly IN CODE — do NOT hand-wave:
 Do NOT spread sizes evenly and do NOT push half the cases to max. A few worst-case stress
 inputs at/near MAX_N fail a slow solution just as hard as fifty.
 
+(VALUE MAGNITUDE — A SEPARATE AXIS FROM SIZE. DO NOT MAX IT BY DEFAULT):
+The constraints bound how BIG a value may be; they do not ask you to use that bound. Size
+and magnitude are independent — an n=MAX_N case built from two-digit values stresses time
+exactly as hard as one built from nine-digit values.
+  * DEFAULT to small, hand-checkable values (roughly 1-3 digits, or a compact window around
+    0) for the MAJORITY of cases, INCLUDING most stress cases. A reviewer must be able to
+    read a case and see why the answer is right; a wall of random 9-digit numbers makes
+    every failure undebuggable and catches nothing the small values miss.
+  * Reserve near-min / near-max magnitudes for a FEW dedicated cases whose named `scenario`
+    IS the magnitude (`overflow_values`, `min_value_boundary`, `full_range_span`). Two or
+    three of them catch every 32-bit / sign / overflow bug the suite can catch.
+  * A suite where every non-example case uses extreme values is a BUG, not thoroughness: it
+    re-tests one narrow failure mode dozens of times and tests the ordinary range zero
+    times. It also makes the public examples look like a different problem.
+  * Vary magnitude ACROSS cases deliberately: tiny, mixed sign, a modest range, and only
+    then the extremes. Same rule for every value-like axis — coordinates, weights, IDs,
+    node values, the alphabet of generated strings.
+
 (MULTI-AXIS STRESS — MANDATORY when constraints expose MORE THAN ONE resource axis):
 Many problems have TWO independent size axes: a COUNT (n items) and a SECONDARY resource
 (per-item/total string length, value magnitude, coordinate range, #queries). Example:
@@ -443,7 +461,8 @@ Before generating inputs, the script MUST (in comments + a SCENARIO_PLAN structu
        defeating "return on first match" naive loops that otherwise look fast on large n.
      * `early_exit_trap` / `no_early_exit` — structure where returning on first match is wrong.
      * `greedy_fails` — input where a greedy choice is locally optimal but globally wrong.
-     * `overflow_values` — values near INT_MAX/INT_MIN to break 32-bit assumptions.
+     * `overflow_values` — values near INT_MAX/INT_MIN to break 32-bit assumptions. A FEW
+       cases only — see VALUE MAGNITUDE; the rest of the suite stays small-valued.
      * `duplicate_values` — wrong logic picks the wrong pair/index.
 At most ONE case per group may be a pure `random` baseline; every other case targets a
 NAMED scenario. Construct scenarios DETERMINISTICALLY (place the answer where you want,

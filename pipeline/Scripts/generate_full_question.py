@@ -15,6 +15,7 @@ from Prompts.topicsPrompt import get_topics_prompt
 from llm_client import call_llm
 from usage_tracker import update_usage
 from problem_flags import (OPEN_ENDED_MARKER_RE, checker_defects, load_open_ended,
+                           stdin_parsing_defects,
                            save_problem_flags, split_open_ended_marker)
 from code_cleaner import clean_generated_code
 
@@ -614,6 +615,18 @@ def run_naming_step(problem_name, structure_type, question_kind, user_code, dete
     if renamed_code.strip().startswith("```"):
         renamed_code = renamed_code.strip().split('\n', 1)[1].rsplit('\n', 1)[0].strip()
     renamed_code = clean_generated_code(renamed_code, detected_lang)
+
+    if detected_lang.lower() in ("python", "py"):
+        # EVERY problem, not only open-ended ones. A reference that parses the
+        # description's `name = value` display form reproduces every stated answer, so it
+        # grounds clean, verifies clean and passes every execution-based check — then
+        # scores zero against the real driver. Static gate, because execution cannot see it.
+        io_defects = stdin_parsing_defects(renamed_code)
+        if io_defects:
+            print("ERROR: the normalized reference does not read raw stdin:")
+            for d in io_defects:
+                print(f"  - {d}")
+            sys.exit(1)
 
     if open_ended and detected_lang.lower() in ("python", "py"):
         # Every defect here is invisible at grading time — fail loudly now instead.

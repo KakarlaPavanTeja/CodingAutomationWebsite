@@ -128,7 +128,10 @@ PROBLEM DESCRIPTION:
 3. **Remove Type Hints**: Strip all type hints like `list[int]`, `-> int`, etc., from function signatures and variable declarations.
 4. **Compact Code**: Remove excessive blank lines
 4. **Preserve logic**: Exact logic, variable names, algorithm.
-5. **CRITICAL - Optimal I/O**: You MUST update the driver code to use fast I/O (`sys.stdin.read().split()` or `sys.stdin.read().splitlines()` as appropriate) that matches the EXACT input format (space-separated vs newline-separated, token order, which values are even present) shown in the `PROBLEM DESCRIPTION`'s examples — not merely what the original driver happened to read. Do NOT enforce JSON parsing unless the description's examples are JSON. Use `sys.stdout.write()` for printing. Match the source code's output formatting logic strictly. Do NOT disturb the inner logic of `class solution`.
+5. **CRITICAL - Optimal I/O**: You MUST update the driver code to use fast I/O (`sys.stdin.read().split()` or `sys.stdin.read().splitlines()` as appropriate). Take the TOKEN ORDER and which values are present from the `PROBLEM DESCRIPTION`'s examples. Use `sys.stdout.write()` for printing. Match the source code's output formatting logic strictly. Do NOT disturb the inner logic of `class solution`.
+   * **stdin is RAW TOKENS, never `name = value`.** A function-based description RENDERS its examples as assignments (`numCourses = 6`, `arr = [1, 2, 3]`) because that reads better for a human. That is a DISPLAY form. The platform driver writes raw whitespace-separated values — `6`, then `1 2 3` — and never the assignment text. So take the token ORDER from the examples and NEVER the syntax: no `.split("=")`, no stripping of variable names, no `ast.literal_eval` of a displayed list.
+   * Why this is CRITICAL and not stylistic: a reference that parses the display form still reproduces every stated answer, so it grounds clean, verifies clean and passes every execution-based check — then scores zero against the real driver. That happened on 2026-08-18 and only a text audit caught it.
+   * Do NOT enforce JSON parsing unless the description's examples really are JSON on the wire.
 """
     elif language.lower() in ['javascript', 'node.js', 'nodejs', 'js']:
         lang_rules = """

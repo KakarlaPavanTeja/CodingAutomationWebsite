@@ -99,3 +99,45 @@ def checker_defects(source):
                                "`solution`, which is the STUDENT's class at grading time")
                 break
     return defects
+
+
+# --------------------------------------------------------------------------- #
+# THE I/O FORMAT. One definition, enforced statically.
+# --------------------------------------------------------------------------- #
+# stdin is RAW TOKENS — whitespace- and newline-separated values, exactly what the
+# platform driver writes to the process. It is NEVER `name = value` assignments.
+#
+# Function-based descriptions RENDER their examples as assignments (`numCourses = 6`)
+# because that reads better for a human. That rendering is a display convenience and
+# never the wire format. A reference that parses it is broken in the one way nothing
+# downstream can see: on 2026-08-18 a normalized reference split its input on "=", the
+# I/O contract asked a model to match that parser, the model proposed the assignment
+# form, the reference reproduced the stated answer, and the contract VERIFIED. Grounding
+# passed. The checker grounded clean on all 120 cases. Every execution-based check agreed
+# with every other one, and the suite would have scored zero on the platform — because all
+# three were consistent about a format the driver never sends.
+#
+# Execution cannot catch this: a self-consistent lie executes perfectly. So it is a static
+# gate on the source, plus a blocking text audit on the finished suite.
+_ASSIGNMENT_SPLIT_RE = re.compile(r"""\.split\(\s*["']=["']""")
+
+
+def stdin_parsing_defects(source):
+    """Defects in how a reference solution READS stdin. Empty list means well-formed.
+
+    Deliberately narrow: it looks for a split on "=", because that is the single
+    signature of a reference that has mistaken the description's display form for the
+    wire format, and it has no legitimate use in reading raw tokens.
+    """
+    text = source or ""
+    if not text.strip():
+        return []
+    defects = []
+    if _ASSIGNMENT_SPLIT_RE.search(text):
+        defects.append(
+            "the reference parses its input by splitting on '=', so it reads the "
+            "description's `name = value` DISPLAY form rather than raw stdin. The platform "
+            "driver writes raw whitespace-separated tokens; read those with "
+            "sys.stdin.read().split() or .splitlines()"
+        )
+    return defects

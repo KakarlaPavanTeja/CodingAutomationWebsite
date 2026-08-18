@@ -790,7 +790,17 @@ def derive_and_normalize(out_path: str, description: str, io_contract=None) -> d
     # clean and then scores 0/150 against the real driver (T primes, 2026-07-29).
     io_shape = format_io_shape(audit_io_shape(unique, description)) if unique else ""
     if io_shape:
-        print(f"WARNING: {io_shape}")
+        # BLOCKS. It used to warn, and on 2026-08-18 that warning was the only correct
+        # signal in the room: the I/O contract verified, grounding passed and the checker
+        # grounded clean on all 120 cases, because the reference, the cases and the
+        # contract all agreed on the description's `name = value` display form. Every
+        # execution-based check was self-consistently wrong and the suite would have scored
+        # zero. `audit_io_shape` already exempts problems whose description genuinely
+        # sanctions literal input, so this cannot fire on a legitimate JSON-input problem.
+        print(f"ERROR: {io_shape}")
+        print("      Refusing to ship: the platform driver writes raw tokens, so every "
+              "case here would fail. Fix the reference's stdin parsing and re-run.")
+        raise SystemExit(1)
 
     # `generated` is what the script emitted; kept + duplicates does NOT recover it,
     # because inputless cases are filtered out above and would vanish from the log.

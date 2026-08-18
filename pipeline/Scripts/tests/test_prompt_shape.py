@@ -47,6 +47,10 @@ class TestPromptShape(unittest.TestCase):
             "IMPORT CORRECTNESS",
             "MULTI-AXIS STRESS",
             "ADVERSARIAL",
+            # Without this, the model reads the constraint bound as an instruction and
+            # ships every non-example case at max magnitude (a whole BST suite of
+            # 9-digit node values, examples excluded).
+            "VALUE MAGNITUDE",
         ]:
             self.assertIn(marker, text, f"{marker!r} must survive — it defends a real failure")
 
