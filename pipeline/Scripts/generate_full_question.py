@@ -14,7 +14,8 @@ from Prompts.topicsPrompt import get_topics_prompt
 
 from llm_client import call_llm
 from usage_tracker import update_usage
-from problem_flags import save_problem_flags, split_open_ended_marker
+from problem_flags import (OPEN_ENDED_MARKER_RE, checker_defects, load_open_ended,
+                           save_problem_flags, split_open_ended_marker)
 from code_cleaner import clean_generated_code
 
 # Directory constants
@@ -476,6 +477,7 @@ def reconcile_description(problem_name, desc_prompt, problem_content, optimal_pa
                 f.write(code)
 
     description = ""
+    marker = ""
     repairs = []
     system, user = desc_prompt, problem_content
     for attempt in range(1, max_attempts + 1):
@@ -489,6 +491,14 @@ def reconcile_description(problem_name, desc_prompt, problem_content, optimal_pa
             code_writer("code", clean_generated_code(content, "python"))
         else:
             description = normalize_renderer_safe(content) if scenario_level == "none" else content
+            # The repair prompt ASKS for the OPEN_ENDED marker back; a model that forgets
+            # it would silently downgrade the problem to "not open-ended" — no checker,
+            # no complaint. Carry the last decision forward instead of re-asking for it.
+            found = list(OPEN_ENDED_MARKER_RE.finditer(description))
+            if found:
+                marker = found[-1].group(0)
+            elif marker:
+                description = f"{description.rstrip()}\n\n{marker}"
 
         contract = verifier(description, optimal_path, outputs_dir, llm=llm)
         if contract.get("verified"):
@@ -593,8 +603,10 @@ def run_naming_step(problem_name, structure_type, question_kind, user_code, dete
         return
 
     print(f"Enforcing function name: {description_signature.get('function_name')}")
+    open_ended = load_open_ended(OUTPUT_DIR)
     refactor_prompt = get_normalization_prompt(
-        user_code, detected_lang, description_signature, desc_response, structure_type
+        user_code, detected_lang, description_signature, desc_response, structure_type,
+        open_ended=open_ended,
     )
     renamed_code, refactor_usage = call_llm(refactor_prompt, "", purpose="chat")
     _track_llm_usage(refactor_usage, f"{problem_name}_refactor")
@@ -602,6 +614,15 @@ def run_naming_step(problem_name, structure_type, question_kind, user_code, dete
     if renamed_code.strip().startswith("```"):
         renamed_code = renamed_code.strip().split('\n', 1)[1].rsplit('\n', 1)[0].strip()
     renamed_code = clean_generated_code(renamed_code, detected_lang)
+
+    if open_ended and detected_lang.lower() in ("python", "py"):
+        # Every defect here is invisible at grading time — fail loudly now instead.
+        defects = checker_defects(renamed_code)
+        if defects:
+            print("ERROR: the emitted open-ended checker is malformed:")
+            for d in defects:
+                print(f"  - {d}")
+            sys.exit(1)
 
     _save_signature(description_signature)
     _save_working_code(renamed_code, detected_lang)

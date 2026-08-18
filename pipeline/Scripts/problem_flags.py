@@ -7,6 +7,7 @@ first index") and so switched real checks off on the descriptions that followed 
 best. Nothing downstream may re-derive this from text: read the flag.
 """
 
+import ast
 import json
 import os
 import re
@@ -53,3 +54,48 @@ def load_open_ended(outputs_dir="Outputs"):
             return bool(json.load(f).get("open_ended", False))
     except (OSError, ValueError, AttributeError):
         return False
+
+
+CHECKER_NAMES = ("reference_answer", "is_valid_answer")
+CHECKER_ARITY = {"reference_answer": 1, "is_valid_answer": 2}
+
+
+def checker_defects(source):
+    """Static defects in an open-ended checker. Empty list means it is well-formed.
+
+    Every defect here fails SILENTLY at grading time, which is why it is a static gate and
+    not a runtime hope: a checker nested in `solution` is shadowed by the student's class,
+    and a `reference_answer` that delegates to `solution` grades every student against
+    their own answer.
+    """
+    try:
+        tree = ast.parse(source or "")
+    except SyntaxError as e:
+        return [f"the source does not parse ({e})"]
+
+    top = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    nested = {n.name for cls in tree.body if isinstance(cls, ast.ClassDef)
+              for n in cls.body if isinstance(n, ast.FunctionDef)}
+
+    defects = []
+    for name in CHECKER_NAMES:
+        if name in top:
+            args = top[name].args
+            want = CHECKER_ARITY[name]
+            got = len(args.args) + len(args.posonlyargs)
+            if got != want:
+                defects.append(f"{name} takes {got} argument(s), expected {want}")
+        elif name in nested:
+            defects.append(f"{name} must be module-level, not a method of a class — the "
+                           f"driver imports the STUDENT's `solution`")
+        else:
+            defects.append(f"{name} is missing")
+
+    ref = top.get("reference_answer")
+    if ref is not None:
+        for node in ast.walk(ref):
+            if isinstance(node, ast.Name) and node.id == "solution":
+                defects.append("reference_answer must be self-contained — it references "
+                               "`solution`, which is the STUDENT's class at grading time")
+                break
+    return defects

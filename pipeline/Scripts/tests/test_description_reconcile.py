@@ -167,6 +167,51 @@ class TestReconcileDescription(unittest.TestCase):
                          "every LLM call must be tracked, repairs included")
 
 
+class TestOpenEndedMarkerSurvivesRepair(unittest.TestCase):
+    """A repair that drops the marker would silently un-flag an open-ended problem.
+
+    `run_description_step` splits the marker off the FINAL text. The repair prompt only
+    asks the model to keep it; if the model forgets, `open_ended` reads false, no checker
+    is ever emitted, and nothing reports why. So the decision is carried, not re-asked.
+    """
+
+    def setUp(self):
+        self._orig_track = gfq._track_llm_usage
+        gfq._track_llm_usage = lambda usage, label, purpose="chat": None
+        self.tmp = tempfile.TemporaryDirectory()
+        self.optimal = os.path.join(self.tmp.name, "sol.py")
+        with open(self.optimal, "w", encoding="utf-8") as f:
+            f.write("print(1)\n")
+
+    def tearDown(self):
+        gfq._track_llm_usage = self._orig_track
+        self.tmp.cleanup()
+
+    def _reconcile(self, *replies):
+        seq = iter([disagrees, ok])
+        desc, _ = gfq.reconcile_description(
+            "P", "SYS", "raw", self.optimal, self.tmp.name, "moderate",
+            llm=FakeLLM(*replies), verifier=lambda *a, **k: next(seq)(*a, **k))
+        return gfq.split_open_ended_marker(desc)
+
+    def test_a_repair_that_drops_the_marker_keeps_the_decision(self):
+        _, open_ended, reason = self._reconcile(
+            "DESC v1\n\n<!-- OPEN_ENDED: true reason=any valid packing -->",
+            "DESC v2, marker forgotten")
+        self.assertTrue(open_ended, "the repaired statement must stay open-ended")
+        self.assertEqual(reason, "any valid packing")
+
+    def test_a_repair_that_restates_the_marker_wins(self):
+        _, open_ended, _ = self._reconcile(
+            "DESC v1\n\n<!-- OPEN_ENDED: true reason=looked open -->",
+            "DESC v2\n\n<!-- OPEN_ENDED: false -->")
+        self.assertFalse(open_ended, "a marker the repair DID emit is the current decision")
+
+    def test_no_marker_anywhere_stays_no_marker(self):
+        _, open_ended, _ = self._reconcile("DESC v1", "DESC v2")
+        self.assertFalse(open_ended)
+
+
 class TestMismatchSide(unittest.TestCase):
     """The two symptoms look alike and have opposite fixes."""
 
