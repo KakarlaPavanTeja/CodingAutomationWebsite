@@ -484,6 +484,29 @@ def verify_io_contract(description: str, optimal_path: str, outputs_dir: str = "
     return contract
 
 
+def enforce_io_contract(contract: dict) -> None:
+    """Exit unless the contract verified. Called from main() right after the report.
+
+    BLOCKING, where this used to be advisory: the verdict printed and generation carried
+    on, so "NOT VERIFIED" scrolled past in a long log and a whole suite got built on a
+    description and a reference that disagree — surfacing three steps later as 0/150 in
+    execute_tests. It is the cheapest gate in the pipeline (two subprocess runs) and the
+    defect it catches is a two-minute fix at this point.
+
+    A separate function, not an inline `if`, so it can be tested without a subprocess: the
+    module imports llm_client at load time, so exercising main() end to end needs the
+    pipeline's own interpreter and would simply skip everywhere else.
+    """
+    if contract.get("verified"):
+        return
+    print("\nAborting: the I/O contract must be verified before any test case is "
+          "generated. Every expected output would otherwise be built on a description "
+          "and a reference solution that do not agree.")
+    print("Fix one of the two — the report above shows which side printed what — then "
+          "re-run this step.")
+    sys.exit(1)
+
+
 def format_io_contract(contract: dict) -> str:
     """Human report for the generate_testcases log."""
     if contract.get("verified"):
@@ -936,18 +959,7 @@ def main():
     #     than as a 0/150 execute_tests result three steps later.
     io_contract = verify_io_contract(description, optimal_path)
     print(format_io_contract(io_contract))
-    if not io_contract.get("verified"):
-        # BLOCKING. This used to be advisory: the verdict printed and generation carried
-        # on, so "NOT VERIFIED" scrolled past in a long log and a whole suite got built on
-        # a description and a reference that disagree — surfacing later as 0/150 in
-        # execute_tests. It is the cheapest gate in the pipeline (two subprocess runs) and
-        # the defect it catches is a two-minute fix at this point.
-        print("\nAborting: the I/O contract must be verified before any test case is "
-              "generated. Every expected output would otherwise be built on a description "
-              "and a reference solution that do not agree.")
-        print("Fix one of the two — the report above shows which side printed what — then "
-              "re-run this step.")
-        sys.exit(1)
+    enforce_io_contract(io_contract)
 
     # 5. Prompt
     open_ended = load_open_ended("Outputs")

@@ -342,6 +342,242 @@ class TopicsStepTest(unittest.TestCase):
             _gfq.run_topics_step("P", "x = 1", "python")
 
 
+@unittest.skipIf(_gfq is None, "generate_full_question deps unavailable in this env")
+class NamingStepTest(unittest.TestCase):
+    """P1-4, P1-5 and the io_contract invalidation.
+
+    These EXECUTE run_naming_step on the FUNCTION path. Until now the only tests that
+    called it took the nonfunction early return, so none of this was covered.
+    """
+
+    RAW = "def two_sum(nums, target):\n    return []\n"
+    REPAIRED = "import sys\n\ndef two_sum(nums, target):\n    return [0, 1]\n"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self._out = _gfq.OUTPUT_DIR
+        _gfq.OUTPUT_DIR = os.path.join(self.tmp.name, "Outputs")
+        os.makedirs(os.path.join(_gfq.OUTPUT_DIR, "generatedFullCode"))
+        with open(_gfq._description_path(), "w", encoding="utf-8") as f:
+            f.write("**Your Task**\n\n- Complete `twoSum` that takes `nums`, `target`.\n")
+        # The working copy the description step left behind: a REPAIRED reference that
+        # differs from Inputs/. Naming must build on this, not on the raw input.
+        with open(_gfq._working_code_path("python"), "w", encoding="utf-8") as f:
+            f.write(self.REPAIRED)
+        self._call_llm = _gfq.call_llm
+        self._track = _gfq._track_llm_usage
+        _gfq._track_llm_usage = lambda *a, **k: None
+        self.prompts = []
+
+    def tearDown(self):
+        _gfq.call_llm = self._call_llm
+        _gfq._track_llm_usage = self._track
+        _gfq.OUTPUT_DIR = self._out
+        self.tmp.cleanup()
+
+    def _llm(self, sig_reply, code_reply):
+        """Stub: first call is signature extraction, second is normalization."""
+        replies = iter([sig_reply, code_reply])
+
+        def call(system, user="", **kw):
+            self.prompts.append(system)
+            return next(replies), {}
+        _gfq.call_llm = call
+
+    GOOD_SIG = '{"function_name": "twoSum", "parameters": ["nums", "target"]}'
+    GOOD_CODE = ("class solution:\n    def twoSum(self, nums, target):\n"
+                 "        return [0, 1]\n\n"
+                 "import sys\n\n\ndef main():\n"
+                 "    data = sys.stdin.read().split()\n\n\nmain()\n")
+
+    def test_normalization_prompt_gets_the_WORKING_copy_not_the_raw_input(self):
+        # The whole point of P1-4: the description step may have repaired the reference,
+        # and normalizing from Inputs/ silently threw that repair away.
+        self._llm(self.GOOD_SIG, self.GOOD_CODE)
+        _gfq.run_naming_step("P", "standard", "function", self.RAW, "python")
+        refactor_prompt = self.prompts[1]
+        self.assertIn("return [0, 1]", refactor_prompt,
+                      "naming must normalize the repaired working copy")
+        self.assertNotIn("    return []\n", refactor_prompt,
+                         "the raw Inputs/ body must not be what gets normalized")
+
+    def test_success_invalidates_a_stale_io_contract(self):
+        # The contract was verified against the PRE-normalization reference; normalization
+        # is entitled to change how stdin is read, so it must not survive.
+        contract = os.path.join(_gfq.OUTPUT_DIR, "io_contract.json")
+        with open(contract, "w", encoding="utf-8") as f:
+            json.dump({"verified": True, "pairs": [{"stdin": "n = 3\n"}]}, f)
+        self._llm(self.GOOD_SIG, self.GOOD_CODE)
+        _gfq.run_naming_step("P", "standard", "function", self.RAW, "python")
+        self.assertFalse(os.path.exists(contract),
+                         "a contract frozen before normalization must be invalidated")
+
+    def test_missing_signature_exits_1_rather_than_reporting_success(self):
+        # Used to warn and return 0: description_signature.json was never written, so
+        # testcase_manager_v4 built a STDIN/STDOUT suite for a function problem, and the
+        # rename plus both static gates never ran.
+        self._llm("I could not find a signature.", self.GOOD_CODE)
+        with self.assertRaises(SystemExit) as cm:
+            _gfq.run_naming_step("P", "standard", "function", self.RAW, "python")
+        self.assertEqual(cm.exception.code, 1)
+        self.assertFalse(os.path.exists(_gfq._signature_path()))
+
+    def test_missing_description_exits_1(self):
+        os.remove(_gfq._description_path())
+        with self.assertRaises(SystemExit) as cm:
+            _gfq.run_naming_step("P", "standard", "function", self.RAW, "python")
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_a_reference_that_parses_the_display_form_is_rejected(self):
+        # The stdin gate, now unconditional. A reference splitting on "=" reproduces every
+        # stated answer, so it grounds and verifies clean, then scores zero on the driver.
+        bad = ("class solution:\n    def twoSum(self, nums, target):\n        return []\n"
+               "import sys\nfor ln in sys.stdin:\n    k, v = ln.split(\"=\")\n")
+        self._llm(self.GOOD_SIG, bad)
+        with self.assertRaises(SystemExit) as cm:
+            _gfq.run_naming_step("P", "standard", "function", self.RAW, "python")
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_open_ended_problem_rejects_a_malformed_checker(self):
+        with open(os.path.join(_gfq.OUTPUT_DIR, "problem_flags.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"open_ended": True, "reason": "many valid answers"}, f)
+        # GOOD_CODE has no reference_answer / is_valid_answer at all.
+        self._llm(self.GOOD_SIG, self.GOOD_CODE)
+        with self.assertRaises(SystemExit) as cm:
+            _gfq.run_naming_step("P", "standard", "function", self.RAW, "python")
+        self.assertEqual(cm.exception.code, 1)
+
+
+@unittest.skipIf(_gfq is None, "generate_full_question deps unavailable in this env")
+class ProblemMdEncodingTest(unittest.TestCase):
+    """parse_problem_md read with the platform default encoding, so a statement carrying
+    ≤ ≥ × · (which the notation-normalization rules produce) made the step's success
+    depend on the machine's locale."""
+
+    def test_non_ascii_notation_survives_parsing(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "problem.md")
+            body = ("# Problem: Bounded Sums\n# Type: standard\n"
+                    "# Question Type: function\n# Scenario Level: none\n\n"
+                    "Given `n` with 1 ≤ n ≤ 10^5, compute 2 × n · 3.\n")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(body)
+            name, structure, kind, level, content = _gfq.parse_problem_md(p)
+            self.assertEqual(name, "Bounded Sums")
+            self.assertEqual(kind, "function")
+            self.assertEqual(level, "none")
+            for ch in ("≤", "×", "·"):
+                self.assertIn(ch, content)
+
+
+class DedupeFailuresTest(unittest.TestCase):
+    """Both ground-truth sources can name the same input, making one defect look like two
+    in a banner that says the reference is buggy."""
+
+    def setUp(self):
+        import generate_brute_force
+        self.gbf = generate_brute_force
+
+    def test_identical_failures_collapse(self):
+        f = {"input": "1 2\n", "expected": "3", "got": ""}
+        self.assertEqual(len(self.gbf._dedupe_failures([f, dict(f)])), 1)
+
+    def test_order_is_preserved(self):
+        a = {"input": "a", "expected": "1", "got": "x"}
+        b = {"input": "b", "expected": "2", "got": "y"}
+        self.assertEqual(
+            [f["input"] for f in self.gbf._dedupe_failures([a, b, dict(a)])], ["a", "b"])
+
+    def test_same_input_different_output_is_kept(self):
+        a = {"input": "1\n", "expected": "3", "got": ""}
+        b = {"input": "1\n", "expected": "3", "got": "<timeout>"}
+        self.assertEqual(len(self.gbf._dedupe_failures([a, b])), 2)
+
+    def test_empty_list(self):
+        self.assertEqual(self.gbf._dedupe_failures([]), [])
+
+
+def _import_tm():
+    """testcase_manager_v4 with its LLM deps stubbed (mirrors test_io_contract.py)."""
+    for dep in ("httpx", "openai", "anthropic", "requests", "tiktoken", "dotenv"):
+        sys.modules.setdefault(dep, _Auto(dep))
+    try:
+        import testcase_manager_v4
+        return testcase_manager_v4
+    except Exception:
+        return None
+
+
+_tm = _import_tm()
+_TM_SOURCE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "testcase_manager_v4.py")
+
+
+@unittest.skipIf(_tm is None, "testcase_manager_v4 deps unavailable in this env")
+class IoContractGateTest(unittest.TestCase):
+    """P2-7. The checkpoint printed its verdict and generation continued regardless, so
+    "NOT VERIFIED" scrolled past in a long log and a whole suite got built on a
+    description and a reference that disagree — surfacing three steps later as 0/150."""
+
+    def test_a_verified_contract_passes(self):
+        self.assertIsNone(_tm.enforce_io_contract(
+            {"verified": True, "pairs": [{"stdin": "2\n1 2\n", "stdout": "3"}],
+             "mismatches": [], "reason": ""}))
+
+    def test_a_disagreement_aborts(self):
+        with self.assertRaises(SystemExit) as cm:
+            _tm.enforce_io_contract({
+                "verified": False, "pairs": [],
+                "mismatches": [{"example": 1, "stdin": "2\n1 2\n", "expected": "3",
+                                "got": "4"}],
+                "reason": ""})
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_a_description_with_no_parseable_examples_aborts(self):
+        # Not a pass-by-default: no examples means nothing anchors the format at all.
+        with self.assertRaises(SystemExit):
+            _tm.enforce_io_contract({"verified": False, "pairs": [], "mismatches": [],
+                                     "reason": "the description states no parseable Examples"})
+
+    def test_an_unconvertible_display_block_aborts(self):
+        with self.assertRaises(SystemExit):
+            _tm.enforce_io_contract({
+                "verified": False, "pairs": [],
+                "mismatches": [{"example": 1, "got": _tm.UNCONVERTIBLE}], "reason": ""})
+
+    def test_verification_end_to_end_against_a_disagreeing_reference(self):
+        """verify_io_contract itself, no LLM: raw-stdin Examples resolve by subprocess."""
+        with tempfile.TemporaryDirectory() as d:
+            opt = os.path.join(d, "PY.py")
+            with open(opt, "w", encoding="utf-8") as f:
+                f.write("import sys\nd=sys.stdin.read().split()\n"
+                        "print(sum(map(int,d[1:])) + 1)\n")   # off by one
+            desc = ("Add.\n\n**Example 1:**\n\n**Input:**\n\n```\n2\n1 2\n```\n\n"
+                    "**Output:**\n\n```\n3\n```\n")
+            contract = _tm.verify_io_contract(desc, opt, d)
+            self.assertFalse(contract["verified"])
+            self.assertEqual(contract["mismatches"][0]["expected"], "3")
+            self.assertEqual(contract["mismatches"][0]["got"], "4")
+            with self.assertRaises(SystemExit):
+                _tm.enforce_io_contract(contract)
+
+    def test_main_actually_calls_the_gate(self):
+        """The guard is worthless if main() stops invoking it.
+
+        A source-level check because main() imports llm_client and drives the whole step,
+        so exercising it needs the pipeline's own interpreter. Cheap insurance against the
+        gate being silently unwired — which is how it read BEFORE this change: the verdict
+        was printed and nothing acted on it.
+        """
+        with open(_TM_SOURCE, encoding="utf-8") as f:
+            src = f.read()
+        main_body = src[src.index("def main()"):]
+        self.assertIn("enforce_io_contract(io_contract)", main_body)
+        self.assertIn("format_io_contract(io_contract)", main_body,
+                      "the report must still be printed before aborting")
+
+
 class SignatureExtractionPromptTest(unittest.TestCase):
     """P1-5, second half. The prompt told the model to look for a "Function Signature"
     heading, which the description format deliberately never emits. The name actually

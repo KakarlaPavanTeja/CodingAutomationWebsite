@@ -218,6 +218,24 @@ def _verified_contract_pairs(description: str = "", optimal_path: str = "") -> l
             if isinstance(p, dict) and str(p.get("stdin") or "").strip()]
 
 
+def _dedupe_failures(failures: list[dict]) -> list[dict]:
+    """Drop repeats, preserving order.
+
+    Both ground-truth sources can name the same input: a raw-stdin description's Examples
+    are visible to `optimal_example_failures` AND frozen into the I/O contract. Reporting
+    each twice makes one defect look like two, which is exactly the wrong impression to
+    give in a banner that says the reference is buggy.
+    """
+    seen, out = set(), []
+    for f in failures:
+        key = (f.get("input"), f.get("got"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f)
+    return out
+
+
 def _contract_ground_truth_failures(optimal_solution: str, pairs: list[dict]) -> list[dict]:
     """Cases where the optimal does NOT print the description's stated answer.
 
@@ -282,16 +300,7 @@ def _crosscheck_optimal_vs_brute(description: str, optimal_solution: str, brute_
         if contract_pairs:
             example_failures += _contract_ground_truth_failures(optimal_solution,
                                                                 contract_pairs)
-        # Both sources can name the same input — a raw-stdin description's Examples are
-        # visible to `optimal_example_failures` AND frozen into the contract. Reporting
-        # each twice makes one defect look like two.
-        _seen, _deduped = set(), []
-        for _f in example_failures:
-            _key = (_f["input"], _f["got"])
-            if _key not in _seen:
-                _seen.add(_key)
-                _deduped.append(_f)
-        example_failures = _deduped
+        example_failures = _dedupe_failures(example_failures)
     except Exception as e:
         print(f"(example ground-truth check skipped: {e})")
         example_failures = []
