@@ -43,9 +43,28 @@ _DRIVER_START = {
     ),
 }
 
-_PY_STDIN_RE = re.compile(r"\binput[ \t]*\(|\bsys\.stdin|\breadline[ \t]*\(")
-_PY_DEF_RE = re.compile(r"^(?:class|def|async[ \t]+def)\b")
-_PY_NOT_DRIVER_RE = re.compile(r"^(?:import|from|class|def|async[ \t]+def|@)")
+# Python and JavaScript can also put the driver at MODULE LEVEL, with no `main` at all —
+# the JS editorial that prompted this shipped a live
+# `const fs = require("fs"); ... console.log(result)` after the class, which the `main`
+# patterns above cannot see. C++ and Java have no such shape: a driver there IS a main.
+#   decl:       starts a top-level declaration (the solution) — the driver comes after
+#               the LAST one, so a constant ABOVE the class is never mistaken for it
+#   not_driver: a top-level line that is still part of the solution's scaffolding
+#   stdin:      the driver must actually read input (or call main), or it is not a driver
+_MODULE_LEVEL = {
+    "python": {
+        "decl": re.compile(r"^(?:class|def|async[ \t]+def)\b"),
+        "not_driver": re.compile(r"^(?:import|from|class|def|async[ \t]+def|@|#)"),
+        "stdin": re.compile(r"\binput[ \t]*\(|\bsys\.stdin|\breadline[ \t]*\("),
+    },
+    "js": {
+        "decl": re.compile(r"^(?:export[ \t]+)?(?:class|(?:async[ \t]+)?function)\b"),
+        "not_driver": re.compile(r"^(?:import|export|class|(?:async[ \t]+)?function"
+                                 r"|[});\]]|//|/\*|\*)"),
+        "stdin": re.compile(r"\breadFileSync\b|\bprocess\.stdin\b|\bcreateInterface\b"
+                           r"|\bmain[ \t]*\([ \t]*\)"),
+    },
+}
 
 
 def _comment_spans(code, lang):
@@ -87,13 +106,15 @@ def _line_start(code, pos):
     return 0 if nl == -1 else nl + 1
 
 
-def _py_driver_start(code, spans):
+def _module_level_driver_start(code, spans, lang):
     """Offset of the trailing module-level driver, or None.
 
-    Only module-level statements that come AFTER the last top-level `class`/`def`
-    AND read stdin count — otherwise a module-level constant above the solution
-    class (`MOD = 10 ** 9 + 7`) would swallow the whole solution into a comment.
+    Only statements that come AFTER the last top-level declaration AND read stdin
+    count — otherwise a module-level constant above the solution class
+    (`MOD = 10 ** 9 + 7`, `const fs = require("fs")`) would swallow the whole
+    solution into a comment.
     """
+    rules = _MODULE_LEVEL[lang]
     lines = code.split("\n")
     offsets, pos = [], 0
     for line in lines:
@@ -104,7 +125,7 @@ def _py_driver_start(code, spans):
     for i, line in enumerate(lines):
         if line[:1].isspace() or not line.strip():
             continue
-        if _PY_DEF_RE.match(line) and not _in_comment(offsets[i], spans):
+        if rules["decl"].match(line) and not _in_comment(offsets[i], spans):
             last_def = i
     if last_def == -1:
         return None
@@ -113,12 +134,11 @@ def _py_driver_start(code, spans):
         line = lines[i]
         if not line.strip() or line[:1].isspace():
             continue
-        stripped = line.lstrip()
-        if stripped.startswith("#") or _PY_NOT_DRIVER_RE.match(stripped):
+        if rules["not_driver"].match(line):
             continue
         if _in_comment(offsets[i], spans):
             continue
-        return offsets[i] if _PY_STDIN_RE.search(code[offsets[i]:]) else None
+        return offsets[i] if rules["stdin"].search(code[offsets[i]:]) else None
     return None
 
 
@@ -126,14 +146,16 @@ def comment_out_driver(code, lang):
     """Comment out a live trailing `main()`/driver. Returns (code, changed)."""
     spans = _comment_spans(code, lang)
 
-    if lang == "python":
-        start = _py_driver_start(code, spans)
-    else:
-        start = None
+    start = None
+    if lang in _DRIVER_START:
         for m in _DRIVER_START[lang].finditer(code):
             if not _in_comment(m.start(), spans):
                 start = _line_start(code, m.start())
                 break
+    # A `main` declaration wins: it opens the whole driver, and the module-level rule
+    # would otherwise skip past its body and wrap only the trailing `main();`.
+    if start is None and lang in _MODULE_LEVEL:
+        start = _module_level_driver_start(code, spans, lang)
     if start is None:
         return code, False
 

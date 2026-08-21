@@ -119,5 +119,45 @@ class TestCommentOutDriver(unittest.TestCase):
         self.assertEqual(comment_out_driver(code, "cpp"), (code, False))
 
 
+class TestJavaScriptDrivers(unittest.TestCase):
+    """A JS driver does not need a `main` at all — the real regression was a bare
+    top-level `readFileSync` block after the class, which no `main` pattern sees."""
+
+    SOLUTION = "class Solution {\n    static solve(N) {\n        return N;\n    }\n}\n"
+    BARE_DRIVER = ('const fs = require("fs");\n'
+                   'const N = Number(fs.readFileSync(0, "utf8").trim());\n'
+                   "console.log(Solution.solve(N));\n")
+
+    def test_a_bare_top_level_driver_is_commented(self):
+        out, changed = comment_out_driver(self.SOLUTION + "\n" + self.BARE_DRIVER, "js")
+        self.assertTrue(changed)
+        self.assertIn('/*\nconst fs = require("fs");', out)
+        self.assertTrue(out.rstrip().endswith("*/"))
+        self.assertIn("class Solution {", out.split("/*")[0])
+
+    def test_wrapping_a_bare_driver_is_idempotent(self):
+        once, _ = comment_out_driver(self.SOLUTION + "\n" + self.BARE_DRIVER, "js")
+        self.assertEqual(comment_out_driver(once, "js"), (once, False))
+
+    def test_a_live_main_call_below_a_commented_main_is_commented(self):
+        code = (self.SOLUTION + "\n/*\nfunction main() {\n"
+                '    const fs = require("fs");\n    console.log(1);\n}\n*/\nmain();\n')
+        out, changed = comment_out_driver(code, "js")
+        self.assertTrue(changed)
+        self.assertIn("/*\nmain();\n*/", out)
+
+    def test_a_solution_only_fence_is_untouched(self):
+        self.assertEqual(comment_out_driver(self.SOLUTION, "js"), (self.SOLUTION, False))
+
+    def test_a_top_level_const_above_the_class_is_not_the_driver(self):
+        """`const MOD = ...` before the class must not swallow the solution."""
+        code = "const MOD = 1000000007;\n\n" + self.SOLUTION
+        self.assertEqual(comment_out_driver(code, "js"), (code, False))
+
+    def test_a_helper_const_after_the_class_needs_stdin_to_count(self):
+        code = self.SOLUTION + "\nconst LIMIT = 100000;\n"
+        self.assertEqual(comment_out_driver(code, "js"), (code, False))
+
+
 if __name__ == "__main__":
     unittest.main()
