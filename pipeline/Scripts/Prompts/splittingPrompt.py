@@ -396,6 +396,13 @@ PROBLEM DESCRIPTION:
 {get_data_type_selection_rules()}
 
 **CRITICAL - SIGNATURE CONSISTENCY:**
+- MOVE the entry-point method; never RE-DECLARE it. Its name and its parameter list —
+  every parameter, in the same order, spelled with the same capitalisation — MUST be
+  copied from the SOURCE CODE character-for-character into Default Code, Solution Code,
+  and the call in Driver/Debugger Code. Dropping a parameter the body does not read
+  (e.g. an array length `N`) or re-casing one (`V` -> `v`) is a FAILURE: the same
+  signature is published for all four languages, so a change here contradicts the
+  description and the other three languages. A genuinely unused parameter STAYS.
 - `RETURN_TYPE`, parameter types, and driver/debugger input containers in Default Code, Solution Code, Driver Code, and Debugger Code MUST all use the same width chosen from the rules above.
 - Do NOT widen types in C++ Default Code while the source solution uses `int` in Java, or vice versa.
 

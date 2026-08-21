@@ -10,7 +10,8 @@ if current_dir not in sys.path:
     sys.path.append(current_dir)
 
 from llm_client import call_llm
-from problem_flags import CHECKER_DECLS, CHECKER_TIMING_WINDOW, load_open_ended
+from problem_flags import (CHECKER_DECLS, CHECKER_TIMING_WINDOW, load_open_ended,
+                           signature_defects)
 from Prompts.splittingPrompt import get_splitting_prompt
 from usage_tracker import update_usage
 
@@ -187,6 +188,17 @@ def main():
     if open_ended:
         print("Open-ended problem: the driver will grade with the reference's checker.")
 
+    # The entry point's name, so the signature gate knows which declaration to compare.
+    # Absent (non-function problems) means the gate stays quiet.
+    function_name = ""
+    sig_path = os.path.join(base_dir, "Outputs", "description_signature.json")
+    if os.path.exists(sig_path):
+        try:
+            with open(sig_path, encoding="utf-8") as f:
+                function_name = (json.load(f).get("function_name") or "").strip()
+        except (OSError, ValueError, AttributeError):
+            function_name = ""
+
     # 1.1 Load generated_description.md
     desc_path = os.path.join(base_dir, "Outputs", "generated_description.md")
     desc_content = ""
@@ -260,6 +272,15 @@ def main():
             if defects:
                 print(f"ERROR: the {lang_name} split is unusable for an open-ended problem:")
                 for d in defects:
+                    print(f"  - {d}")
+                sys.exit(1)
+            # The split must MOVE the entry point, never re-declare it. A dropped or
+            # re-cased parameter survives every downstream check, because the split
+            # writes the driver that calls it.
+            sig_defects = signature_defects(lang_name, function_name, code, split_data)
+            if sig_defects:
+                print(f"ERROR: the {lang_name} split changed the function signature:")
+                for d in sig_defects:
                     print(f"  - {d}")
                 sys.exit(1)
             save_split_code(lang_name, split_data, question_type)

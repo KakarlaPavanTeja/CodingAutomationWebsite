@@ -196,3 +196,108 @@ def stdin_parsing_defects(source):
             "sys.stdin.read().split() or .splitlines()"
         )
     return defects
+
+
+# --------------------------------------------------------------------------- #
+# THE ENTRY-POINT SIGNATURE. Preserved through the split, enforced statically.
+# --------------------------------------------------------------------------- #
+# The split step rewrites one working program into default/solution/driver/debugger
+# code, and it is free-form enough that the model sometimes RE-DECLARES the entry
+# point instead of moving it: on 2026-08-21 a Java split turned
+# `solve(int N, int[] arr, int V)` into `solve(int[] arr, int v)` — parameter dropped,
+# another re-cased — while Python and C++ kept all three. Nothing caught it, because
+# the split writes the DRIVER too: the driver called the same wrong signature, so it
+# compiled and every testcase passed. What shipped was a stub whose signature
+# disagreed with the description and with the other languages.
+#
+# So the gate compares the split's signature against the signature it was GIVEN,
+# rather than against the description: a preservation check needs no new contract and
+# cannot fire on a problem whose reference already differs from its description.
+
+# Commas inside <>, (), [] and {} separate template/generic arguments, not parameters.
+def _split_params(param_text):
+    parts, depth, current = [], 0, ""
+    for ch in param_text:
+        if ch in "<([{":
+            depth += 1
+        elif ch in ">)]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(current)
+            current = ""
+        else:
+            current += ch
+    parts.append(current)
+    return [p.strip() for p in parts if p.strip()]
+
+
+_IDENT_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+
+
+def _param_name(part, language):
+    """The parameter's NAME out of one declaration part."""
+    # Drop a default value (`n = 0`, `arr = []`) and any Python annotation.
+    part = part.split("=")[0]
+    if language == "Python":
+        part = part.split(":")[0]
+    names = _IDENT_RE.findall(part)
+    if not names:
+        return ""
+    # Python/JS declare the bare name; C++/Java put the type first, name last.
+    return names[0] if language in ("Python", "Node.js") else names[-1]
+
+
+def entry_point_params(language, source, function_name):
+    """Parameter NAMES of `function_name`'s declaration, or None when not declared.
+
+    The declaration is the FIRST occurrence: a recursive call to the same function can
+    only appear inside a body that has already been opened.
+    """
+    if not (source or "").strip() or not function_name:
+        return None
+    if language == "Python":
+        m = re.search(r"def\s+" + re.escape(function_name) + r"\s*\(", source)
+    else:
+        m = re.search(r"\b" + re.escape(function_name) + r"\s*\(", source)
+    if not m:
+        return None
+
+    depth, start = 0, m.end() - 1
+    for i in range(start, len(source)):
+        if source[i] == "(":
+            depth += 1
+        elif source[i] == ")":
+            depth -= 1
+            if depth == 0:
+                inner = source[start + 1:i]
+                break
+    else:
+        return None
+
+    names = [_param_name(p, language) for p in _split_params(inner)]
+    # `self` / `cls` are the receiver, not a parameter of the problem's signature.
+    return [n for n in names if n and n not in ("self", "cls")]
+
+
+def signature_defects(language, function_name, source, split_data):
+    """Parts of a split that re-declared the entry point. Empty list means preserved.
+
+    Silent when the source's own signature cannot be read — there is then nothing to
+    preserve, and a guess here would fail a split that is fine.
+    """
+    expected = entry_point_params(language, source, function_name)
+    if expected is None:
+        return []
+
+    defects = []
+    for key in ("solution_code", "default_code"):
+        found = entry_point_params(language, (split_data or {}).get(key) or "", function_name)
+        if found is None:
+            defects.append(f"{key} declares no {function_name}(...) — the split renamed "
+                           f"the entry point")
+        elif found != expected:
+            defects.append(
+                f"{key} re-declared the signature: {function_name}"
+                f"({', '.join(expected)}) became {function_name}({', '.join(found)})"
+            )
+    return defects
