@@ -39,7 +39,13 @@ import {
   recomputeLanguageStepStatus,
   languageSubStepLogKey,
 } from "@/lib/pipeline-language-steps";
-import { mergeRunProgress, mergeSubStepCompletion, isActiveStatus } from "@/lib/pipeline-duration";
+import {
+  mergeRunProgress,
+  mergeSubStepCompletion,
+  isActiveStatus,
+  plainStepBoundsFromRuns,
+  startTimeFromRun,
+} from "@/lib/pipeline-duration";
 import {
   reconcileLegacyGenerateQuestion,
   reconcileLegacyWorkflowSteps,
@@ -919,6 +925,27 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       const runsData = await runsRes.json();
       // Superseded by a newer load — don't register pollers for this problem.
       if (loadGenerationRef.current !== generation) return;
+      // Re-derive finished single-process steps' durations from their newest run row.
+      // pipeline_runs is the only place a run's real bounds live; step_statuses is a
+      // cache of them, and rows written before startTimeFromRun exist carry a start
+      // from an EARLIER run of the same step (42 minutes for a 41-second step). This
+      // repairs those on load instead of leaving them wrong until the next re-run.
+      const runBounds = plainStepBoundsFromRuns(runsData.runs || []);
+      const repaired = new Map(stepStatesRef.current);
+      let didRepair = false;
+      for (const [stepId, bounds] of runBounds) {
+        const current = repaired.get(stepId as StepId);
+        if (!current || isActiveStatus(current.status)) continue;
+        if (current.startTime === bounds.startTime && current.endTime === bounds.endTime) continue;
+        repaired.set(stepId as StepId, { ...current, ...bounds });
+        didRepair = true;
+      }
+      if (didRepair) {
+        stepStatesRef.current = repaired;
+        setStepStates(repaired);
+        savePipelineState();
+      }
+
       const runningRuns = (runsData.runs || []).filter(
         (r: { status: string; exit_code?: number | null }) =>
           isRunStillInFlight(r.status, r.exit_code)
@@ -1294,15 +1321,16 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
                 const next = new Map(prev);
                 const current = next.get(stepId);
                 if (!current) return prev;
-                const startTime =
-                  current.startTime ??
-                  (run.started_at ? new Date(run.started_at).getTime() : null);
+                // The finished run's own started_at, never the startTime left over
+                // from an earlier run of this step (that paired run #1's start with
+                // run #2's finish).
+                const startTime = startTimeFromRun(run.started_at, current.startTime);
                 next.set(stepId, {
                   ...current,
                   status: run.status,
                   exitCode: run.exit_code,
                   endTime,
-                  ...(startTime && !current.startTime ? { startTime } : {}),
+                  ...(startTime ? { startTime } : {}),
                 });
                 stepStatesRef.current = next;
                 return next;

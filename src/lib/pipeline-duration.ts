@@ -55,6 +55,52 @@ export function durationFromRunState(
   return Math.max(0, Math.floor((endTime - startTime) / 1000));
 }
 
+/**
+ * The run row owns its own bounds, so `started_at` WINS over whatever startTime the
+ * client is holding.
+ *
+ * It used to only fill a blank, and the value it deferred to could belong to a
+ * PREVIOUS run of the same step: re-run a step, or reload the page while one is
+ * running, and the client adopted the new run while keeping the old start — pairing
+ * run #1's start with run #2's finish. A 41-second step read 42 minutes because its
+ * first run had been 41 minutes earlier.
+ */
+export function startTimeFromRun(
+  startedAtIso: string | null | undefined,
+  fallback: number | null | undefined
+): number | null {
+  if (startedAtIso) {
+    const t = new Date(startedAtIso).getTime();
+    if (!Number.isNaN(t)) return t;
+  }
+  return fallback ?? null;
+}
+
+/** Bounds a finished run implies, for steps that run as ONE process. Per-language and
+ *  per-sub-step runs are excluded: they own their own rows, and their parent step spans
+ *  the whole wave rather than any single row. Newest run per step wins (rows arrive
+ *  newest-first), so a re-run replaces the previous reading instead of merging with it. */
+export function plainStepBoundsFromRuns(
+  runs: Array<{
+    step_id: string;
+    status: string;
+    started_at?: string | null;
+    finished_at?: string | null;
+  }>
+): Map<string, { startTime: number; endTime: number }> {
+  const bounds = new Map<string, { startTime: number; endTime: number }>();
+  for (const run of runs) {
+    if (run.step_id.includes("__")) continue;
+    if (run.status !== "completed" && run.status !== "failed") continue;
+    if (bounds.has(run.step_id)) continue;
+    const startTime = startTimeFromRun(run.started_at, null);
+    const endTime = run.finished_at ? new Date(run.finished_at).getTime() : NaN;
+    if (startTime === null || Number.isNaN(endTime) || endTime < startTime) continue;
+    bounds.set(run.step_id, { startTime, endTime });
+  }
+  return bounds;
+}
+
 /** Backfill startTime when polling completes if the parallel-run race cleared it. */
 export function mergeSubStepCompletion(
   prevRun: SubStepRunState,
@@ -62,10 +108,7 @@ export function mergeSubStepCompletion(
 ): SubStepRunState {
   const { startedAtIso, ...runPatch } = patch;
   const merged: SubStepRunState = { ...prevRun, ...runPatch };
-  if (!merged.startTime && startedAtIso) {
-    const t = new Date(startedAtIso).getTime();
-    if (!Number.isNaN(t)) merged.startTime = t;
-  }
+  merged.startTime = startTimeFromRun(startedAtIso, merged.startTime);
   if (!merged.startTime && merged.logs?.length) {
     merged.startTime = boundsFromLogs(merged.logs).start;
   }
@@ -79,10 +122,7 @@ export function mergeRunProgress(
 ): SubStepRunState {
   const { startedAtIso, ...runPatch } = patch;
   const merged: SubStepRunState = { ...prevRun, ...runPatch };
-  if (!merged.startTime && startedAtIso) {
-    const t = new Date(startedAtIso).getTime();
-    if (!Number.isNaN(t)) merged.startTime = t;
-  }
+  merged.startTime = startTimeFromRun(startedAtIso, merged.startTime);
   if (!merged.startTime && merged.logs?.length) {
     merged.startTime = boundsFromLogs(merged.logs).start;
   }
