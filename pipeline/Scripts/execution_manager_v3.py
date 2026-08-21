@@ -54,6 +54,7 @@ import json
 from datetime import datetime, timezone
 
 import requests
+from concurrent.futures import ThreadPoolExecutor
 
 # Reuse execution_manager_v2's plumbing so output/format stays identical.
 import execution_manager_v2 as emv
@@ -104,6 +105,10 @@ FORCE_S3_OUTPUTS = os.environ.get("NEW_COMPILER_FORCE_S3_OUTPUTS", "").lower() i
     "1", "true", "yes"
 )
 QUIET = False
+# Languages run concurrently against the orchestrator (it queues submissions, so
+# the wall clock is one language's, not the sum). Same shape editorial_execution_manager
+# uses for its (approach, language) pairs. Set to 1 to go back to sequential.
+LANG_PARALLELISM = int(os.environ.get("NEW_COMPILER_LANG_PARALLELISM", "5") or "5")
 CAPTURE_API = False
 INLINE_ONLY = False
 LIMIT_TESTCASES = 0  # 0 = all
@@ -549,7 +554,7 @@ def poll_budget(time_limit: float, num_inputs: int) -> int:
     )
 
 
-def poll_status(base_url, request_id, max_attempts=None):
+def poll_status(base_url, request_id, max_attempts=None, label=""):
     url = f"{base_url}/status/{request_id}"
     attempts = max_attempts if max_attempts is not None else MAX_POLL_ATTEMPTS
     consecutive_errors = 0
@@ -563,7 +568,7 @@ def poll_status(base_url, request_id, max_attempts=None):
             # must not abort the whole run — retry a few times, then give up.
             consecutive_errors += 1
             if not QUIET:
-                print(f"  poll {attempt:>3}/{attempts} -> network error "
+                print(f"  {label}poll {attempt:>3}/{attempts} -> network error "
                       f"({consecutive_errors}/{POLL_MAX_CONSECUTIVE_ERRORS}): "
                       f"{type(e).__name__}", flush=True)
             if consecutive_errors >= POLL_MAX_CONSECUTIVE_ERRORS:
@@ -576,7 +581,7 @@ def poll_status(base_url, request_id, max_attempts=None):
         consecutive_errors = 0
         status = data.get("status", "UNKNOWN")
         if not QUIET:
-            print(f"  poll {attempt:>3}/{attempts} -> {status}", flush=True)
+            print(f"  {label}poll {attempt:>3}/{attempts} -> {status}", flush=True)
         if status in ("SUCCESS", "FAILED", "NOT_FOUND", "ERROR"):
             return data
         time.sleep(POLL_INTERVAL_SECONDS)
@@ -744,21 +749,21 @@ def _resolve_target_languages(config_keys, selected_lang):
     return list(config_keys)
 
 
-def _run_one_language(base_dir, lang, code_files, main_file, lang_id,
-                      default_time_limit, testcases, question_id, question_name,
-                      quiet=False):
+def _run_one_language(lang, code_files, main_file, lang_id, default_time_limit,
+                      testcases, payload_testcases, id_index, quiet=False):
+    """Submit + poll ONE language against an already-built testcase payload.
+
+    The payload (and its S3 uploads) is language-independent, so the caller builds
+    it once for the whole run and hands the same object to every language. Building
+    it here re-uploaded every input and output blob once per language, to the exact
+    same S3 keys — that duplicated upload WAS the gap between languages.
+    """
     if not quiet:
         print(f"\n{'=' * 80}")
         print(f"TESTING {lang.upper()} - {len(testcases)} TEST CASES (BATCH SUBMIT + POLL)")
         print(f"{'=' * 80}")
 
-    if LIMIT_TESTCASES and LIMIT_TESTCASES > 0:
-        testcases = testcases[:LIMIT_TESTCASES]
-
     files_payload = _build_files_payload(code_files)
-    payload_testcases, id_index, s3_input_count, s3_output_count = _build_testcases_payload(
-        base_dir, testcases, question_id, question_name
-    )
     ordered_ids = [t["testcase_id"] for t in payload_testcases]
     compile_payload = build_compile_payload(
         lang_id, main_file, files_payload, payload_testcases, default_time_limit
@@ -767,12 +772,8 @@ def _run_one_language(base_dir, lang, code_files, main_file, lang_id,
 
     if not quiet:
         total_bytes = len(json.dumps(payload_testcases).encode("utf-8"))
-        io_mode = (
-            f"{s3_input_count} S3 input(s), {len(testcases) - s3_input_count} inline input(s); "
-            f"{s3_output_count} S3 output(s), {len(testcases) - s3_output_count} inline output(s)"
-        )
-        print(f"Submitting {len(payload_testcases)} testcases in one request "
-              f"(~{total_bytes / 1024:.1f} KB payload; {io_mode}) to "
+        print(f"[{lang}] Submitting {len(payload_testcases)} testcases in one request "
+              f"(~{total_bytes / 1024:.1f} KB payload) to "
               f"{NEW_COMPILER_URL}/compile", flush=True)
 
     try:
@@ -814,6 +815,7 @@ def _run_one_language(base_dir, lang, code_files, main_file, lang_id,
             NEW_COMPILER_URL,
             request_id,
             max_attempts=poll_budget(default_time_limit, len(ordered_ids)),
+            label=f"[{lang}] ",
         )
 
     language_results, passed_count, global_error = build_language_results(
@@ -825,13 +827,6 @@ def _run_one_language(base_dir, lang, code_files, main_file, lang_id,
             capture_dir, compile_url, compile_payload, submit_resp,
             status_data, submit_ms, lang, language_results,
         )
-
-    if not quiet:
-        for tr in language_results:
-            _print_progress(
-                lang, tr["test_index"], len(testcases), tr["status"] or "UNKNOWN",
-                api_time=tr["api_time"], memory_mb=tr["memory_mb"],
-            )
 
     return language_results, passed_count, bool(global_error)
 
@@ -880,7 +875,21 @@ def run_all_tests_batch(base_dir=None, testcases_path=None, selected_lang=None,
     if not quiet and (selected_lang == "__multi__" or (selected_lang and len(target_languages) == 1)):
         print(f"\nFiltered to run only: {', '.join(target_languages)}")
 
-    all_results = {}
+    # ONE upload pass for the whole run. Every language sends the identical
+    # testcases[] array (same S3 keys, same inline bodies), so building it per
+    # language just re-uploaded the same blobs N times.
+    if LIMIT_TESTCASES and LIMIT_TESTCASES > 0:
+        testcases = testcases[:LIMIT_TESTCASES]
+    payload_testcases, id_index, s3_input_count, s3_output_count = _build_testcases_payload(
+        base_dir, testcases, question_id, question_name
+    )
+    if not quiet:
+        print(f"\nTestcase payload built once for all languages: "
+              f"{s3_input_count} S3 input(s), {len(testcases) - s3_input_count} inline input(s); "
+              f"{s3_output_count} S3 output(s), {len(testcases) - s3_output_count} inline output(s)",
+              flush=True)
+
+    jobs = []
     for lang in target_languages:
         config = config_map[lang]
 
@@ -906,25 +915,47 @@ def run_all_tests_batch(base_dir=None, testcases_path=None, selected_lang=None,
             if lang == "C++" and node_h_content:
                 code_files.append(("node.h", node_h_content))
 
-        try:
-            language_results, passed_count, halted = _run_one_language(
-                base_dir, lang, code_files, config["main_file"], config["id"],
-                config.get("default_execution_time_limit", 5), testcases,
-                question_id, question_name, quiet=quiet,
-            )
-        except Exception as e:
-            # One language crashing (unexpected error) must not discard the
-            # results already gathered for the others — record and continue.
-            print(f"[{lang}] Unexpected error, skipping language: "
-                  f"{type(e).__name__}: {e}", flush=True)
-            language_results, passed_count, halted = [], 0, True
+        jobs.append((lang, config, code_files))
 
-        all_results[lang] = language_results
-        if not quiet:
-            emit_language_results("execute_tests", "Reference Solution", 0, lang, language_results)
-            _print_language_results_table(lang, language_results)
-            print(f"{lang}: passed {passed_count}/{len(language_results)}")
-            _emit_lang_end(lang, len(testcases), len(language_results), passed_count, halted)
+    # Languages run concurrently: each is one submit + poll against an orchestrator
+    # that queues work anyway, so the wall clock becomes the slowest language rather
+    # than their sum. Results are collected in target_languages order, so the report
+    # and the printed tables stay byte-identical to the sequential version.
+    all_results = {}
+    workers = max(1, min(LANG_PARALLELISM, len(jobs)))
+    if jobs and not quiet and workers > 1:
+        print(f"\nRunning {len(jobs)} language(s) in parallel ({workers} worker(s))...",
+              flush=True)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            lang: pool.submit(
+                _run_one_language, lang, code_files, config["main_file"], config["id"],
+                config.get("default_execution_time_limit", 5), testcases,
+                payload_testcases, id_index, quiet,
+            )
+            for lang, config, code_files in jobs
+        }
+        for lang in [j[0] for j in jobs]:
+            try:
+                language_results, passed_count, halted = futures[lang].result()
+            except Exception as e:
+                # One language crashing (unexpected error) must not discard the
+                # results already gathered for the others — record and continue.
+                print(f"[{lang}] Unexpected error, skipping language: "
+                      f"{type(e).__name__}: {e}", flush=True)
+                language_results, passed_count, halted = [], 0, True
+
+            all_results[lang] = language_results
+            if not quiet:
+                for tr in language_results:
+                    _print_progress(
+                        lang, tr["test_index"], len(testcases), tr["status"] or "UNKNOWN",
+                        api_time=tr["api_time"], memory_mb=tr["memory_mb"],
+                    )
+                emit_language_results("execute_tests", "Reference Solution", 0, lang, language_results)
+                _print_language_results_table(lang, language_results)
+                print(f"{lang}: passed {passed_count}/{len(language_results)}")
+                _emit_lang_end(lang, len(testcases), len(language_results), passed_count, halted)
 
     if persist_results:
         write_execution_results_file(

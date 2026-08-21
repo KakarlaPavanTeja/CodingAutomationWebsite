@@ -272,7 +272,7 @@ def _interpret(result, expected_output):
 # ---------------------------------------------------------------------------
 
 def _run_one(base_dir, mode, lang, config, prepared_code, driver, node_h,
-             testcases, question_id, question_name, approach):
+             testcases, question_id, question_name, approach, v3_payload=None):
     """Run all testcases for a single (approach, language). Returns a list of
     test_res dicts; emits a sentinel line per testcase. Never raises.
     Runs on a worker thread — must not touch shared mutable state.
@@ -283,14 +283,18 @@ def _run_one(base_dir, mode, lang, config, prepared_code, driver, node_h,
     if lang in v3_cfg_map:
         return _run_pair_v3(base_dir, mode, lang, v3_cfg_map[lang], prepared_code,
                             driver, node_h, testcases, question_id, question_name,
-                            approach)
+                            approach, v3_payload)
     return _run_pair_v2(base_dir, mode, lang, config, prepared_code, driver,
                         node_h, testcases, question_id, question_name, approach)
 
 
 def _run_pair_v3(base_dir, mode, lang, cfg, prepared_code, driver, node_h,
-                 testcases, question_id, question_name, approach):
-    """One batch submit + poll against the new compiler (same as execute_tests)."""
+                 testcases, question_id, question_name, approach, v3_payload=None):
+    """One batch submit + poll against the new compiler (same as execute_tests).
+
+    `v3_payload` is the (payload_testcases, id_index) pair built ONCE by the
+    caller. Every (approach, language) pair sends the identical testcases[], so
+    building it here re-uploaded every S3 blob approaches x languages times."""
     label = approach["label"]
     index = approach["index"]
     total = len(testcases)
@@ -308,10 +312,11 @@ def _run_pair_v3(base_dir, mode, lang, cfg, prepared_code, driver, node_h,
     print(f"\n  [{label}] {lang}: batch submit of {total} testcase(s) to "
           f"{emv3.NEW_COMPILER_URL}", flush=True)
     try:
+        payload_testcases, id_index = v3_payload
         language_results, passed, _halted = _run_one_language(
-            base_dir, lang, code_files, cfg["main_file"], cfg["id"],
+            lang, code_files, cfg["main_file"], cfg["id"],
             cfg.get("default_execution_time_limit", 5), testcases,
-            question_id, question_name, quiet=True,
+            payload_testcases, id_index, quiet=True,
         )
     except Exception as exc:
         language_results = [{
@@ -523,6 +528,16 @@ def run():
 
             jobs.append((approach, lang, config, prepared, driver, node_h))
 
+    # One upload pass for every (approach, language) pair: the testcases[] array
+    # is identical across all of them.
+    v3_payload = None
+    if any(lang in (V3_LANG_CONFIG if mode == "function" else V3_NONFUNCTION_LANG_CONFIG)
+           for _a, lang, *_rest in jobs):
+        payload_testcases, id_index, _in_n, _out_n = emv3._build_testcases_payload(
+            base_dir, testcases, question_id, question_name
+        )
+        v3_payload = (payload_testcases, id_index)
+
     results_by_key = {}
     if jobs:
         workers = max(1, min(_MAX_PARALLEL, len(jobs)))
@@ -533,6 +548,7 @@ def run():
                 pool.submit(
                     _run_one, base_dir, mode, lang, config, prepared, driver,
                     node_h, testcases, question_id, question_name, approach,
+                    v3_payload,
                 ): (approach["index"], lang)
                 for approach, lang, config, prepared, driver, node_h in jobs
             }
