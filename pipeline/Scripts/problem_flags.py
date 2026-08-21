@@ -102,6 +102,61 @@ def checker_defects(source):
 
 
 # --------------------------------------------------------------------------- #
+# THE CHECKER IN THE OTHER THREE LANGUAGES.
+# --------------------------------------------------------------------------- #
+# The reference is always Python, so `checker_defects` above parses it with `ast`. C++,
+# Java and Node.js get their checker by TRANSLATION (conversionPrompt) and it is then
+# relocated into the driver (splittingPrompt). Neither step can be gated with `ast`, so the
+# contract is pinned here as the exact declaration each prompt mandates, and both the
+# conversion step and the split gate read this one table. Change a declaration in a prompt
+# and you must change it here, or the gate stops matching what you asked for.
+CHECKER_DECLS = {
+    "Python": {
+        "reference_answer": r"def\s+reference_answer\s*\(",
+        "is_valid_answer": r"def\s+is_valid_answer\s*\(",
+    },
+    "C++": {
+        "referenceAnswer": r"string\s+referenceAnswer\s*\(",
+        "isValidAnswer": r"bool\s+isValidAnswer\s*\(",
+    },
+    "Java": {
+        "referenceAnswer": r"static\s+String\s+referenceAnswer\s*\(",
+        "isValidAnswer": r"static\s+boolean\s+isValidAnswer\s*\(",
+    },
+    "Node.js": {
+        "referenceAnswer": r"function\s+referenceAnswer\s*\(",
+        "isValidAnswer": r"function\s+isValidAnswer\s*\(",
+    },
+}
+
+# The driver's measured window, per language: the checker must run AFTER it closes or the
+# student's reported runtime includes the grader's work. Same template lines the splitting
+# prompt hands the model, so a template rename breaks the gate loudly here.
+CHECKER_TIMING_WINDOW = {
+    "Python": ("start_time_ns", "end_time_ns"),
+    "C++": ("start = high_resolution_clock", "stop = high_resolution_clock"),
+    "Java": ("start_time = System.nanoTime", "end_time = System.nanoTime"),
+    "Node.js": ("startTime = process.hrtime", "endTime = process.hrtime"),
+}
+
+
+def translated_checker_defects(language, source):
+    """Defects in a TRANSLATED checker. Empty list means both functions are declared.
+
+    Presence only. Whether the ported logic still accepts the same set of answers is not a
+    static question — `validate_solutions` answers it by running the suite, and every
+    testcase's stored answer came from the Python `reference_answer`, so a translation that
+    drifted shows up there as a failing case.
+    """
+    decls = CHECKER_DECLS.get(language)
+    if not decls:
+        return []
+    text = source or ""
+    return [f"{name} is missing — the {language} translation dropped the checker"
+            for name, pattern in decls.items() if not re.search(pattern, text)]
+
+
+# --------------------------------------------------------------------------- #
 # THE I/O FORMAT. One definition, enforced statically.
 # --------------------------------------------------------------------------- #
 # stdin is RAW TOKENS — whitespace- and newline-separated values, exactly what the

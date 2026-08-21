@@ -1,6 +1,164 @@
 from Prompts.dataTypePrompt import get_data_type_selection_rules
 
 
+# The driver grades an open-ended problem with the checker the reference carries, and every
+# part of that differs per language: where the two functions may legally live, how the
+# driver keeps a copy of raw stdin while the Input Area still reads it normally, and what
+# the Output Area prints. `problem_flags.CHECKER_DECLS` pins the declarations these blocks
+# mandate and `code_splitter.split_defects` gates on them, so a rename here must be made in
+# all three places.
+_OPEN_ENDED_RULES = {
+    "Python": """
+**OPEN-ENDED PROBLEM — THE DRIVER GRADES WITH A CHECKER:**
+The source you were given contains two module-level functions, `reference_answer(stdin_text)`
+and `is_valid_answer(stdin_text, candidate_stdout)`. They are NOT part of the user's task.
+
+1. Put BOTH functions **verbatim** in `driver_code`, between the markers
+   `# Checker Area Start` and `# Checker Area End`, immediately before the Input Area.
+   Keep their names EXACTLY — the driver calls them by name.
+2. They MUST NOT appear in `solution_code` or in `default_code`. Those are shown to the
+   user and would hand them the reference implementation.
+3. Immediately after the `# Dont change or modify any lines before this point` line, add:
+       RAW_STDIN = sys.stdin.read()
+       sys.stdin = io.StringIO(RAW_STDIN)
+   and add `import io` to the driver's imports. The Input Area then parses from RAW_STDIN
+   through the normal `input()` calls, unchanged.
+4. The Output Area becomes EXACTLY this shape:
+       _candidate = str(result)
+       if is_valid_answer(RAW_STDIN, _candidate):
+           sys.stdout.write(reference_answer(RAW_STDIN) + '\\n')
+       else:
+           sys.stdout.write(_candidate + '\\n')
+   Replace `str(result)` with whatever stringification the single-answer driver would have
+   printed, so an invalid answer is echoed back in exactly the format the user produced.
+5. **NEVER print `VALID`, `INVALID`, `CORRECT`, `WRONG` or any other verdict word.** On an
+   invalid answer the driver prints the USER'S OWN output so they can see what they
+   produced. A verdict hides exactly that.
+6. The checker calls stay in the Output Area, AFTER `end_time_ns`. Nothing may go between
+   `start_time_ns` and `end_time_ns` — that window is the user's measured runtime.
+7. `debugger_code` keeps its ordinary printing. It is a local convenience, not a grader.
+""",
+    "C++": """
+**OPEN-ENDED PROBLEM — THE DRIVER GRADES WITH A CHECKER:**
+The source you were given contains two free functions at namespace scope,
+`string referenceAnswer(const string& stdinText)` and
+`bool isValidAnswer(const string& stdinText, const string& candidateStdout)`.
+They are NOT part of the user's task.
+
+1. Put BOTH functions **verbatim** in `driver_code`, between the markers
+   `// Checker Area Start` and `// Checker Area End`, at namespace scope AFTER
+   `#include "solution.cpp"` and BEFORE `int main`. Keep their names and signatures EXACTLY
+   — the driver calls them by name.
+2. They MUST NOT appear in `solution_code` or in `default_code`. Those are shown to the
+   user and would hand them the reference implementation.
+3. Immediately after the `// Dont change or modify any lines before this point` line, add:
+       string RAW_STDIN((istreambuf_iterator<char>(cin)), istreambuf_iterator<char>());
+       istringstream _replay(RAW_STDIN);
+       cin.rdbuf(_replay.rdbuf());
+   The Input Area then parses from `cin` through the normal `cin >>` / `getline` calls,
+   unchanged. `_replay` must stay alive for the whole of `main` — declare it there, never
+   inside a block.
+4. The Output Area becomes EXACTLY this shape:
+       ostringstream _out;
+       _out << result;
+       string _candidate = _out.str();
+       if (isValidAnswer(RAW_STDIN, _candidate)) {
+           cout << referenceAnswer(RAW_STDIN) << "\\n";
+       } else {
+           cout << _candidate << "\\n";
+       }
+   Replace `_out << result;` with whatever the single-answer driver would have streamed to
+   `cout`, minus the trailing newline, so an invalid answer is echoed back in exactly the
+   format the user produced.
+5. **NEVER print `VALID`, `INVALID`, `CORRECT`, `WRONG` or any other verdict word.** On an
+   invalid answer the driver prints the USER'S OWN output so they can see what they
+   produced. A verdict hides exactly that.
+6. The checker calls stay in the Output Area, AFTER `stop = high_resolution_clock::now()`.
+   Nothing may go between `start` and `stop` — that window is the user's measured runtime.
+7. `debugger_code` keeps its ordinary printing. It is a local convenience, not a grader.
+""",
+    "Java": """
+**OPEN-ENDED PROBLEM — THE DRIVER GRADES WITH A CHECKER:**
+The source you were given contains two static methods of `Main`,
+`static String referenceAnswer(String stdinText)` and
+`static boolean isValidAnswer(String stdinText, String candidateStdout)`.
+They are NOT part of the user's task.
+
+1. Put BOTH methods **verbatim** in `driver_code`, between the markers
+   `// Checker Area Start` and `// Checker Area End`, as static methods of `Main`
+   immediately before `public static void main`. Keep their names and signatures EXACTLY —
+   the driver calls them by name. They must NEVER be methods of `Solution`: at grading time
+   `Solution` is the STUDENT's class, and a checker living there grades every student
+   against their own answer.
+2. They MUST NOT appear in `solution_code` or in `default_code`. Those are shown to the
+   user and would hand them the reference implementation.
+3. Replace the `FastReader sc = new FastReader();` line of the preamble with EXACTLY:
+       String RAW_STDIN = new String(System.in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+       System.setIn(new java.io.ByteArrayInputStream(RAW_STDIN.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+       FastReader sc = new FastReader();
+   in that order — `FastReader` buffers `System.in` when it is constructed, so it must be
+   built AFTER the replay stream is installed. The Input Area then reads through the normal
+   `sc.nextInt()` / `sc.next()` calls, unchanged. Every other preamble line stays as-is.
+4. The Output Area becomes EXACTLY this shape:
+       String _candidate = String.valueOf(result);
+       if (isValidAnswer(RAW_STDIN, _candidate)) {
+           System.out.println(referenceAnswer(RAW_STDIN));
+       } else {
+           System.out.println(_candidate);
+       }
+   Replace `String.valueOf(result)` with whatever stringification the single-answer driver
+   would have printed (a `StringBuilder` for a list, etc.), minus the trailing newline, so
+   an invalid answer is echoed back in exactly the format the user produced.
+5. **NEVER print `VALID`, `INVALID`, `CORRECT`, `WRONG` or any other verdict word.** On an
+   invalid answer the driver prints the USER'S OWN output so they can see what they
+   produced. A verdict hides exactly that.
+6. The checker calls stay in the Output Area, AFTER `end_time`. Nothing may go between
+   `start_time` and `end_time` — that window is the user's measured runtime.
+7. `debugger_code` keeps its ordinary printing. It is a local convenience, not a grader.
+""",
+    "Node.js": """
+**OPEN-ENDED PROBLEM — THE DRIVER GRADES WITH A CHECKER:**
+The source you were given contains two top-level functions,
+`function referenceAnswer(stdinText)` and
+`function isValidAnswer(stdinText, candidateStdout)`. They are NOT part of the user's task.
+
+1. Put BOTH functions **verbatim** in `driver_code`, between the markers
+   `// Checker Area Start` and `// Checker Area End`, at top level AFTER the `eval` block
+   that loads `Solution.js` and BEFORE `async function main()`. Keep their names EXACTLY —
+   the driver calls them by name.
+2. They MUST NOT appear in `solution_code` or in `default_code`. Those are shown to the
+   user and would hand them the reference implementation.
+3. The FIRST line of the Input Parsing Area is EXACTLY:
+       const RAW_STDIN = fs.readFileSync(0, "utf8");
+   Every later parse in that area MUST use `RAW_STDIN` (e.g.
+   `const input = RAW_STDIN.trim().split(/\\s+/);`). File descriptor 0 can only be read
+   once, so a second `fs.readFileSync(0, ...)` anywhere in the driver returns an empty
+   string and the driver silently reads nothing.
+   This also means **Case 2 of the Input Parsing Area is unavailable here**: a `Solution`
+   method that reads stdin itself would find fd 0 already drained. Always use Case 1 — the
+   driver parses `RAW_STDIN` and passes the arguments in. Unlike Python, C++ and Java, a
+   Node.js driver cannot hand the raw bytes back to the student's code.
+4. The Output Printing Area becomes EXACTLY this shape:
+       const _candidate = String(result);
+       if (isValidAnswer(RAW_STDIN, _candidate)) {
+           process.stdout.write(referenceAnswer(RAW_STDIN) + "\\n");
+       } else {
+           process.stdout.write(_candidate + "\\n");
+       }
+   Replace `String(result)` with whatever stringification the single-answer driver would
+   have written, minus the trailing newline, so an invalid answer is echoed back in exactly
+   the format the user produced.
+5. **NEVER print `VALID`, `INVALID`, `CORRECT`, `WRONG` or any other verdict word.** On an
+   invalid answer the driver prints the USER'S OWN output so they can see what they
+   produced. A verdict hides exactly that.
+6. The checker calls stay in the Output Printing Area, AFTER `endTime`. Nothing may go
+   between `startTime` and `endTime` — that window is the user's measured runtime.
+7. `debugger_code` is "N/A" for Node.js, as usual.
+""",
+}
+
+
+
 def get_splitting_prompt(language, code, desc_response=None, question_type="standard",
                          open_ended=False):
     """
@@ -8,9 +166,9 @@ def get_splitting_prompt(language, code, desc_response=None, question_type="stan
 
     `open_ended` means the problem admits more than one correct answer, so the driver has to
     grade with the checker the reference carries instead of comparing against one stored
-    string. Phase 1 is Python only — the rules block below is Python source, and pasting it
-    into a C++/Java/Node.js prompt would ask the model to emit Python. Task 9 adds the other
-    three; until then those languages fall through to the ordinary single-answer template.
+    string. Each language gets its own rules block: the checker's placement, the way the
+    driver replays raw stdin, and the shape of the Output Area all differ per language, and
+    a block written for one of them asks the model to emit the wrong syntax in another.
     """
     node_injection_rules = ""
     if question_type in ["binary tree", "linked list"]:
@@ -200,38 +358,7 @@ class Node {
 }
 """
 
-    open_ended_rules = ""
-    if open_ended and language == "Python":
-        open_ended_rules = """
-**OPEN-ENDED PROBLEM — THE DRIVER GRADES WITH A CHECKER:**
-The source you were given contains two module-level functions, `reference_answer(stdin_text)`
-and `is_valid_answer(stdin_text, candidate_stdout)`. They are NOT part of the user's task.
-
-1. Put BOTH functions **verbatim** in `driver_code`, between the markers
-   `# Checker Area Start` and `# Checker Area End`, immediately before the Input Area.
-   Keep their names EXACTLY — the driver calls them by name.
-2. They MUST NOT appear in `solution_code` or in `default_code`. Those are shown to the
-   user and would hand them the reference implementation.
-3. Immediately after the `# Dont change or modify any lines before this point` line, add:
-       RAW_STDIN = sys.stdin.read()
-       sys.stdin = io.StringIO(RAW_STDIN)
-   and add `import io` to the driver's imports. The Input Area then parses from RAW_STDIN
-   through the normal `input()` calls, unchanged.
-4. The Output Area becomes EXACTLY this shape:
-       _candidate = str(result)
-       if is_valid_answer(RAW_STDIN, _candidate):
-           sys.stdout.write(reference_answer(RAW_STDIN) + '\\n')
-       else:
-           sys.stdout.write(_candidate + '\\n')
-   Replace `str(result)` with whatever stringification the single-answer driver would have
-   printed, so an invalid answer is echoed back in exactly the format the user produced.
-5. **NEVER print `VALID`, `INVALID`, `CORRECT`, `WRONG` or any other verdict word.** On an
-   invalid answer the driver prints the USER'S OWN output so they can see what they
-   produced. A verdict hides exactly that.
-6. The checker calls stay in the Output Area, AFTER `end_time_ns`. Nothing may go between
-   `start_time_ns` and `end_time_ns` — that window is the user's measured runtime.
-7. `debugger_code` keeps its ordinary printing. It is a local convenience, not a grader.
-"""
+    open_ended_rules = _OPEN_ENDED_RULES.get(language, "") if open_ended else ""
 
     if language == "Node.js":
         instantiation_rules = "**CRITICAL - STATIC METHOD REQUIREMENT:**\n- You MUST use `static` methods for the core logic functions inside the `Solution` class.\n- You MUST NOT instantiate the class in the Driver code. Call the method directly on the class.\n  - Node.js: `const result = Solution.FUNCTION_NAME();`\n"
@@ -600,7 +727,7 @@ async function main() {{
     total_elapsed_time_ns += (endTime - startTime);
 
     const elapsedTimeSeconds = Number(total_elapsed_time_ns) / 1e9;
-    const memoryUsedKB = Math.round(process.memoryUsage().rss / 1024);
+    const memoryUsedKB = process.resourceUsage().maxRSS;
     const outputContent =
         `*-SUBMISSION::USER_CODE_FUNCTION_EXECUTION_TIME_KEY-* ${{elapsedTimeSeconds.toFixed(9)}}\\n` +
         `*-SUBMISSION::USER_CODE_FUNCTION_MEMORY_USAGE_KEY-* ${{memoryUsedKB}}`;

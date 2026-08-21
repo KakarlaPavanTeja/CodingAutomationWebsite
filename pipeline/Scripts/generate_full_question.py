@@ -15,8 +15,8 @@ from Prompts.topicsPrompt import get_topics_prompt
 from llm_client import call_llm
 from usage_tracker import update_usage
 from problem_flags import (OPEN_ENDED_MARKER_RE, checker_defects, load_open_ended,
-                           stdin_parsing_defects,
-                           save_problem_flags, split_open_ended_marker)
+                           save_problem_flags, split_open_ended_marker,
+                           stdin_parsing_defects, translated_checker_defects)
 from code_cleaner import clean_generated_code, strip_code_fence
 
 # Directory constants
@@ -837,6 +837,9 @@ def run_translate_step(problem_name, structure_type, user_code, detected_lang, s
     description_signature = _load_signature()
     user_lang_key = LANG_MAP.get(detected_lang.lower(), 'python_code')
     selected_keys = {LANG_ID_TO_KEY.get(l, '') for l in selected_langs}
+    open_ended = load_open_ended(OUTPUT_DIR)
+    if open_ended:
+        print("  Open-ended problem: every translation must carry the checker too.")
 
     _save_working_code(working_code, detected_lang)
 
@@ -848,12 +851,24 @@ def run_translate_step(problem_name, structure_type, user_code, detected_lang, s
             continue
         print(f"  - Converting to {lang}...")
         conv_prompt = get_conversion_prompt(
-            lang, working_code, structure_type, description_signature, desc_response
+            lang, working_code, structure_type, description_signature, desc_response,
+            open_ended=open_ended,
         )
         conv_response, conv_usage = call_llm(conv_prompt, "", purpose="code")
         _track_llm_usage(conv_usage, f"{problem_name}_convert_{lang}", purpose="code")
 
         clean_code = clean_generated_code(strip_code_fence(conv_response), lang)
+
+        # A dropped checker is invisible until a student answers validly in this language
+        # and is marked wrong, so it fails here instead. Static because the translation
+        # cannot be executed at this point — there is no testcase suite yet.
+        defects = translated_checker_defects(lang, clean_code) if open_ended else []
+        if defects:
+            print(f"ERROR: the {lang} translation is unusable for an open-ended problem:")
+            for d in defects:
+                print(f"  - {d}")
+            sys.exit(1)
+
         _save_solution_file(key, clean_code)
 
     print(f"✓ Solutions saved to {_generated_full_code_dir()}")

@@ -194,6 +194,13 @@ CLASS NAMING — CRITICAL:
 - Java driver class: `class Main` — NEVER `public class Main` (the editorial file is not named Main.java, so a public Main will not compile).
 - For Tree and Linked List problems, the `Node` class is defined OUTSIDE and ABOVE the solution class; the solution class itself is STILL always present and wraps all solution methods.
 
+CHECKER RULE — CRITICAL:
+- An open-ended problem's reference solution carries two extra grader functions —
+  `reference_answer` / `is_valid_answer` in Python, `referenceAnswer` / `isValidAnswer` in
+  C++, Java and Node.js. They belong to the platform's driver, not to the solution.
+- NEVER reproduce, mention, name or explain them in the editorial, in ANY language. Write
+  the editorial for the solution class alone, exactly as if those functions were not there.
+
 DRIVER / main() RULE — CRITICAL:
 - FUNCTION-BASED problems (the user message includes DRIVER CODE): at the bottom of EACH language, include a `main()` / driver that is FULLY COMMENTED OUT. This is a generic template only — DO NOT paste or reconstruct the real driver harness from the provided driver code. No print/output statements and no solution logic outside the commented main block.
 - NON-FUNCTION problems (the user message's DRIVER CODE section says "none — this is a non-function problem"): the main()/driver is LIVE, never commented out. It must call the solution and PRINT the result to stdout, so the program runs standalone and produces the expected output exactly as the problem specifies.

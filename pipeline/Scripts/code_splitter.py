@@ -10,7 +10,7 @@ if current_dir not in sys.path:
     sys.path.append(current_dir)
 
 from llm_client import call_llm
-from problem_flags import load_open_ended
+from problem_flags import CHECKER_DECLS, CHECKER_TIMING_WINDOW, load_open_ended
 from Prompts.splittingPrompt import get_splitting_prompt
 from usage_tracker import update_usage
 
@@ -25,26 +25,31 @@ def split_defects(language_name, split_data, open_ended):
     read the answer, and a verdict-printing driver just means every failure report is
     useless. Neither breaks a test.
 
-    Phase 1 is Python only — `def reference_answer` is Python syntax and the checker's
-    placement rules differ per language. Task 9 teaches it the other three.
+    The declarations and the timing markers are per-language and live in `problem_flags`,
+    because the splitting prompt asks for a different shape in each language and this gate
+    only means something while it matches what was asked for.
     """
-    if not open_ended or language_name != "Python":
+    decls = CHECKER_DECLS.get(language_name) if open_ended else None
+    if not decls:
         return []
     driver = split_data.get("driver_code") or ""
     defects = []
-    for name in ("reference_answer", "is_valid_answer"):
-        if f"def {name}" not in driver:
+    for name, pattern in decls.items():
+        if not re.search(pattern, driver):
             defects.append(f"driver_code is missing {name}")
     for key in ("solution_code", "default_code"):
         body = split_data.get(key) or ""
-        if "reference_answer" in body or "is_valid_answer" in body:
-            defects.append(f"the checker leaked into {key}, which is shown to the user")
+        for name in decls:
+            if name in body:
+                defects.append(f"the checker leaked into {key}, which is shown to the user")
+                break
     for word in dict.fromkeys(_VERDICT_RE.findall(driver)):
         defects.append(f"driver_code prints the verdict {word!r}; it must print an answer")
-    start, end = driver.find("start_time_ns"), driver.find("end_time_ns")
+    open_marker, close_marker = CHECKER_TIMING_WINDOW[language_name]
+    start, end = driver.find(open_marker), driver.find(close_marker)
     if start != -1 and end > start:
         window = driver[start:end]
-        if "is_valid_answer" in window or "reference_answer" in window:
+        if any(name in window for name in decls):
             defects.append("the checker runs inside the timing window and would inflate "
                            "the user's measured runtime")
     return defects
@@ -226,9 +231,6 @@ def main():
             continue
             
         print(f"\nProcessing {lang_name}...")
-        if open_ended and lang_name != "Python":
-            print(f"  ! {lang_name} has no checker yet (Phase 1 is Python only) — its "
-                  f"driver will grade against the single stored answer.")
 
         # 2. Call LLM to split code
         system_prompt, user_prompt = get_splitting_prompt(

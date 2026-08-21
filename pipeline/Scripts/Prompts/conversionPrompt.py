@@ -1,7 +1,72 @@
 from Prompts.dataTypePrompt import get_data_type_selection_rules
 
+# An open-ended problem's SOURCE CODE carries two extra module-level functions that are not
+# part of the algorithm: `reference_answer` and `is_valid_answer` (normalizationPrompt).
+# Without the block below the translator treats them as dead code and drops them, and the
+# split step then has nothing to put in the driver — so the C++/Java/Node.js driver falls
+# back to comparing stdout against the ONE stored answer and marks every other valid answer
+# wrong. The declarations here are pinned in problem_flags.CHECKER_DECLS; change one and
+# you must change the other.
+_OPEN_ENDED_TRANSLATION_RULES = {
+    "C++": """
+**OPEN-ENDED PROBLEM — TRANSLATE THE CHECKER TOO (mandatory):**
+The SOURCE CODE contains two module-level functions, `reference_answer(stdin_text)` and
+`is_valid_answer(stdin_text, candidate_stdout)`. They are NOT dead code and NOT part of the
+user's task — the grading driver calls them. Translate BOTH with these EXACT signatures, as
+free functions at namespace scope ABOVE `main` and OUTSIDE `class solution`:
 
-def get_conversion_prompt(target_language, source_code, question_type, description_signature=None, desc_response=None):
+    string referenceAnswer(const string& stdinText);
+    bool isValidAnswer(const string& stdinText, const string& candidateStdout);
+
+- `referenceAnswer` returns the exact stdout the reference prints, WITHOUT a trailing newline.
+- Parse `stdinText` inside them with `istringstream` — they receive the whole raw stdin as a
+  string, never the already-parsed variables from `main`.
+- Neither may reference, construct or call `solution`. Duplicate whatever logic they need.
+- Port the ACCEPTANCE RULE as-is. `isValidAnswer` must NOT be reduced to
+  `candidateStdout == referenceAnswer(stdinText)` — that rejects every valid alternative,
+  which is the entire point of the checker.
+""",
+    "Java": """
+**OPEN-ENDED PROBLEM — TRANSLATE THE CHECKER TOO (mandatory):**
+The SOURCE CODE contains two module-level functions, `reference_answer(stdin_text)` and
+`is_valid_answer(stdin_text, candidate_stdout)`. They are NOT dead code and NOT part of the
+user's task — the grading driver calls them. Translate BOTH with these EXACT signatures, as
+`static` methods of `Main` (NEVER of `Solution` — at grading time `Solution` is the
+student's class and a checker living there would grade every student against themselves):
+
+    static String referenceAnswer(String stdinText)
+    static boolean isValidAnswer(String stdinText, String candidateStdout)
+
+- `referenceAnswer` returns the exact stdout the reference prints, WITHOUT a trailing newline.
+- Parse `stdinText` inside them with a `StringTokenizer` or `split("\\s+")` — they receive
+  the whole raw stdin as a string, never the already-parsed variables from `main`.
+- Neither may reference, construct or call `Solution`. Duplicate whatever logic they need.
+- Port the ACCEPTANCE RULE as-is. `isValidAnswer` must NOT be reduced to
+  `candidateStdout.equals(referenceAnswer(stdinText))` — that rejects every valid
+  alternative, which is the entire point of the checker.
+""",
+    "Node.js": """
+**OPEN-ENDED PROBLEM — TRANSLATE THE CHECKER TOO (mandatory):**
+The SOURCE CODE contains two module-level functions, `reference_answer(stdin_text)` and
+`is_valid_answer(stdin_text, candidate_stdout)`. They are NOT dead code and NOT part of the
+user's task — the grading driver calls them. Translate BOTH with these EXACT signatures, as
+top-level functions OUTSIDE `class Solution`:
+
+    function referenceAnswer(stdinText)
+    function isValidAnswer(stdinText, candidateStdout)
+
+- `referenceAnswer` returns the exact stdout the reference prints, WITHOUT a trailing newline.
+- Parse `stdinText` inside them (`stdinText.trim().split(/\\s+/)`) — they receive the whole
+  raw stdin as a string, never the already-parsed variables from `main`.
+- Neither may reference, construct or call `Solution`. Duplicate whatever logic they need.
+- Port the ACCEPTANCE RULE as-is. `isValidAnswer` must NOT be reduced to
+  `candidateStdout === referenceAnswer(stdinText)` — that rejects every valid alternative,
+  which is the entire point of the checker.
+""",
+}
+
+
+def get_conversion_prompt(target_language, source_code, question_type, description_signature=None, desc_response=None, open_ended=False):
     """
     Constructs the system prompt to convert Source Code to Target Language.
     Enforces strict logic/variable preservation and specific syntax rules.
@@ -12,6 +77,7 @@ def get_conversion_prompt(target_language, source_code, question_type, descripti
         question_type: Type of question
         description_signature: Optional dict with function name/params from description
         desc_response: The generated problem description string for validating input formatting
+        open_ended: The problem accepts several correct answers -> also translate the checker
     """
     
     data_structure_rules = """5.  **Data Structures**:
@@ -150,6 +216,10 @@ The problem description REQUIRES these specific names:
 5. **VERBATIM — DO NOT RE-CASE**: Use the function name and parameter names **character-for-character, with their EXACT capitalization**. Do NOT apply {target_language} naming conventions: do NOT convert to snake_case, PascalCase, kebab-case, or any other style. For example, if the name is `findMatchingElements`, it MUST stay `findMatchingElements` in {target_language} — never `find_matching_elements`. The identifiers must be byte-for-byte identical across every language.
 """
 
+    checker_rules = ""
+    if open_ended:
+        checker_rules = _OPEN_ENDED_TRANSLATION_RULES.get(target_language, "")
+
     prompt = f"""You are an expert Code Translator. Your task is to **convert the provided Source Code** into **{target_language}**.
 {signature_rules}
 
@@ -207,6 +277,7 @@ The problem description REQUIRES these specific names:
       - Node.js: `const sol = new Solution(); result = sol.functionName();`
       - Python: `sol = solution(); result = sol.functionName()`
 
+{checker_rules}
 **SOURCE CODE:**
 {source_code}
 
