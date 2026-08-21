@@ -12,6 +12,7 @@ recorded like every other step. Follows the enrichment_manager.py pattern.
 import os
 import re
 
+from editorial_code_guard import comment_out_editorial_drivers
 from llm_client import call_llm, set_editorial_fallback_efforts
 from usage_tracker import update_usage as track_usage
 from Prompts.editorialPrompt import (
@@ -246,6 +247,16 @@ def generate_editorial():
         print(f"Editorial title set to problem short title: {short_title}")
     else:
         print("No owner/generated short title found; keeping model-generated editorial title.")
+
+    # Function-based problems (driver code exists) must ship a COMMENTED-OUT
+    # main(). The prompt says so three times and the model still ships a live one
+    # on some runs, which the reviewer could only fix by re-running the whole
+    # editorial with a change request. Enforce it here instead of hoping.
+    if drivers:
+        final_content, fixed = comment_out_editorial_drivers(final_content)
+        if fixed:
+            print(f"Function-based problem: commented out a live main()/driver in "
+                  f"{fixed} editorial code block(s).")
 
     output_path = os.path.join(outputs_dir, "editorial.md")
     os.makedirs(outputs_dir, exist_ok=True)
