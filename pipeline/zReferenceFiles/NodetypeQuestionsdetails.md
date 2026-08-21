@@ -1150,7 +1150,7 @@ async function main() {
 
     printLevelOrder(root);
 
-    const memoryUsedKB = Math.round(process.memoryUsage().rss / 1024);
+    const memoryUsedKB = process.resourceUsage().maxRSS;
     const elapsedTimeNs = endTime - startTime;
     const elapsedTimeSeconds = Number(elapsedTimeNs) / 1e9;
 

@@ -69,7 +69,7 @@ async function main() {
     total_elapsed_time_ns += (endTime - startTime);
 
     const elapsedTimeSeconds = Number(total_elapsed_time_ns) / 1e9;
-    const memoryUsedKB = Math.round(process.memoryUsage().rss / 1024);
+    const memoryUsedKB = process.resourceUsage().maxRSS;
     const outputContent =
         `*-SUBMISSION::USER_CODE_FUNCTION_EXECUTION_TIME_KEY-* ${elapsedTimeSeconds.toFixed(9)}\n` +
         `*-SUBMISSION::USER_CODE_FUNCTION_MEMORY_USAGE_KEY-* ${memoryUsedKB}`;
