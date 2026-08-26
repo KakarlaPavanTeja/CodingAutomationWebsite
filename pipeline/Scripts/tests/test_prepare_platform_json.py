@@ -100,6 +100,22 @@ class TestPreparePlatformJson(unittest.TestCase):
         self.assertIn("PYTHON", langs)
         self.assertTrue(data[0]["coding_question_details"][0]["is_function_based"])
 
+    def test_practice_concept_tags_carry_the_generated_topics(self):
+        lua = MINIMAL_LUA + """
+----------BEGINNER_TOPICS_START----------
+String, Simulation
+----------BEGINNER_TOPICS_END----------
+----------INTERMEDIATE_TOPICS_START----------
+Hash Map
+----------INTERMEDIATE_TOPICS_END----------
+"""
+        q = ppj.build_practice_json(
+            lua, PRACTICE_CONTAINER, "EASY", node_based=False, enabled_langs=["python"]
+        )[0]["question"]
+        topics = ["String", "Simulation", "Hash Map"]
+        self.assertEqual(q["concept_tag_names"], topics)
+        self.assertEqual(q["concept_filter_tag_names"], topics)
+
     def test_practice_non_function_default_codes(self):
         os.environ["PIPELINE_QUESTION_TYPE"] = "nonfunction"
         empty_python_lua = MINIMAL_LUA.replace("print(1)", "")
