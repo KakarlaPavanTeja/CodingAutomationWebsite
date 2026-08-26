@@ -22,6 +22,8 @@ pipeline/graphify-out/
 scripts/com.user.cp-auto-resume.plist
 scripts/cp-auto-resume.sh
 
+/file-handling-q1
+/file-handling-problems
 .gitignore
 
 pipeline/QUALITY_AUDIT.md
@@ -101,3 +103,14 @@ scripts/import-db.mts
 # drizzle-kit scratch output. This repo uses `push`, not generate/migrate, so nothing
 # here is a source artifact — it only appears when someone runs the CLI.
 drizzle/
+.tmp-q1fix2/
+file-handling-cpp/
+.tmp-medium/
+.tmp-mediumhard/
+.tmp-hard/
+.tmp-q1expand/
+file-handling-q1/
+file-handling-medium/
+file-handling-problems/
+file-handling-hard/
+file-handling-mediumhard/
