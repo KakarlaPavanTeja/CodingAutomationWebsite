@@ -413,7 +413,10 @@ def _make_client() -> OpenAI:
         "yes",
     )
     use_gzip = _is_gateway_url(base_url) and not disable_gzip
-    max_retries = max(0, int(os.environ.get("OPENAI_MAX_RETRIES", "8")))
+    # Kept low: these SDK retries multiply with the gateway-403 retry loop in
+    # _create_with_retry. max_retries counts retries AFTER the initial request,
+    # so 2 means 3 attempts: 3 x 3 = 9 billed attempts worst case, not 9 x 3 = 27.
+    max_retries = max(0, int(os.environ.get("OPENAI_MAX_RETRIES", "2")))
     return OpenAI(
         base_url=base_url,
         api_key=api_key,

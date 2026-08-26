@@ -18,6 +18,40 @@ function mergeStepLogs(
   return live;
 }
 
+/**
+ * Poll `fetchNow` while the step runs; fetch ONCE when it has already terminated.
+ *
+ * A terminal step's log file never changes again, so polling it forever is pure
+ * waste (up to MAX_OPEN_LOGS panes x 1 request / 12s, indefinitely). The caller
+ * re-invokes this on the running -> terminal transition, which is what gives the
+ * finished step its one final fetch of the complete log.
+ *
+ * Exported for tests. `isHidden` is injectable for the same reason.
+ */
+export function scheduleLogPolls(
+  isRunning: boolean,
+  fetchNow: () => void,
+  isHidden: () => boolean = () => typeof document !== "undefined" && document.hidden
+): () => void {
+  let fetched = false;
+  const poll = () => {
+    if (isHidden()) return;
+    fetched = true;
+    fetchNow();
+  };
+
+  poll();
+  // Terminal + already fetched: nothing left to watch. If the tab was hidden the
+  // fetch was skipped, so keep a slow interval alive just long enough to land it.
+  if (!isRunning && fetched) return () => {};
+
+  const id = setInterval(() => {
+    poll();
+    if (!isRunning && fetched) clearInterval(id);
+  }, isRunning ? 6000 : 12000);
+  return () => clearInterval(id);
+}
+
 export function useStepLogs(
   problemId: string | undefined,
   logStepId: string,
@@ -62,17 +96,7 @@ export function useStepLogs(
   useResetOnChange(`${logStepId}|${activeRunId ?? ""}`, () => setDiskLogs([]));
 
   useEffect(() => {
-    if (!canFetch) return;
-
-    const poll = () => {
-      if (typeof document !== "undefined" && document.hidden) return;
-      fetchDiskLogs();
-    };
-
-    poll();
-    const ms = isRunning ? 6000 : 12000;
-    const id = setInterval(poll, ms);
-    return () => clearInterval(id);
+    if (canFetch) return scheduleLogPolls(isRunning, fetchDiskLogs);
   }, [canFetch, isRunning, fetchDiskLogs]);
 
   return logs;

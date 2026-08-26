@@ -237,8 +237,11 @@ def update_usage(
     # Try Replit internal endpoint first
     success = _insert_remote(row)
 
-    # Always write local too (as backup / for local debugging)
-    _append_local(row)
+    # Only fall back to the local JSON when the DB insert failed — rewriting the
+    # whole tracker file (under an exclusive flock) on every call is expensive
+    # and serialises concurrent pipeline steps for no gain once the row is in DB.
+    if not success:
+        _append_local(row)
 
     if success:
         print(f"[usage] {model} | {purpose} | {total_tokens} tokens | ${cost:.6f} → DB ✓", flush=True)

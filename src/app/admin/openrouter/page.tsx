@@ -200,7 +200,7 @@ export default function AdminCostsPage() {
     fetchUsage();
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") fetchUsage();
-    }, 5000);
+    }, 30000);
     const onVisible = () => {
       if (document.visibilityState === "visible") fetchUsage();
     };

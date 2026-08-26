@@ -23,6 +23,13 @@ interface ProblemExecutionLogsProps {
 
 const TC_SENTINEL = "@@TCRESULT@@";
 
+// Log lines pulled per step. Records are rebuilt from scratch on every poll, so
+// anything outside this window vanishes from the view until the persisted
+// Outputs file lands — it has to cover a whole editorial run: one sentinel line
+// per (approach, language, testcase), i.e. ~5 approaches x 4 languages x the
+// 250-case hard band. 20k covers that; 200k just shipped the entire log.
+const LOG_TAIL_LINES = 20000;
+
 const LANG_ORDER = ["C++", "Python", "Java", "Node.js"];
 
 type TcRecord = {
@@ -458,7 +465,7 @@ export function ProblemExecutionLogs({ problemId, questionType, isActive }: Prob
         for (const stepId of executionLogStepIds(questionType, meta)) {
         try {
           const res = await fetch(
-            `/api/pipeline/run/logs?problemId=${encodeURIComponent(problemId)}&stepId=${encodeURIComponent(stepId)}&tail=200000`,
+            `/api/pipeline/run/logs?problemId=${encodeURIComponent(problemId)}&stepId=${encodeURIComponent(stepId)}&tail=${LOG_TAIL_LINES}`,
           );
           if (!res.ok) continue;
           const data = await res.json();
