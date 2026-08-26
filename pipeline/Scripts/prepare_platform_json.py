@@ -1078,7 +1078,7 @@ def build_practice_json(lua, container, difficulty, node_based, enabled_langs=No
                 "content_type": "MARKDOWN",
                 "question_id": question_id,
                 "default_tag_names": default_tag_names,
-                "concept_tag_names": [],
+                "concept_tag_names": tags,
                 "concept_filter_tag_names": tags,
                 "topic_tag_names": {
                     "beginner_tag_names": beginner_tags,
