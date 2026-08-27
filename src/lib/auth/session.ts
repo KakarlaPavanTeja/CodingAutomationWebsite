@@ -1,6 +1,6 @@
 import { randomBytes, createHash } from "crypto";
 import { cookies } from "next/headers";
-import { eq, and, gt, lt } from "drizzle-orm";
+import { eq, and, gt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { sessions, users, profiles } from "@/lib/db/schema";
 
@@ -112,7 +112,7 @@ export async function deleteAllSessionsForUser(userId: string) {
   await db.delete(sessions).where(eq(sessions.userId, userId));
 }
 
-/** Best-effort cleanup of expired sessions (called opportunistically). */
-export async function purgeExpiredSessions() {
-  await db.delete(sessions).where(lt(sessions.expiresAt, new Date()));
-}
+// Expired-session cleanup is a pg_cron job ("purge-expired-sessions", nightly at
+// 04:00 UTC) rather than app code, so no request path pays for it. Inspect it with
+//   select * from cron.job;
+//   select * from cron.job_run_details order by start_time desc;

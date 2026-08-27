@@ -84,3 +84,33 @@ VACUUM FULL pipeline_states;
 This takes an `ACCESS EXCLUSIVE` lock — nothing can read or write the table while
 it runs. Seconds at this size, but it will blank the pipeline page for anyone
 mid-run, so pick a quiet moment.
+
+## Observability lives in the database, not in the repo
+
+Two things were created with `CREATE EXTENSION` / `cron.schedule`. Neither is in
+`src/lib/db/schema.ts`, so **`npm run db:push` will not recreate them** — a
+restored or rebuilt instance silently loses both.
+
+```sql
+create extension if not exists pg_stat_statements;   -- installed, v1.11
+create extension if not exists pg_cron;              -- installed, v1.6
+select cron.schedule('purge-expired-sessions', '0 4 * * *',
+  $$delete from sessions where expires_at < now()$$);
+```
+
+The cron job replaces a `purgeExpiredSessions()` helper that lived in
+`src/lib/auth/session.ts` and was never called from anywhere. Nightly 04:00 UTC
+(09:30 IST); `cron.job_run_details` stays empty until the first run.
+
+- Timing columns in `pg_stat_statements` are `double precision`, so `round(x, 2)`
+  fails with *"function round(double precision, integer) does not exist"*. Cast
+  first: `round(total_exec_time::numeric, 2)`.
+- `total_exec_time` includes time spent feeding rows to a client over the network.
+  A query can read as 54 ms here and measure 0.6 ms under `EXPLAIN ANALYZE`, which
+  sends no rows — that gap is payload size, not a slow plan. Confirm with
+  `explain (analyze) select count(*) from (<query>) t` before blaming the plan.
+- `application_name` is set to `cp-prep-app` by `createPostgresClient`. It is the
+  only way to tell app traffic from Hex (`PostgreSQL JDBC Driver`) and from
+  `scripts/db.mts` (`cursor-db-tool`). Because `idle_timeout` is 20 s, the app
+  disappears from `pg_stat_activity` whenever nobody is using it — absence there
+  is not evidence the tag is broken.
