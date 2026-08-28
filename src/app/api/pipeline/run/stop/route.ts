@@ -7,6 +7,7 @@ import { requireProblemAccess } from "@/lib/auth/ownership";
 import { db } from "@/lib/db";
 import { pipelineRuns, pipelineStates } from "@/lib/db/schema";
 import { getProcessPidAsync } from "@/lib/process-registry";
+import { pipelineStateCacheInvalidate } from "@/lib/pipeline-state-cache";
 
 export async function POST(request: NextRequest) {
   const { runId } = await request.json();
@@ -67,6 +68,10 @@ export async function POST(request: NextRequest) {
         .update(pipelineStates)
         .set({ stepStatuses, updatedAt: new Date() })
         .where(eq(pipelineStates.problemId, run.problemId));
+
+      // The dashboard polls /api/pipeline/state; stale cache here means a
+      // stopped step shows "running" for up to 5 seconds.
+      pipelineStateCacheInvalidate(run.problemId);
     }
   }
 

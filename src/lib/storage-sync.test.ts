@@ -14,6 +14,10 @@ delete process.env.AWS_SECRET_ACCESS_KEY;
 delete process.env.AWS_REGION;
 delete process.env.AWS_BUCKET_NAME;
 delete process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
+// Force cloud-sync on: the three syncLogToStorage tests below assert that
+// log content was written to the local-filesystem bucket and would silently
+// pass with wrong reason if PIPELINE_SKIP_CLOUD_SYNC leaked in from .env.local.
+delete process.env.PIPELINE_SKIP_CLOUD_SYNC;
 const ROOT = mkdtempSync(path.join(tmpdir(), "storage-sync-test-"));
 process.env.LOCAL_OBJECT_STORAGE_ROOT = ROOT;
 

@@ -24,6 +24,7 @@ import { parseGeneratedTitleFirstLine } from "@/lib/pipeline-title";
 import { registerProcess, unregisterProcess } from "@/lib/process-registry";
 import { pipelineRunLogKey } from "@/lib/pipeline-run-label";
 import { recomputeProblemStatus } from "@/lib/reconcile-pipeline-runs";
+import { pipelineStateCacheInvalidate } from "@/lib/pipeline-state-cache";
 import { resolveOpenRouterBaseUrl } from "@/lib/openrouter";
 import type { RunRequest, PipelineMode, QuestionType, StepId } from "@/types/pipeline";
 
@@ -536,6 +537,10 @@ export async function POST(request: NextRequest) {
         // replacing the previous ad-hoc failed/completed writes here. The run
         // row was just marked terminal above, so this reflects reality.
         await recomputeProblemStatus(safeProblemId);
+
+        // Invalidate the pipeline-state GET cache so the dashboard picks up
+        // the new step status on its next poll.
+        pipelineStateCacheInvalidate(safeProblemId);
       } catch {
         // Background DB update failed
       }

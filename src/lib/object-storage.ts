@@ -151,6 +151,15 @@ function getS3Client(): S3Client {
       accessKeyId: process.env.AWS_ACCESS_KEY_ID!.trim(),
       secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!.trim(),
     },
+    // Node.js 20+ HTTPS Agent defaults to keepAlive: true, so repeated
+    // requests to the same bucket reuse the TLS session.
+    // connectionTimeout: TCP connect deadline (SYN → SYN-ACK).
+    // requestTimeout: socket-inactivity timeout — a slow-but-steady
+    // download that sends bytes every second won't trip it.
+    requestHandler: {
+      connectionTimeout: 5000,
+      requestTimeout: 30000,
+    },
   });
   return _s3Client;
 }
