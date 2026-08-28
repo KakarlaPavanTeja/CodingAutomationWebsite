@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getSessionByToken, SESSION_COOKIE } from "@/lib/auth/session";
+import { isBlockedStatus } from "@/lib/auth/status";
 
 // Pages that never require a valid session.
 const PUBLIC_PATHS = new Set([
@@ -56,7 +57,7 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (session.profile.status === "deactivated") {
+  if (isBlockedStatus(session.profile.status)) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     const res = NextResponse.redirect(url);
