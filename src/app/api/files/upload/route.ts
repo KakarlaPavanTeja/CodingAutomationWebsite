@@ -4,6 +4,7 @@ import { and, eq, inArray, ne } from "drizzle-orm";
 import { requireAuthApi } from "@/lib/auth/server";
 import { db } from "@/lib/db";
 import { problems, problemAccess, profiles } from "@/lib/db/schema";
+import { claimCpPrepUsageForProblem } from "@/lib/record-llm-usage";
 import { uploadInputFiles, uploadOutputFile } from "@/lib/storage-sync";
 
 const UUID_RE =
@@ -91,6 +92,10 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+
+  // The cp_prep LLM spend that produced this problem was billed before the
+  // problem existed, so claim it now and keep a problem's cost in one place.
+  void claimCpPrepUsageForProblem(problemId, user.id);
 
   const header = `# Problem: ${problemName}\n# Type: ${STRUCTURE_HEADER_FORM[structureType]}\n# Question Type: ${questionType}\n# Scenario Level: ${scenarioLevel}\n`;
 

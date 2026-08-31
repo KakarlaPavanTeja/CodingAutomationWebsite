@@ -1,10 +1,11 @@
 import { eq } from "drizzle-orm";
+import type { OpenRouterAccount } from "@/lib/openrouter";
 import { db } from "@/lib/db";
 import { appSettings } from "@/lib/db/schema";
 
 // Which OpenRouter account key the app currently uses. "new" is the key already
 // in OPENROUTER_API_KEY; "old" is OPENROUTER_API_KEY_OLD.
-export type OpenRouterKeyChoice = "new" | "old";
+export type OpenRouterKeyChoice = OpenRouterAccount;
 const SETTING_KEY = "openrouter_key_choice";
 
 export async function getOpenRouterKeyChoice(): Promise<OpenRouterKeyChoice> {
@@ -41,3 +42,5 @@ export async function getActiveOpenRouterKey(): Promise<string | undefined> {
       : process.env.OPENROUTER_API_KEY?.trim();
   return key || undefined;
 }
+
+export { accountForKeyFingerprint, openRouterKeyFingerprint } from "@/lib/openrouter";
