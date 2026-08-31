@@ -17,6 +17,7 @@ Environment variables used:
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import uuid
@@ -28,6 +29,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _BASE = os.environ.get("PIPELINE_BASE_DIR") or os.path.dirname(SCRIPT_DIR)
 OUTPUT_DIR = os.path.join(_BASE, "Outputs")
 USAGE_TRACKER_FILE = os.path.join(OUTPUT_DIR, "usage_tracker.json")
+# Append-only record of rows the DB never accepted. Uncapped and never
+# rewritten, unlike usage_tracker.json, so nothing billed can fall off the
+# end of it. Replayed by replay_usage_spool.py.
+USAGE_SPOOL_FILE = os.path.join(OUTPUT_DIR, "usage_spool.jsonl")
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +42,64 @@ USAGE_TRACKER_FILE = os.path.join(OUTPUT_DIR, "usage_tracker.json")
 # env vars before spawning python.
 _INTERNAL_API_URL = os.environ.get("INTERNAL_API_URL", "")
 _INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
+
+
+def _key_fingerprint() -> str | None:
+    """Digest of the OpenRouter key this process is billing against.
+
+    The server maps it back to an account name. A digest, not the key or a slice
+    of it, so a usage row never carries anything usable as a credential.
+    """
+    key = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
+    return hashlib.sha256(key.encode()).hexdigest()[:12] if key else None
+
+
+def _spool(row: dict) -> None:
+    """Persist a row the DB refused, for later replay.
+
+    A plain append under an exclusive lock: concurrent steps cannot interleave a
+    partial line, and no read-modify-write means no size cap and no lost rows.
+
+    Only rows that failed a *configured* endpoint are spooled. With no internal
+    API set (tests, a bare local run) the row was never destined for the DB, and
+    spooling it would hand replay_usage_spool.py fabricated spend to insert.
+    """
+    if not _INTERNAL_API_URL or not _INTERNAL_API_SECRET:
+        return
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    try:
+        with open(USAGE_SPOOL_FILE, "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                f.write(json.dumps(row) + "\n")
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+    except Exception as e:
+        print(f"[usage_tracker] spool write failed: {' '.join(str(e).split())[:150]}", flush=True)
+
+
+def _write_lines_atomic(path: str, lines: list[str]) -> None:
+    """Replace a line-oriented file in one step, under the spool's lock.
+
+    Used by replay_usage_spool.py to drop rows the DB has accepted. A rename, so
+    an interrupt mid-write cannot leave a spool that has lost unsent rows.
+    """
+    tmp = f"{path}.tmp{os.getpid()}"
+    with open(path + ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            with open(tmp, "w") as f:
+                for line in lines:
+                    f.write(line + "\n")
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def _ca_bundle() -> str | bool:
@@ -141,6 +204,7 @@ def _append_local_locked(row: dict) -> None:
     tracker["last_updated"] = datetime.now().isoformat()
 
     tracker["history"].append({
+        "id": row.get("id"),
         "timestamp": datetime.now().isoformat(),
         "model": row.get("model", "unknown"),
         "purpose": row.get("purpose", ""),
@@ -232,6 +296,8 @@ def update_usage(
         "total_tokens": total_tokens,
         "cost_usd": round(cost, 6),
         "created_at": datetime.utcnow().isoformat() + "Z",
+        # Which key paid for this call — see _key_fingerprint.
+        "key_fp": _key_fingerprint(),
     }
 
     # Try Replit internal endpoint first
@@ -241,12 +307,17 @@ def update_usage(
     # whole tracker file (under an exclusive flock) on every call is expensive
     # and serialises concurrent pipeline steps for no gain once the row is in DB.
     if not success:
+        _spool(row)
         _append_local(row)
 
     if success:
         print(f"[usage] {model} | {purpose} | {total_tokens} tokens | ${cost:.6f} → DB ✓", flush=True)
     else:
-        print(f"[usage] {model} | {purpose} | {total_tokens} tokens | ${cost:.6f} → local only", flush=True)
+        print(
+            f"[usage] {model} | {purpose} | {total_tokens} tokens | ${cost:.6f} "
+            f"→ spooled for replay ({USAGE_SPOOL_FILE})",
+            flush=True,
+        )
 
     return row
 

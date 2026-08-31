@@ -67,9 +67,42 @@ class TestPromptShape(unittest.TestCase):
         self.assertNotIn("DUAL-ORACLE", text,
                          "a single-oracle prompt must not claim a cross-check it lacks")
 
-    def test_states_the_difficulty_count_band(self):
-        self.assertIn("120", build(difficulty="medium"))
-        self.assertIn("250", build(difficulty="hard"))
+    def test_states_the_diagnostic_count_band(self):
+        """The band is a DIAGNOSTIC on the coverage plan, not a per-difficulty quota.
+
+        Difficulty used to pick the band (easy 80-120 / medium 120-180 / hard 180-250) and
+        the band was the only number the model got — so it became a target, and when the
+        genuine scenarios ran out the model padded with more max-size draws. A measured
+        suite ended up with 35 stress cases covering 2 distinct shapes. Coverage now
+        decides the count, so the SAME band is stated for every difficulty."""
+        for difficulty in ("easy", "medium", "hard"):
+            text = build(difficulty=difficulty)
+            self.assertIn("80", text)
+            self.assertIn("250", text)
+            self.assertIn("DIAGNOSTIC", text,
+                          "the band must be framed as a diagnostic, never as a target")
+        self.assertNotIn("120", build(difficulty="medium"),
+                         "difficulty must no longer select its own band")
+
+    def test_magnitude_is_a_declared_field_with_an_absolute_cap(self):
+        """Prose did not hold this line. A real run put 5-digit values on EVERY stress case
+        while the prompt said "DEFAULT to 1-3 digits ... for the MAJORITY of cases" -- hedged
+        language, buried in a bullet list, with no declared field to count. Magnitude is now
+        a per-case field with an absolute budget, the same shape as the stress band's rule."""
+        text = build()
+        self.assertIn("`magnitude`", text, "magnitude must be a DECLARED per-case field")
+        self.assertIn("magnitude", text.lower())
+        self.assertIn("AT MOST 3", text, "the budget must be an absolute count, not a percentage")
+        self.assertIn("MAGNITUDE BUDGET", text, "it must appear in the FINAL CHECK list")
+        # the declared-keys line must list it, or the model will drop it
+        self.assertIn("`scenario`, `magnitude`, `is_edge`", text)
+
+    def test_exhaustive_mode_is_exempt_from_the_floor(self):
+        """A small finite domain (backtracking/permutations, n <= 8-10) legitimately has
+        fewer than 80 distinct legal inputs; the floor must not read as unconditional."""
+        text = build(difficulty="easy")
+        self.assertIn("exhaustive", text)
+        self.assertIn("COMPLETE, not a shortfall", text)
 
     def test_explicit_count_overrides_the_band(self):
         self.assertIn("exactly 42", build(num_testcases=42))

@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { llmUsage } from "@/lib/db/schema";
 import { getOpenRouterKeyChoice } from "@/lib/openrouter-key";
+import { accountForKeyFingerprint } from "@/lib/openrouter";
 import { timingSafeEqual } from "crypto";
 
 function safeEqualStr(a: string, b: string): boolean {
@@ -70,25 +71,42 @@ export async function POST(request: NextRequest) {
   const totalTokens =
     explicitTotal === undefined ? promptTokens + completionTokens : safeInt(explicitTotal);
 
-  // ponytail: stamp the account from the CURRENT key choice. A key switch
-  // mid-run mislabels in-flight rows; acceptable given switches are rare.
-  const account = await getOpenRouterKeyChoice();
+  // Attribute to the key that was actually billed. The pipeline sends a digest
+  // of the key it used; only when that is absent or unrecognised do we fall back
+  // to the toggle, which is what silently mislabelled ~$37 of August spend.
+  const account =
+    accountForKeyFingerprint(optStr(get("keyFp", "key_fp"), 32)) ??
+    (await getOpenRouterKeyChoice());
+
+  // The caller generates the row id, so a retry of a request whose response was
+  // lost re-sends the same id and is discarded rather than double-billed.
+  const id = optUuid(get("id"));
+  const createdAtRaw = get("createdAt", "created_at");
+  const createdAt =
+    typeof createdAtRaw === "string" && !Number.isNaN(Date.parse(createdAtRaw))
+      ? new Date(createdAtRaw)
+      : undefined;
 
   try {
-    await db.insert(llmUsage).values({
-      account,
-      model: safeStr(get("model"), "unknown", 100),
-      purpose: safeStr(get("purpose"), "unknown", 100),
-      promptTokens,
-      completionTokens,
-      totalTokens,
-      costUsd: safeCost(get("costUsd", "cost_usd")),
-      problemId: optStr(get("problemId", "problem_id"), 64),
-      userId: optStr(get("userId", "user_id"), 64),
-      problemName: optStr(get("problemName", "problem_name"), 200),
-      stepId: optStr(get("stepId", "step_id"), 100),
-      runId: optUuid(get("runId", "run_id")),
-    });
+    await db
+      .insert(llmUsage)
+      .values({
+        ...(id ? { id } : {}),
+        ...(createdAt ? { createdAt } : {}),
+        account,
+        model: safeStr(get("model"), "unknown", 100),
+        purpose: safeStr(get("purpose"), "unknown", 100),
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        costUsd: safeCost(get("costUsd", "cost_usd")),
+        problemId: optStr(get("problemId", "problem_id"), 64),
+        userId: optStr(get("userId", "user_id"), 64),
+        problemName: optStr(get("problemName", "problem_name"), 200),
+        stepId: optStr(get("stepId", "step_id"), 100),
+        runId: optUuid(get("runId", "run_id")),
+      })
+      .onConflictDoNothing({ target: llmUsage.id });
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[internal/llm-usage] insert failed:", err);

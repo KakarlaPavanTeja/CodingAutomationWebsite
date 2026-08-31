@@ -1,3 +1,5 @@
+import { createHash } from "crypto";
+
 const DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
 
 export interface OpenRouterChatMessage {
@@ -131,4 +133,28 @@ export async function openRouterChatCompletion(params: {
       costUsd: typeof data.usage?.cost === "number" ? data.usage.cost : undefined,
     },
   };
+}
+
+/** Which configured OpenRouter account key a call was billed to. */
+export type OpenRouterAccount = "new" | "old";
+
+/** Short, non-reversible fingerprint of an OpenRouter key. The Python pipeline
+ * computes the same digest over the key it actually used, so a usage row can be
+ * attributed to the right account without ever carrying the key itself. */
+export function openRouterKeyFingerprint(key: string): string {
+  return createHash("sha256").update(key.trim()).digest("hex").slice(0, 12);
+}
+
+/** Resolve which account a fingerprint belongs to, or null if it matches neither
+ * configured key. Callers fall back to the toggle only when this returns null —
+ * the fingerprint is authoritative because it names the key that was billed. */
+export function accountForKeyFingerprint(fp: string | null | undefined): OpenRouterAccount | null {
+  if (!fp) return null;
+  for (const [choice, key] of [
+    ["new", process.env.OPENROUTER_API_KEY],
+    ["old", process.env.OPENROUTER_API_KEY_OLD],
+  ] as const) {
+    if (key?.trim() && openRouterKeyFingerprint(key) === fp) return choice;
+  }
+  return null;
 }

@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { users, profiles, passwordResetTokens } from "@/lib/db/schema";
 import { hashPassword, verifyPassword } from "./passwords";
 import { createSession, deleteAllSessionsForUser } from "./session";
+import { isBlockedStatus } from "./status";
 
 export type SignupInput = {
   email: string;
@@ -104,7 +105,7 @@ export async function login(emailRaw: string, password: string): Promise<LoginRe
   const ok = await verifyPassword(password, row.passwordHash);
   if (!ok) return { ok: false, error: invalidMsg };
 
-  if (row.profileStatus === "deactivated") {
+  if (isBlockedStatus(row.profileStatus)) {
     return { ok: false, error: "This account has been deactivated." };
   }
 

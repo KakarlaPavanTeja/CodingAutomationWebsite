@@ -37,6 +37,10 @@ function poolMax(): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10;
 }
 
+// Tags every connection so pg_stat_activity / pg_stat_statements can tell app
+// traffic apart from Hex, scripts/db.mts and the one-off backfill scripts.
+const APP_NAME = "cp-prep-app";
+
 export function createPostgresClient(connectionString: string) {
   const socket = parseSocketUrl(connectionString);
   if (socket) {
@@ -48,6 +52,7 @@ export function createPostgresClient(connectionString: string) {
       idle_timeout: 20,
       connect_timeout: 10,
       prepare: false,
+      connection: { application_name: APP_NAME },
     });
   }
   return postgres(connectionString, {
@@ -55,5 +60,6 @@ export function createPostgresClient(connectionString: string) {
     idle_timeout: 20,
     connect_timeout: 10,
     prepare: false,
+    connection: { application_name: APP_NAME },
   });
 }

@@ -259,6 +259,11 @@ export async function syncLogToStorage(
   content: string,
 ): Promise<void> {
   if (!runId) return;
+  // When SKIP is on, periodic log uploads are suppressed — the log viewer
+  // reads from object storage (getObjectString → S3 / GCS / local), so the
+  // live pane stays empty until the final upload at pipeline completion.
+  // This is the right trade-off for local dev against a remote bucket.
+  if (process.env.PIPELINE_SKIP_CLOUD_SYNC === "1") return;
   await uploadFile(runLogKey(problemId, stepId, runId), liveTail(content));
 }
 
@@ -652,6 +657,9 @@ export function startPeriodicSync(
   );
 
   const sync = async () => {
+    // When running locally, skip periodic S3 uploads — every file is already
+    // on the local disk. Final upload at pipeline completion still runs.
+    if (process.env.PIPELINE_SKIP_CLOUD_SYNC === "1") return;
     try {
       const files = await walkDir(localOutputsDir);
       for (const relPath of files) {

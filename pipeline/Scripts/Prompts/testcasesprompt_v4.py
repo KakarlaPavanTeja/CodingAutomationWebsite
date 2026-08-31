@@ -21,16 +21,39 @@ MAX_SUBTASKS = 12
 MAX_CASES_PER_SUBTASK = 12
 MIN_TESTCASES = 25                          # raised from 20 — LeetCode Easy floor
 
-# Size-category distribution targets (count %, enforced by B3 in benchmark_suite).
-# Philosophy (matches real judges like LeetCode): the suite is dominated by cheap
-# small/edge CORRECTNESS cases; large/stress cases are FEW but high-value. You don't
-# need 50-100 max-size cases — a handful of well-constructed worst cases gates TLE
-# just as hard.
+# The stress band is sized in ABSOLUTE cases, never as a percentage of the suite.
+# A percentage scales with the total count, so the same rule meant ~16 stress cases at
+# 80 total and ~50 at 250 — and coverage does not scale with suite size: a problem has
+# the adversarial shapes it has, whether you write 80 cases or 250. Measured outcome of
+# the percentage rule: 35 stress cases covering 2 distinct shapes (25 of them one shape).
+# There is deliberately NO ceiling on the shape count — it is a property of the problem,
+# and a cap would teach the model to stop looking. Repetition is bounded by the shape
+# signature (see STRICT CONSTRAINT ADHERENCE), not by a constant.
+VALUE_PATTERNS_PER_SHAPE = 2   # same-values and distinct-values, where constraints allow both
+
+# Cases whose PURPOSE is the value magnitude (overflow / sign / full-range). An absolute
+# count for the same reason the stress band is: two or three catch every 32-bit and sign
+# bug a suite can catch, and that does not become more true in a bigger suite. Everything
+# else stays hand-checkable. Prose alone did not hold this line -- a real run put 5-digit
+# values on EVERY stress case -- so magnitude is now a DECLARED, COUNTABLE per-case field.
+MAX_EXTREME_MAGNITUDE_CASES = 3
+
+# REPORTING ONLY — nothing re-prompts or gates on these numbers.
+# History worth knowing before you trust or re-wire them: `large: 20.0` with a 7pp
+# tolerance meant any suite under 13% large was labelled "deficient", and
+# audit_size_distribution's docstring said the generator would then re-prompt for MORE
+# large cases. As a percentage of a 250-case suite that is a demand for 33+ stress cases.
+# B3 (the enforcer) left the pipeline, so nothing calls the audit today — but the numbers
+# and that docstring still read as live, which is how the bug comes back.
+# `large` is now the DERIVED expectation, not a target: it is roughly
+# (distinct shapes) x VALUE_PATTERNS_PER_SHAPE cases, which lands near 6-8% of a
+# mid-sized suite. If you re-wire the audit, compare the ABSOLUTE stress-case count
+# against the shape plan — never a percentage of the total.
 SIZE_CATEGORY_TARGETS = {
     "edge": 20.0,
-    "small": 52.0,
+    "small": 64.0,
     "medium": 8.0,
-    "large": 20.0,
+    "large": 8.0,
 }
 SIZE_TOLERANCE_PP = 7.0  # +/- percentage points
 
@@ -53,10 +76,21 @@ def size_tag(bucket: str) -> str:
     return f"{SIZE_TAG_PREFIX}{bucket}"
 
 
+# A DIAGNOSTIC BAND, NOT A TARGET. Any count handed to the model becomes a quota it
+# fills, and when the genuine scenarios run out it pads with more max-size draws — which
+# is precisely how a suite ended up with 25 stress cases of one shape. Coverage decides
+# the count; this band only says when the coverage plan looks wrong. Difficulty is
+# deliberately NOT a driver: it is assigned for learner-facing reasons and does not
+# predict how many distinct behaviours a problem has.
+COUNT_BAND = (80, 250)
+
+# Back-compat: testcase_manager_v4 and tests/test_testcases_prompt_metadata import this
+# name. Difficulty no longer changes the band, so every key maps to the same pair — the
+# shim keeps those callers working without pretending difficulty still drives the count.
 COUNT_BAND_BY_DIFFICULTY = {
-    "easy": (80, 120),
-    "medium": (120, 180),
-    "hard": (180, 250),
+    "easy": COUNT_BAND,
+    "medium": COUNT_BAND,
+    "hard": COUNT_BAND,
 }
 
 SUBTASK_TAG_PREFIX = "subtask_"
@@ -163,12 +197,22 @@ The first 2 test cases (`order` 1 and `order` 2) MUST reproduce Example 1 and Ex
 
 
 def _count_hint(difficulty, num_testcases):
+    """The count is an OUTCOME of the coverage plan, never a quota to fill."""
     if num_testcases:
         return f"exactly {num_testcases} cases (the owner asked for this count)"
-    lo, hi = COUNT_BAND_BY_DIFFICULTY.get(
-        str(difficulty or "medium").strip().lower(), COUNT_BAND_BY_DIFFICULTY["medium"])
-    return (f"{lo}-{hi} cases — pick within that band based on how large the problem's "
-            f"legal input space actually is")
+    lo, hi = COUNT_BAND
+    return (
+        f"whatever your coverage plan yields — do NOT aim at a number.\n"
+        f"   Build SCENARIO_PLAN from the shapes this problem actually admits, then count\n"
+        f"   what you have. Use {lo}-{hi} only as a DIAGNOSTIC on that plan:\n"
+        f"     * under {lo} in `sampled` mode -> you have MISSED shapes. Go find them; do not\n"
+        f"       pad with more draws of a shape you already covered.\n"
+        f"     * over {hi} -> you are testing something twice. Merge, do not trim at random.\n"
+        f"   In `exhaustive` mode the {lo} floor does NOT apply: if the entire legal input\n"
+        f"   space is (say) 34 distinct inputs, 34 cases is COMPLETE, not a shortfall. This is\n"
+        f"   the normal shape of a small-domain problem (backtracking/permutation problems\n"
+        f"   with n <= 8-10) — the constraints decide the count, not this band."
+    )
 
 
 _ENUMERATE_BLOCK = """
@@ -342,9 +386,11 @@ checking. Cases validating the SAME behaviour MUST share the same name.
 (THIS IS THE FINAL SUITE — nothing trims it):
 There is NO downstream selector. Every case you emit ships to the platform exactly as
 written. So:
-  * Emit {num_hint}. Every case must be DISTINCT — never pad with duplicates.
-  * You are responsible for: correct outputs, distinct inputs, explicit edge cases, real
-    at-MAX_N stress cases, and honest grouping (below).
+  * Emit {num_hint}
+  * Every case must be a DISTINCT SHAPE-AND-VALUE-PATTERN, not merely a distinct string —
+    never pad with more draws of a shape you already covered.
+  * You are responsible for: correct outputs, distinct shapes, explicit edge cases, real
+    at-MAX_N stress cases (one pair per shape), and honest grouping (below).
   * You are NOT responsible for: size tags, weights, case order, or subtask numbers.
     Those are computed from your inputs after you run. Do not emit them.
 """
@@ -357,8 +403,19 @@ written. So:
     rows*cols / nodes+edges / the value of n. This is what the size bucket is derived from, so it must
     be the true size (NOT blindly the first token if that token is not the size). Use 0 ONLY when the
     problem has no size dimension at all.
-  * `scenario` (str, snake_case): the named scenario, e.g. "answer_at_end", "all_equal", "max_stress",
-    "duplicates". One token.
+  * `scenario` (str, snake_case): WHAT THIS CASE EXISTS TO CATCH — e.g. "answer_at_end",
+    "all_equal", "max_n_sorted_distinct", "overflow_values". One token. This is the field a
+    reviewer reads to answer "why does this case exist?", so it must name the case's purpose,
+    never its size or its position. For stress cases it must name the SHAPE, and no scenario
+    may appear more than twice across the whole suite (once per value pattern) — a third
+    case sharing a scenario name is padding by definition.
+  * `magnitude` (str): `"small"` or `"extreme"`. `"small"` means every value in this case is
+    hand-checkable — a reviewer can read the input and see why the answer is right.
+    `"extreme"` means the case's PURPOSE is the value magnitude (near INT_MAX/INT_MIN, full
+    range span, sign boundary). Declare it honestly: the count of `"extreme"` cases is
+    checked, and a case that quietly uses huge values while declaring `"small"` is the exact
+    failure this field exists to make visible. AT MOST 3 cases in the whole suite may be
+    `"extreme"`.
   * `is_edge` (bool): true for degenerate / boundary / min literals (empty, n=min, all-same, overflow
     boundary, singleton). Mark them accurately — they are reported separately.
 Emit NO other keys: no per-case weight, no `tags`, no `order`. Those are derived.
@@ -416,7 +473,63 @@ stress cases. Do this explicitly IN CODE — do NOT hand-wave:
 Do NOT spread sizes evenly and do NOT push half the cases to max. A few worst-case stress
 inputs at/near MAX_N fail a slow solution just as hard as fifty.
 
-(VALUE MAGNITUDE — A SEPARATE AXIS FROM SIZE. DO NOT MAX IT BY DEFAULT):
+(THE STRESS BAND IS A LIST OF SHAPES, NOT A COUNT — READ THIS TWICE):
+The stress band is built by ENUMERATING the distinct adversarial SHAPES this problem
+admits at/near MAX_N, then emitting cases for each. It is never sized as a fraction of
+the suite.
+  * A SHAPE is the STRUCTURE of the input: ordering (sorted / reverse / unsorted /
+    rotated), repetition structure, and topology (path / star / balanced / dense /
+    disconnected — whatever this problem's structure axis is). Two inputs that differ
+    only by random seed are the SAME shape and the second one tests NOTHING new.
+  * Enumerate EVERY shape the problem admits. There is NO maximum. If this problem has
+    eleven meaningfully different worst-case structures, emit eleven shapes — a shape
+    count is a property of the PROBLEM, not a budget you spend.
+  * For EACH shape, emit TWO cases that differ on the VALUE axis, because they break
+    different code:
+      - repeated values (all-equal, or heavy duplicates) — breaks dedup logic, `<` vs
+        `<=`, tie-breaking, counting with multiplicity, set-vs-list confusion.
+      - distinct values (no repeats) — breaks ordering assumptions, comparator logic,
+        off-by-one in sorted scans.
+    Where the constraints forbid one of the two (e.g. the statement guarantees all values
+    distinct, or the shape IS a strict permutation), emit only the legal one and add a
+    one-line comment saying which pattern was skipped and why. NEVER manufacture an
+    out-of-constraint input to satisfy this rule.
+  * Both cases in a pair stay SMALL-VALUED (see VALUE MAGNITUDE). The pair differs in HOW
+    MANY values repeat, never in how big they are.
+  * A third case for a shape you have already covered with both value patterns is padding.
+    Do not emit it. Spend the case on a shape you have not covered.
+
+(VALUE MAGNITUDE IS A BUDGET OF 3 CASES, NOT A STYLE PREFERENCE — READ THIS TWICE):
+Every case declares `magnitude` ("small" | "extreme"). The rule is a COUNT, exactly like the
+stress band's:
+  * AT MOST 3 cases in the WHOLE suite may declare `"extreme"`, and each one's `scenario`
+    must name the magnitude itself (`overflow_values`, `min_value_boundary`,
+    `full_range_span`, `sign_boundary`). Three is enough: overflow, sign, and full-range.
+  * EVERY OTHER CASE — including every stress case at MAX_N — declares `"small"` and uses
+    the SMALLEST values its scenario actually needs. If the scenario is "the answer is at
+    the last position", the values are 1..9 and the position is what varies. Do not reach
+    for the constraint's upper bound because it is available.
+  * Size and magnitude are INDEPENDENT. An n=MAX_N case built from two-digit values stresses
+    time exactly as hard as one built from nine-digit values, because time depends on how
+    many operations run, not on how wide the operands print.
+  * SELF-CHECK BEFORE YOU EMIT: count your `"extreme"` cases. More than 3 means you sprayed
+    magnitude across the suite instead of testing it — set the rest to small values and
+    regenerate those inputs.
+  * The ONE exception: when `size_model.kind == "value"` the magnitude IS the size axis, so
+    the stress band legitimately scales it. Those cases still declare `"small"` unless their
+    purpose is an overflow boundary — scaling the size axis is not the same as testing
+    magnitude.
+
+(WHY THIS MATTERS MORE THAN IT LOOKS):
+  * A wall of random 9-digit numbers makes every failure undebuggable and catches nothing
+    the small values miss. A shipped suite had every max-n case built from 9-digit values:
+    ~30 characters per line where 1-3 digits needs ~9 — 3x the bytes for IDENTICAL
+    discrimination. An n=100000 case of `320 232 536` triples gates a slow solution exactly
+    as hard as one of `3200000 232275654 536201494` triples, and a reviewer can read it.
+  * Once a case is loaded to the platform it can only be REWRITTEN, never removed. Oversized
+    inputs are permanent. This is the one cost in the suite you cannot undo later.
+
+(VALUE MAGNITUDE — the reasoning behind the budget above):
 The constraints bound how BIG a value may be; they do not ask you to use that bound. Size
 and magnitude are independent — an n=MAX_N case built from two-digit values stresses time
 exactly as hard as one built from nine-digit values.
@@ -430,6 +543,15 @@ exactly as hard as one built from nine-digit values.
   * A suite where every non-example case uses extreme values is a BUG, not thoroughness: it
     re-tests one narrow failure mode dozens of times and tests the ordinary range zero
     times. It also makes the public examples look like a different problem.
+  * THIS APPLIES HARDEST TO THE STRESS BAND, which is where the rule is usually broken. A
+    shipped suite had every max-n case built from 9-digit values: ~30 characters per line
+    where 1-3 digits needs ~9. That is 3x the bytes for IDENTICAL time-complexity
+    discrimination, and once a case is loaded to the platform it can only be rewritten,
+    never removed. An n=100000 case of `320 232 536` triples gates a slow solution exactly
+    as hard as one of `3200000 232275654 536201494` triples — and a reviewer can read it.
+  * Magnitude extremes are their OWN named shape (`overflow_values`, `min_value_boundary`,
+    `full_range_span`) — two or three cases for the WHOLE suite. Never an attribute
+    sprayed across every stress case.
   * Vary magnitude ACROSS cases deliberately: tiny, mixed sign, a modest range, and only
     then the extremes. Same rule for every value-like axis — coordinates, weights, IDs,
     node values, the alphabet of generated strings.
@@ -481,8 +603,18 @@ If the statement says "exactly one solution" / "guaranteed unique":
   * Parse the Constraints section thoroughly. NEVER generate an input outside the stated
     ranges (e.g. do NOT emit an empty array when 2 <= n). Constraint bounds gate EVERY
     scenario above.
-  * Dedup with a `seen_inputs` set that gates EVERY emitted case — it is authoritative.
-    Do NOT add an `allow_duplicate`/force flag or any other bypass of `seen_inputs`, and do
+  * Dedup on the SHAPE SIGNATURE, not the input string. Keep a `seen_signatures` set that
+    gates EVERY emitted case — it is authoritative — where the signature is the tuple:
+        (size_bucket, n_bucket, orderedness, repetition_pattern, value_magnitude_bucket,
+         structural_class)
+    An exact-input set (`seen_inputs`) is NOT sufficient and is the reason this rule kept
+    being satisfied while the suite filled with near-identical cases: 25 different random
+    arrays at n=200000 are 25 distinct STRINGS and ONE shape. Compute the signature from
+    the input you just built and SKIP the case if that signature is already present.
+    At most ONE case per full signature. (The "two per shape" rule above is satisfied
+    because the two value patterns produce two DIFFERENT signatures.)
+    Keep a `seen_inputs` set as well, to catch byte-identical collisions cheaply.
+    Do NOT add an `allow_duplicate`/force flag or any other bypass of either set, and do
     NOT clone a scenario into `*_repeat_1..N` specs to pad a count. Every `while`/generation
     loop has a hard attempt cap (e.g. `if attempts > 20000: break`) and unique fallbacks (add
     the attempt counter or a random filler so repeated fallbacks don't collide and re-trigger
@@ -567,7 +699,7 @@ ORACLE MISMATCH (a real correctness bug, which must stop the run).
 Root: a LIST containing EXACTLY ONE dict with keys `"test_cases"`, `"size_model"`, `"space_mode"`.
   CORRECT:   [ {{"test_cases": [...], "size_model": {{"kind": "count", "max_n": 100000}}, "space_mode": "sampled"}} ]
   INCORRECT: {{"test_cases": [...]}}   (dict at root is invalid; missing size_model/space_mode)
-Each case dict carries EXACTLY: `input`, `output`, `subtask`, `scenario`, `is_edge`, `size_metric`.
+Each case dict carries EXACTLY: `input`, `output`, `subtask`, `scenario`, `magnitude`, `is_edge`, `size_metric`.
 Write with `json.dump(result, f, indent=4, ensure_ascii=False)`.
 
 (Script structure):
@@ -581,7 +713,7 @@ Write with `json.dump(result, f, indent=4, ensure_ascii=False)`.
 7. self-checks (CORRECTNESS asserts only) + size/diversity TOP-UP (add cases where a size
    range or scenario is thin; never assert/exit on the mix)
 8. json.dump([{{"test_cases": test_cases, "size_model": {{"kind": SIZE_KIND, "max_n": MAX_N}}, "space_mode": SPACE_MODE}}], open("testcases.json","w"), indent=4, ensure_ascii=False)
-   (every case dict must include size_metric/scenario/is_edge; SIZE_KIND/SPACE_MODE are the declared problem size model)
+   (every case dict must include size_metric/scenario/magnitude/is_edge; SIZE_KIND/SPACE_MODE are the declared problem size model)
 
 FINAL CHECK — verify these FIVE before you emit a single character. They are the only
 things the pipeline CANNOT fix for you, so nothing else matters if one of them is wrong:
@@ -594,6 +726,13 @@ things the pipeline CANNOT fix for you, so nothing else matters if one of them i
      mismatch. Weights, order, tags, counts and duplicates are all repaired downstream.
   4. IT WRITES testcases.json. A run that produces no file is a total loss.
   5. REAL STRESS. At least some inputs constructed at MAX_N, not just small ones.
+  6. NO REPEATED SHAPES. Every stress case is a distinct (shape, value-pattern) pair. If two
+     cases differ only by random seed, or share a `scenario` name more than twice, DELETE one
+     and spend the case on an uncovered shape.
+  7. MAGNITUDE BUDGET. Count the cases declaring `magnitude": "extreme"`. If it is more than
+     3, you have sprayed magnitude across the suite: pick the 3 whose purpose IS the
+     magnitude, and rebuild every other case's values as small and hand-checkable. Every
+     stress case at MAX_N declares `"small"` unless magnitude is its stated purpose.
 
 Return ONLY the Python script. No markdown fences, no prose outside comments.
 """

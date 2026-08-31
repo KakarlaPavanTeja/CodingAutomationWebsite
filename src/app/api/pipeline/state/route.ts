@@ -4,6 +4,11 @@ import { db } from "@/lib/db";
 import { pipelineStates } from "@/lib/db/schema";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { assertSafeProblemId } from "@/lib/storage-path";
+import {
+  pipelineStateCacheGet,
+  pipelineStateCacheSet,
+  pipelineStateCacheInvalidate,
+} from "@/lib/pipeline-state-cache";
 
 export async function GET(request: NextRequest) {
   const problemId = request.nextUrl.searchParams.get("problemId");
@@ -18,6 +23,12 @@ export async function GET(request: NextRequest) {
   const auth = await requireProblemAccess(safeProblemId);
   if (auth.error) return auth.error;
 
+  // Serve from memory cache when available — the dashboard polls this
+  // endpoint every 30s per open problem, and state only changes when a
+  // pipeline step finishes or a run starts/stops.
+  const cached = pipelineStateCacheGet<Record<string, unknown>>(safeProblemId);
+  if (cached) return NextResponse.json({ state: cached });
+
   const rows = await db
     .select()
     .from(pipelineStates)
@@ -29,21 +40,22 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ state: null });
   }
 
-  return NextResponse.json({
-    state: {
-      id: row.id,
-      problem_id: row.problemId,
-      user_id: row.userId,
-      question_type: row.questionType,
-      mode: row.mode,
-      enabled_languages: row.enabledLanguages,
-      testcase_count: row.testcaseCount,
-      step_configs: row.stepConfigs,
-      step_statuses: row.stepStatuses,
-      created_at: row.createdAt,
-      updated_at: row.updatedAt,
-    },
-  });
+  const state = {
+    id: row.id,
+    problem_id: row.problemId,
+    user_id: row.userId,
+    question_type: row.questionType,
+    mode: row.mode,
+    enabled_languages: row.enabledLanguages,
+    testcase_count: row.testcaseCount,
+    step_configs: row.stepConfigs,
+    step_statuses: row.stepStatuses,
+    created_at: row.createdAt,
+    updated_at: row.updatedAt,
+  };
+
+  pipelineStateCacheSet(safeProblemId, state);
+  return NextResponse.json({ state });
 }
 
 export async function POST(request: NextRequest) {
@@ -98,6 +110,9 @@ export async function POST(request: NextRequest) {
         updatedAt: values.updatedAt,
       },
     });
+
+  // Any state mutation invalidates the cache so the next GET sees fresh data.
+  pipelineStateCacheInvalidate(safeProblemId);
 
   return NextResponse.json({ success: true });
 }
