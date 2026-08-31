@@ -1610,7 +1610,58 @@ def run_benchmark(
     return report
 
 
-def print_report(report: BenchmarkReport, min_kill: float, report_only: bool = False) -> None:
+def gate_verdict(report: BenchmarkReport, min_kill: float) -> dict:
+    """Turn the B-gates into one pass/fail, in exactly one place.
+
+    Blocking: B1 mutation kill and B2 wrong-approach. Those are the two the
+    report-only rationale below already calls the real signals, and the two the
+    skill's definition of done quotes numbers for.
+
+    Advisory: B3 coverage shape, because nothing downstream can act on a
+    distribution gap while the suite ships exactly as generated -- it becomes
+    blocking the day a step can regenerate in response. B4 stays advisory too: it
+    already self-declares a spurious case, and it has never blocked here, so
+    promoting it is a separate decision with its own blast radius.
+
+    An absent B1 reads as 0% and therefore blocks. "We could not measure the suite"
+    must never resolve the same way as "the suite is strong".
+    """
+    kill_rate = report.b1.get("kill_rate", report.kill_rate) or 0.0
+    blocking: list[str] = []
+    if kill_rate < min_kill:
+        blocking.append(
+            f"B1: mutation kill {kill_rate:.1%} is below the {min_kill:.0%} minimum"
+        )
+    if report.b2.get("hard_fail"):
+        blocking.append(
+            f"B2: {report.b2.get('reason') or 'a known-wrong solution passes every case'}"
+        )
+
+    advisory: list[str] = [f"B3: {i}" for i in (report.b3.get("issues") or [])]
+    if report.b4.get("skipped"):
+        advisory.append(f"B4 skipped: {report.b4.get('note')}")
+    elif report.b4.get("advisory"):
+        advisory.append(
+            f"B4 advisory: {len(report.b4.get('disagreements') or [])} disagreement(s); "
+            "the optimal passes every worked example"
+        )
+    elif report.b4.get("disagreements"):
+        advisory.append(
+            f"B4: {len(report.b4['disagreements'])} optimal/brute disagreement(s) "
+            "-- NOT blocking today; verify by hand"
+        )
+    advisory += [str(w) for w in report.warnings]
+
+    return {
+        "passed": not blocking,
+        "min_kill": min_kill,
+        "kill_rate": kill_rate,
+        "blocking": blocking,
+        "advisory": advisory,
+    }
+
+
+def print_report(report: BenchmarkReport, min_kill: float, report_only: bool = False) -> dict:
     _log_banner("Final report")
 
     print(f"[B1] Mutation kill rate: {report.kill_rate:.1%} "
@@ -1666,19 +1717,25 @@ def print_report(report: BenchmarkReport, min_kill: float, report_only: bool = F
         for w in report.warnings[:8]:
             _log_detail(w)
 
+    verdict = gate_verdict(report, min_kill)
+
     # Report-only mode (redesign): the generated suite ships as-is and there is no
-    # Strengthen/regeneration step to act on distribution gaps — so B1/B2/B4 are the
-    # real signals and coverage-shape items are advisory notes, never a failure.
+    # Strengthen/regeneration step to act on distribution gaps — so B1/B2 are the
+    # real signals and coverage-shape items are advisory notes. This function only
+    # reports; the caller decides what the verdict costs. It used to compute the
+    # same pass/fail into a local and drop it, which is why nothing downstream
+    # could tell a weak suite from a strong one.
     if report_only:
-        real_pass = report.b1.get("kill_rate", 0.0) >= min_kill and not report.b2.get("hard_fail")
-        print(f"\nBenchmark report (informational — not a gate). "
-              f"Quality: {'STRONG' if real_pass else 'REVIEW'}", flush=True)
+        print(f"\nBenchmark report. Quality: "
+              f"{'STRONG' if verdict['passed'] else 'REVIEW'}", flush=True)
+        for b in verdict["blocking"]:
+            _log_fail(b)
         if report.hard_failures:
             _log_warn(f"{len(report.hard_failures)} coverage-shape note(s) "
                       f"(the generated suite ships as-is; not blocking):")
             for hf in report.hard_failures:
                 _log_detail(str(hf))
-        return
+        return verdict
 
     gate = "PASS" if report.passes_gate(min_kill) else "FAIL"
     print(f"\nGate (min_kill={min_kill:.0%}): {gate}", flush=True)
@@ -1691,6 +1748,7 @@ def print_report(report: BenchmarkReport, min_kill: float, report_only: bool = F
         _log_fail(f"{len(report.hard_failures)} hard failure(s):")
         for hf in report.hard_failures:
             _log_detail(str(hf))
+    return verdict
 
 
 def main():

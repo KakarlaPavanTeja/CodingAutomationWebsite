@@ -2,7 +2,9 @@
 
 The suite ships exactly as generated (the derive step already deduped, tagged,
 ordered and weighted it). This step is pure measurement: it scores kills, verifies
-TLE, and reports. Nothing here writes back to disk.
+TLE, and reports. It never writes back to the suite -- the only file it creates
+is the gate report (`Outputs/gates/select_testcases.json`), which records the
+verdict so something other than a human reading stdout can act on it.
 
 Three jobs, all deterministic given their inputs:
   1. load_cases   — adapt each stored test case into a case record
@@ -27,6 +29,8 @@ from __future__ import annotations
 import json
 import os
 import time
+
+from gate_report import ERROR, FAIL, PASS, write_gate
 
 from testcase_selection import bucket_size
 
@@ -324,11 +328,35 @@ def _discover_wrong_solutions(wrong_dir: str):
     return out
 
 
+def _gate_settings() -> tuple[float, bool]:
+    """How hard the B1 gate bites.
+
+    Recording the verdict is free, so it always happens. Blocking is opt-in, because
+    a hard stop is only cheap once generation is good enough that it rarely fires --
+    and the recorded verdicts are what tell you when that day has come. Until then a
+    weak suite is a number in a file you can rank and act on, not a halted batch and a
+    regeneration bill.
+
+      PIPELINE_GATE_BLOCKING=1   B1 below the minimum exits non-zero
+      PIPELINE_MIN_KILL=0.8      retune the mutation-kill minimum
+
+    B2 is unaffected: it has always blocked and still does.
+    """
+    from benchmark_suite import DEFAULT_MIN_KILL
+    try:
+        min_kill = float(os.environ.get("PIPELINE_MIN_KILL", "").strip() or DEFAULT_MIN_KILL)
+    except ValueError:
+        min_kill = DEFAULT_MIN_KILL
+    blocking = os.environ.get("PIPELINE_GATE_BLOCKING", "").strip().lower() in ("1", "true", "yes")
+    return min_kill, blocking
+
+
 def run_annotation(outputs_dir: str = "Outputs") -> dict:
-    """Measure the on-disk suite: score kills, verify TLE, report. Writes nothing.
+    """Measure the on-disk suite: score kills, verify TLE, report the verdict.
 
     The suite ships exactly as generated — there is no trimming and no write-back, so
-    a re-run is idempotent and needs no raw-pool snapshot. Returns the report dict.
+    a re-run is idempotent and needs no raw-pool snapshot. Returns the report dict and
+    writes the gate report; neither touches testcases.json.
     Uses benchmark_suite's real runners; the pure annotate_* functions above are what
     the unit tests exercise with fakes."""
     from benchmark_suite import (
@@ -445,8 +473,11 @@ def run_annotation(outputs_dir: str = "Outputs") -> dict:
         log(f"      · B2 gate CANNOT JUDGE — {b2.get('reason')}. Not a pass: "
             f"this suite ships with no blocking quality gate.")
 
+    min_kill, gate_blocks = _gate_settings()
+    verdict = None
+    bench = None
     try:
-        from benchmark_suite import run_benchmark, print_report, DEFAULT_MIN_KILL
+        from benchmark_suite import run_benchmark, print_report
         brute_path = None
         for name in ("BRUTE_FORCE.py", "BRUTE.py"):
             p = os.path.join(outputs_dir, "generatedFullCode", name)
@@ -457,17 +488,38 @@ def run_annotation(outputs_dir: str = "Outputs") -> dict:
             p = os.path.join(outputs_dir, "generated_brute_force.py")
             brute_path = p if os.path.exists(p) else None
         log("")
-        log("=== BENCHMARK (report-only; injects bugs to measure suite strength) ===")
+        log("=== BENCHMARK (injects bugs to measure suite strength) ===")
         bench = run_benchmark(
             optimal_path=os.path.join(outputs_dir, "generatedFullCode", "PYTHON.py"),
             testcases_path=tc_path,
             description_path=os.path.join(outputs_dir, "generated_description.md"),
             brute_path=brute_path,
+            min_kill=min_kill,
             precomputed_b2=b2,
         )
-        print_report(bench, DEFAULT_MIN_KILL, report_only=True)
+        verdict = print_report(bench, min_kill, report_only=True)
     except Exception as e:
-        log(f"⚠ benchmark (informational) skipped — {type(e).__name__}: {e}")
+        # A benchmark that could not run is ERROR, never a pass. This used to be one
+        # warning line and a green step, so "we did not measure the suite" and "the
+        # suite is strong" were indistinguishable from the outside.
+        log(f"benchmark did not run — {type(e).__name__}: {e}")
+        write_gate(
+            "select_testcases", ERROR, outputs_dir=outputs_dir,
+            numbers=report, gates={"b2": b2},
+            blocking=[f"benchmark did not run: {type(e).__name__}: {e}"],
+        )
+    else:
+        # b1 carries every surviving mutant with its bug_class — the log truncates to
+        # 10, so this file is the only place the full list lives. Aggregated across
+        # runs it ranks what the testcase prompt is blind to, which is a permanent fix
+        # rather than a per-question regeneration.
+        write_gate(
+            "select_testcases", PASS if verdict["passed"] else FAIL,
+            outputs_dir=outputs_dir,
+            numbers={**report, "kill_rate": verdict["kill_rate"], "min_kill": min_kill},
+            gates={"b1": bench.b1, "b2": bench.b2, "b3": bench.b3, "b4": bench.b4},
+            blocking=verdict["blocking"], advisory=verdict["advisory"],
+        )
 
     # B2 is the only blocking quality gate left (the selector is gone), so it blocks
     # here — outside the try, so a benchmark crash cannot swallow the verdict.
@@ -481,6 +533,15 @@ def run_annotation(outputs_dir: str = "Outputs") -> dict:
             log(f"ERROR: known-wrong solution(s) pass every test case ({names}). "
                 "The suite does not discriminate them. Refusing to ship. "
                 "Add cases that expose the wrong approach, or re-run Generate Test Cases.")
+        raise SystemExit(1)
+
+    # B1 records by default and blocks only when asked — see _gate_settings.
+    if verdict and not verdict["passed"] and gate_blocks:
+        for b in verdict["blocking"]:
+            log(f"ERROR: {b}")
+        log("Refusing to ship (PIPELINE_GATE_BLOCKING=1). Re-run Generate Test Cases, "
+            "or strengthen the testcase prompt for the bug classes listed in "
+            "Outputs/gates/select_testcases.json.")
         raise SystemExit(1)
 
     return report
