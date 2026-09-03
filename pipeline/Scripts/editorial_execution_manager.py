@@ -4,8 +4,10 @@ generate_editorial, for both function and non-function problems).
 
 For EVERY approach described in Outputs/editorial.md, this script runs the
 approach's code in each selected language (C++ / Python / Java / Node.js)
-against the generated testcases (Outputs/testcases.json), using the same remote
-compiler API as execution_manager_v2.
+against the generated testcases (Outputs/testcases.json), using the SAME
+compiler routing as the pipeline's execute steps: the new-compiler batch
+submit+poll (execution_manager_v3) for C++/Python/Java, and the legacy
+per-testcase API (execution_manager_v2) for Node.js only.
 
 This step is PURELY INFORMATIONAL. Naive approaches are expected to time out or
 otherwise fail — that is fine and useful to surface. This script must therefore
