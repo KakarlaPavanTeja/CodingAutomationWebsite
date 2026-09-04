@@ -7,6 +7,7 @@ export type LoadSource = "pipeline" | "upload";
 export interface LoadRecord {
   id: string;
   problemId: string | null;
+  userId: string;
   status: string;
   questionSetId: string | null;
   questionIds: string[];
