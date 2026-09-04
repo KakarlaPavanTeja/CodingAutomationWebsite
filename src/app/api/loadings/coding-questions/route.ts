@@ -16,6 +16,7 @@ import {
   createLoadRecord,
   finishLoadRecord,
   formatLogLine,
+  latestAttemptForProblem,
   latestLoadForProblem,
   type LoadSource,
 } from "@/lib/loadings/load-records";
@@ -91,7 +92,12 @@ export async function GET(request: NextRequest) {
   if (access.error) return access.error;
 
   const lastLoad = await latestLoadForProblem(safeProblemId);
-  return NextResponse.json({ configured: missing.length === 0, missing, lastLoad });
+  // Only worth reporting when the most recent attempt overall actually
+  // failed — a completed `lastLoad` already covers the success case, and a
+  // still-`running` attempt has nothing useful to say here.
+  const lastAttempt = await latestAttemptForProblem(safeProblemId);
+  const lastFailedLoad = lastAttempt?.status === "failed" ? lastAttempt : null;
+  return NextResponse.json({ configured: missing.length === 0, missing, lastLoad, lastFailedLoad });
 }
 
 /**

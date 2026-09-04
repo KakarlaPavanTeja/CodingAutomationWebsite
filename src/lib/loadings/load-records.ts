@@ -76,7 +76,13 @@ export async function getLoadRecord(id: string): Promise<LoadRecord | null> {
   return (row as LoadRecord) ?? null;
 }
 
-/** Most recent completed load for a problem — drives the duplicate warning. */
+/**
+ * Most recent COMPLETED load for a problem — drives the duplicate warning
+ * and the server's 409 gate. Deliberately status-scoped: a failed attempt
+ * must never read as "already loaded" nor block a plain retry. Any caller
+ * needing the most recent attempt regardless of outcome wants
+ * `latestAttemptForProblem` instead.
+ */
 export async function latestLoadForProblem(problemId: string): Promise<LoadRecord | null> {
   const [row] = await db
     .select()
@@ -87,6 +93,21 @@ export async function latestLoadForProblem(problemId: string): Promise<LoadRecor
         eq(codingQuestionLoads.status, "completed"),
       ),
     )
+    .orderBy(desc(codingQuestionLoads.startedAt))
+    .limit(1);
+  return (row as LoadRecord) ?? null;
+}
+
+/**
+ * Most recent load attempt for a problem, any status — lets the UI tell a
+ * failed (or still-running) last attempt apart from "never loaded", instead
+ * of only ever seeing a completed row or nothing at all.
+ */
+export async function latestAttemptForProblem(problemId: string): Promise<LoadRecord | null> {
+  const [row] = await db
+    .select()
+    .from(codingQuestionLoads)
+    .where(eq(codingQuestionLoads.problemId, problemId))
     .orderBy(desc(codingQuestionLoads.startedAt))
     .limit(1);
   return (row as LoadRecord) ?? null;

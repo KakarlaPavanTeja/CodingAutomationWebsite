@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { LoadLogPanel, type LoadRecord } from "@/components/problems/LoadLogPanel";
+import { canSubmitLoad, mayForceLoad, type PriorLoadStatus } from "@/components/problems/load-anyway";
 
 interface LoadToBetaProps {
   problemId: string;
@@ -29,6 +31,7 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
   const [lastLoad, setLastLoad] = useState<LoadRecord | null>(null);
+  const [lastFailedLoad, setLastFailedLoad] = useState<LoadRecord | null>(null);
   const [loadAnyway, setLoadAnyway] = useState(false);
   const [remarks, setRemarks] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -56,6 +59,7 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
         setConfigured(Boolean(data.configured));
         setMissing(data.missing || []);
         setLastLoad((data.lastLoad as LoadRecord | null) ?? null);
+        setLastFailedLoad((data.lastFailedLoad as LoadRecord | null) ?? null);
       } catch {
         if (!cancelled) setConfigured(false);
       }
@@ -67,7 +71,12 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
 
   const handleDone = useCallback((record: LoadRecord) => {
     setDone(true);
-    if (record.status === "completed") setLastLoad(record);
+    if (record.status === "completed") {
+      setLastLoad(record);
+      setLastFailedLoad(null);
+    } else if (record.status === "failed") {
+      setLastFailedLoad(record);
+    }
   }, []);
 
   if (configured === false) {
@@ -86,7 +95,10 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
     setSubmitError("");
   };
 
-  const canSubmit = !submitting && (!lastLoad || (loadAnyway && remarks.trim() !== ""));
+  // "completed" takes priority over "failed" — a load that has since
+  // succeeded no longer means a plain retry would 409.
+  const priorStatus: PriorLoadStatus = lastLoad ? "completed" : lastFailedLoad ? "failed" : "none";
+  const canSubmit = !submitting && canSubmitLoad(priorStatus, loadAnyway, remarks);
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -108,8 +120,9 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
         // The body IS the prior LoadRecord: refresh the banner instead of
         // treating this as a generic error.
         setLastLoad(data as LoadRecord);
+        setLastFailedLoad(null);
         setSubmitError(
-          'A load already exists for this problem. Add remarks and choose "Load anyway" to load a new copy.',
+          'A load already exists for this problem. Check "Load anyway", add remarks, and retry to load a new copy.',
         );
         return;
       }
@@ -151,7 +164,7 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
             </>
           ) : (
             <>
-              {lastLoad && (
+              {lastLoad ? (
                 <div className="basis-full mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
                   <p className="font-medium text-foreground">
                     Already loaded{" "}
@@ -177,7 +190,23 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
                     </ul>
                   )}
                 </div>
-              )}
+              ) : lastFailedLoad ? (
+                <div className="basis-full mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
+                  <p className="font-medium text-foreground">
+                    Last attempt failed{" "}
+                    {lastFailedLoad.finishedAt
+                      ? new Date(lastFailedLoad.finishedAt).toLocaleString()
+                      : "previously"}
+                  </p>
+                  {lastFailedLoad.error && (
+                    <p className="mt-1 text-muted-foreground">{lastFailedLoad.error}</p>
+                  )}
+                  <p className="mt-1 text-muted-foreground">
+                    A plain retry will hit the same error if the cause hasn&apos;t changed — check
+                    &quot;Load anyway&quot; below to regenerate ids instead.
+                  </p>
+                </div>
+              ) : null}
 
               <div className="grid gap-3 sm:grid-cols-2">
                 {FIELDS.map((field) => (
@@ -198,8 +227,22 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
                 ))}
               </div>
 
-              {lastLoad && loadAnyway && (
-                <div className="basis-full mt-3 flex flex-col gap-1">
+              {mayForceLoad(priorStatus) && (
+                <div className="basis-full mt-3 flex items-center gap-2">
+                  <Checkbox
+                    id="load-anyway"
+                    checked={loadAnyway}
+                    disabled={submitting}
+                    onCheckedChange={setLoadAnyway}
+                  />
+                  <Label htmlFor="load-anyway" className="text-xs font-normal">
+                    Load anyway (regenerate ids)
+                  </Label>
+                </div>
+              )}
+
+              {loadAnyway && (
+                <div className="basis-full mt-2 flex flex-col gap-1">
                   <Label htmlFor="load-remarks" className="text-xs">
                     Remarks (required)
                   </Label>
@@ -217,15 +260,9 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
               )}
 
               <div className="mt-3 flex items-center gap-3">
-                {lastLoad && !loadAnyway ? (
-                  <Button size="sm" variant="outline" onClick={() => setLoadAnyway(true)}>
-                    Load anyway
-                  </Button>
-                ) : (
-                  <Button size="sm" onClick={submit} disabled={!canSubmit}>
-                    {submitting ? "Starting…" : "Run load"}
-                  </Button>
-                )}
+                <Button size="sm" onClick={submit} disabled={!canSubmit}>
+                  {submitting ? "Starting…" : "Run load"}
+                </Button>
                 <p className="text-xs text-muted-foreground">
                   {submitting
                     ? "Starting the load…"
