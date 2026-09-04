@@ -276,7 +276,7 @@ export function LoadToBeta({ problemId }: LoadToBetaProps) {
                     ? "A load for this problem is already running — wait for it to finish."
                     : submitting
                       ? "Starting the load…"
-                      : "Question set, unit and order are picked automatically. Sheet prep → S3 upload → SHEET_LOADING → unlock takes several minutes."}
+                      : "Question set, unit and order are picked automatically. Takes anywhere from a couple of minutes to several, depending on whether this appends to an existing question set or a new sheet needs preparing first."}
                 </p>
               </div>
 

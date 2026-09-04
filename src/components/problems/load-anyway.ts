@@ -1,25 +1,27 @@
 /**
  * Pure decision logic for LoadToBeta's "Load anyway" force path.
  *
- * The force option must always be reachable — a missing or failed prior
- * load row must not be a dead end, only a *completed* prior load should
- * make a bare (non-forced) submit locally pointless (the server would 409
- * it). Keeping this as one small function (rather than inline JSX
- * conditions) is what lets a regression — re-gating force on prior status —
- * get caught by a test instead of only in production.
+ * A first-ever attempt has nothing to override, so the force control has no
+ * reason to show — a first load is never a forced load. Once ANY prior
+ * attempt exists — failed or completed — force must stay reachable, because
+ * a question already in beta with no row in our table (loaded before this
+ * feature shipped) would otherwise be a dead end forever: that gap is closed
+ * by the fact that the first attempt against it creates a `failed` row,
+ * after which force is offered. Keeping this as one small function (rather
+ * than inline JSX conditions) is what lets a regression — showing force with
+ * nothing to override, or re-closing the dead end above — get caught by a
+ * test instead of only in production.
  */
 
 export type PriorLoadStatus = "none" | "failed" | "completed";
 
 /**
- * May the operator use the force ("Load anyway") control right now? Always
- * — the control itself is never conditioned on what happened before. Takes
- * `priorStatus` purely so the call site and the tests read as a decision
- * over prior state, not a hardcoded `true` sprinkled into the JSX.
+ * May the operator use the force ("Load anyway") control right now? Only
+ * once a prior attempt (failed or completed) exists for this problem — never
+ * on a brand-new problem's first try, which has nothing to force past.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- see comment above
 export function mayForceLoad(priorStatus: PriorLoadStatus): boolean {
-  return true;
+  return priorStatus !== "none";
 }
 
 /**

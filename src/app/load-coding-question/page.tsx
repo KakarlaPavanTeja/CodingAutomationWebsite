@@ -113,7 +113,7 @@ export default function LoadCodingQuestionPage() {
               <p className="text-xs text-muted-foreground">
                 {submitting
                   ? "Starting the load…"
-                  : "The question set, unit and order are picked automatically. SHEET_LOADING can take several minutes; keep this tab open."}
+                  : "The question set, unit and order are picked automatically. Takes anywhere from a couple of minutes to several, depending on whether this appends to an existing question set or a new sheet needs preparing first; keep this tab open."}
               </p>
             </div>
           )}

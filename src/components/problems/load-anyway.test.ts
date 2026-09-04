@@ -4,10 +4,13 @@ import { canSubmitLoad, mayForceLoad, type PriorLoadStatus } from "./load-anyway
 
 const STATUSES: PriorLoadStatus[] = ["none", "failed", "completed"];
 
-test("mayForceLoad is always true, regardless of prior status", () => {
-  for (const status of STATUSES) {
-    assert.equal(mayForceLoad(status), true, status);
-  }
+test("mayForceLoad: false with no prior attempt at all — a first load is never a forced load", () => {
+  assert.equal(mayForceLoad("none"), false);
+});
+
+test("mayForceLoad: true once any prior attempt exists, failed or completed", () => {
+  assert.equal(mayForceLoad("failed"), true);
+  assert.equal(mayForceLoad("completed"), true);
 });
 
 test("canSubmitLoad: bare submit is fine with no prior load", () => {
