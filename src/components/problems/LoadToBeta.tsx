@@ -170,7 +170,13 @@ export function LoadToBeta({ problemId }: LoadToBetaProps) {
   // matters now, even if an earlier attempt had failed. A failed banner never
   // lists question links — a link to a question not actually in beta is the
   // false-success this feature exists to prevent.
-  const banner = lastLoad ? (
+  // A load that just succeeded IS `lastLoad`, so without this the banner reads
+  // "Already loaded" directly above the panel still reporting that very load —
+  // implying a prior load that does not exist. Suppress it while the panel is
+  // showing that same load; it becomes useful again on a later visit, or once
+  // "Start another load" has cleared the panel.
+  const bannerIsTheOpenLoad = lastLoad != null && lastLoad.id === activeLoadId;
+  const banner = lastLoad && !bannerIsTheOpenLoad ? (
     <div className="basis-full rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
       <p className="font-medium text-foreground">
         Already loaded{" "}
