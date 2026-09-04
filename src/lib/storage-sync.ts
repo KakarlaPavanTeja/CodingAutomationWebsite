@@ -259,11 +259,13 @@ export async function syncLogToStorage(
   content: string,
 ): Promise<void> {
   if (!runId) return;
-  // When SKIP is on, periodic log uploads are suppressed — the log viewer
-  // reads from object storage (getObjectString → S3 / GCS / local), so the
-  // live pane stays empty until the final upload at pipeline completion.
-  // This is the right trade-off for local dev against a remote bucket.
-  if (process.env.PIPELINE_SKIP_CLOUD_SYNC === "1") return;
+  // Deliberately NOT gated on PIPELINE_SKIP_CLOUD_SYNC. That flag exists to skip
+  // the periodic OUTPUTS sync (large artifacts already sitting on local disk);
+  // applying it here too made the live log pane blank for the whole of every
+  // step, which on a 5-minute generate_testcases is indistinguishable from a
+  // hung pipeline — and the Run All queue lives in browser state, so a reload
+  // out of that confusion kills the run. A log tail is capped at
+  // LIVE_LOG_MAX_BYTES, so streaming it costs a bounded write every few seconds.
   await uploadFile(runLogKey(problemId, stepId, runId), liveTail(content));
 }
 

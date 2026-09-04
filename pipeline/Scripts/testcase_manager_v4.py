@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 import shutil
 import sys
@@ -298,14 +299,53 @@ UNCONVERTIBLE = "<no candidate stdin layout reproduced the stated output>"
 
 
 _IO_LAYOUT_SYSTEM = (
-    "You convert a problem statement's worked Example into the RAW STDIN the given "
-    "reference solution reads. The solution's own parser is the source of truth — read "
-    "how it consumes stdin and produce the exact byte layout it expects (usually a "
-    "size/count line, then space-separated data line(s); a bracketed level-order line "
-    "for tree/linked-list inputs). "
+    "You convert a problem statement's worked Example into the RAW STDIN a solver's "
+    "program reads. "
+    "The statement's declared I/O FORMAT is the shape you must produce — it is what the "
+    "student is told the input looks like, so the graded stdin has to match it: the same "
+    "lines, in the same order, with the same separators. Take the VALUES from the "
+    "Example (which may be shown as `name = value` display assignments) and the SHAPE "
+    "from the I/O format. "
+    "Where the declared format is silent or ambiguous, the reference solution's own "
+    "stdin parser decides — read how it consumes stdin (usually a size/count line, then "
+    "space-separated data line(s); a bracketed level-order line for tree/linked-list "
+    "inputs). "
     "Return ONLY the stdin text. No explanation, no markdown fences, no `name = value` "
     "assignments. End with a trailing newline."
 )
+
+
+def _named_section(description: str, title: str) -> str:
+    """The body of a `**Title**` / `## Title` section of the description, or "".
+
+    The description format marks sections with bold titles on their own line; the
+    section ends at the next such title. Used to hand the conversion model the layout
+    the statement PROMISES rather than letting it infer one from the parser alone."""
+    lines = (description or "").splitlines()
+    want = title.strip().lower()
+    head = re.compile(r"^\s*(?:\*\*\s*(?P<b>[^*]+?)\s*\*\*|#{1,6}\s*(?P<h>.+?))\s*:?\s*$")
+    out, collecting = [], False
+    for ln in lines:
+        m = head.match(ln)
+        name = ((m.group("b") or m.group("h")) if m else "") or ""
+        if m and name.strip().lower() == want:
+            collecting = True
+            continue
+        if collecting and m:
+            break
+        if collecting:
+            out.append(ln)
+    return "\n".join(out).strip()
+
+
+def _declared_io_format(description: str) -> str:
+    """The Input/Output Format sections, formatted for the conversion prompt."""
+    parts = []
+    for title in ("Input Format", "Output Format"):
+        body = _named_section(description, title)
+        if body:
+            parts.append(f"{title}:\n{body}")
+    return "\n\n".join(parts)
 
 
 def _strip_fences(text: str) -> str:
@@ -319,14 +359,20 @@ def _strip_fences(text: str) -> str:
     return t + "\n" if t else ""
 
 
-def resolve_example_stdin(optimal_path, block, expected, timeout, llm=None):
+def resolve_example_stdin(optimal_path, block, expected, timeout, llm=None,
+                          io_format=""):
     """Convert one display-form example block into the raw stdin the reference reads.
 
-    Two stages, cheapest first. The deterministic layouts go first and cost nothing; only
-    if none of them reproduces the stated answer does a model read the solution's actual
-    parser and propose ONE layout. A model mismatch buys exactly one INFORMED retry — it
-    sees its own layout, what it printed, and what was expected, which beats a second
-    blind guess.
+    The statement's own **Input Format** is the layout a student is told to expect, so
+    it is what the graded stdin must look like — a layout that merely happens to parse
+    is not good enough. The model therefore goes FIRST, given that declared format plus
+    the reference's parser, and proposes one layout; a mismatch buys exactly one
+    INFORMED retry that sees its own layout, what it printed, and what was expected.
+
+    The mechanical serializations of the block are kept as a FALLBACK. They cost
+    nothing and, crucially, still resolve the contract when no API key is configured —
+    without them an LLM-only conversion would leave every function-type problem
+    unverified on a machine with no model access.
 
     Both stages are held to the same standard: a layout is accepted only when the
     reference reproduces the stated answer. Execution decides, never the proposer.
@@ -359,31 +405,23 @@ def resolve_example_stdin(optimal_path, block, expected, timeout, llm=None):
         tried.append(f"{candidate!r} -> {got[:60]!r}")
         return None, got
 
-    # Free first. The verbatim layout is what the standard `main()` in this pipeline
-    # reads, so most function problems resolve here for zero tokens — and this path still
-    # works when no API key is configured, which is when an LLM-only conversion would
-    # leave the contract unverified for EVERY function-type problem.
-    for candidate in named_var_stdin_candidates(block):
-        stdout, _ = _accepts(candidate)
-        if stdout is not None:
-            return candidate, stdout, None
-
     user = (
-        f"REFERENCE SOLUTION (its stdin parser is the source of truth):\n\n"
-        f"```python\n{solution}\n```\n\n"
+        (f"THE STATEMENT'S DECLARED I/O FORMAT (the layout the student is shown — "
+         f"reproduce it):\n{io_format}\n\n" if io_format else "")
+        + f"REFERENCE SOLUTION (its stdin parser decides anything the format leaves open):"
+        f"\n\n```python\n{solution}\n```\n\n"
         f"EXAMPLE from the problem statement:\n{block}\n\n"
         f"Its stated answer is: {expected}\n\n"
         f"Return the raw stdin that makes this solution print that answer."
     )
-    if tried:
-        # Naming the dead ends stops the model re-proposing a layout already disproved.
-        user += ("\n\nThese layouts were already tried and did NOT reproduce it:\n"
-                 + "\n".join(f"  {t}" for t in tried))
     for attempt in (1, 2):
         try:
             content, usage = llm(_IO_LAYOUT_SYSTEM, user, purpose="io_contract_layout")
         except Exception as e:
-            return None, None, f"LLM call failed ({e})"
+            # No API key or the provider is down: fall through to the free layouts
+            # rather than failing the whole contract.
+            tried.append(f"LLM call failed ({e})")
+            break
         if usage:
             update_usage(
                 usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
@@ -401,6 +439,14 @@ def resolve_example_stdin(optimal_path, block, expected, timeout, llm=None):
                 f"{shown!r} but the stated answer is {expected!r}. "
                 f"Re-read the parser and return a corrected stdin."
             )
+
+    # Fallback: mechanical serializations of the block. Free, and the only path that
+    # works with no model access.
+    for candidate in named_var_stdin_candidates(block):
+        stdout, _ = _accepts(candidate)
+        if stdout is not None:
+            return candidate, stdout, None
+
     return None, None, "; ".join(tried)
 
 
@@ -423,9 +469,11 @@ def verify_io_contract(description: str, optimal_path: str, outputs_dir: str = "
     Function-type descriptions show their Examples as named-variable assignments
     (`N = 2763` / `C = 0`) rather than raw stdin, which is why this used to report
     "skipped" for every function problem. Those blocks are now CONVERTED: a small model
-    reads the reference solution's own parser and proposes one stdin layout, which is
-    accepted only if the reference reproduces the stated answer — so the contract covers
-    both description forms. `llm` is injectable for tests; production uses `call_llm`.
+    is handed the statement's own **Input Format** / **Output Format** plus the reference
+    solution and proposes one stdin layout, which is accepted only if the reference
+    reproduces the stated answer — so the frozen contract is the layout the student was
+    shown, not merely one that happens to parse. `llm` is injectable for tests;
+    production uses `call_llm`.
 
     Writes `io_contract.json` so downstream steps can quote a VERIFIED concrete pair
     instead of prose describing a format. Returns the contract dict.
@@ -444,6 +492,7 @@ def verify_io_contract(description: str, optimal_path: str, outputs_dir: str = "
         return contract
 
     timeout = _grounding_timeout_sec()
+    io_format = _declared_io_format(description)
     for idx, (inp, out) in enumerate(pairs[:2], start=1):
         stdin_str = inp if inp.endswith("\n") else inp + "\n"
         want = _normalize_output(out)
@@ -464,7 +513,7 @@ def verify_io_contract(description: str, optimal_path: str, outputs_dir: str = "
         idx = len(contract["pairs"]) + len(contract["mismatches"]) + 1
         want = _normalize_output(out)
         stdin_str, stdout, detail = resolve_example_stdin(
-            optimal_path, block, out, timeout, llm=llm)
+            optimal_path, block, out, timeout, llm=llm, io_format=io_format)
         if stdin_str is None:
             contract["mismatches"].append({
                 "example": idx, "stdin": _normalize_output(block), "expected": want,
