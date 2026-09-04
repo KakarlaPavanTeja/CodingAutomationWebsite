@@ -7,6 +7,10 @@
  *
  * A batch bigger than the room left in a set is split across sets, so no set
  * ever passes the 50-question cap.
+ *
+ * There is no operator configuration: the question set, the unit title, its
+ * child order and its parent all come from the planner, and auto-unlock is
+ * fixed by the design spec. The caller supplies only the questions.
  */
 
 import { randomUUID } from "crypto";
@@ -37,23 +41,6 @@ import { lookupQuestionSetQuestions } from "./question-set";
 
 const SHEET_LOADING_POLL = { maxAttempts: 100, pollMs: 3000 };
 const UNLOCK_POLL = { maxAttempts: 60, pollMs: 3000 };
-
-export interface LoadForm {
-  /** Name for the copied sheet, also sent as spread_sheet_name. */
-  sheetName: string;
-  /** ResourcesData G3 */
-  childOrder: string;
-  /** ResourcesData H3 */
-  parentResource: string;
-  /** ResourcesData I2 */
-  autoUnlock: string;
-  /** QuestionSet B2 */
-  title: string;
-  /** Units B2 — generated when omitted. */
-  commonUnitId?: string;
-  /** Units D2 — seconds, or "MM:SS". */
-  durationInSec?: string;
-}
 
 export interface BatchResult {
   questionSetId: string;
@@ -107,44 +94,71 @@ async function confirmLinked(
   return { linked: false, missing };
 }
 
-/** "47:01" is entered as a formula so the sheet stores seconds. */
-function durationToSheetValue(val?: string): string {
-  const s = String(val ?? "").trim();
-  if (!s) return "";
-  const match = s.match(/^\s*(\d+)\s*:\s*(\d+)\s*(?:Min|min|m)?\s*$/i);
-  if (match) return `=${match[1]}*60+${match[2]}`;
-  return s;
-}
+/** Testing content is always unlocked on load — design spec §3 step 2. */
+const AUTO_UNLOCK = "TRUE";
 
 function pushCell(updates: CellUpdate[], range: string, value?: string): void {
   if (value == null || String(value).trim() === "") return;
   updates.push({ range, values: [[String(value).trim()]] });
 }
 
+/**
+ * Cells the loading sheet needs. Every value is derived — the question set id
+ * and unit identity come from the planner, auto-unlock is fixed by the spec —
+ * so no operator input reaches a sheet cell.
+ *
+ * `ResourcesData!G3`/`H3` place the unit in the real beta course tree, so they
+ * are written ONLY for a unit this run minted, and then with the very parent
+ * `createNextTestingUnit` derived the child order against. A set that already
+ * exists is already placed at an order nothing here computed; writing those
+ * cells would move it.
+ *
+ * ponytail: a non-minted set on the sheet path (a registry row whose questions
+ * were later deleted) therefore gets no title and no placement — its unit
+ * normally already exists in beta. If that ever stops holding, carry the
+ * registry row's `unitName` onto the batch rather than reintroducing a form.
+ */
 export function buildSheetCellUpdates(args: {
   questionSetId: string;
   unitId: string;
-  form: LoadForm;
+  batch: Pick<LoadBatch, "unitTitle" | "childOrder" | "parentResource">;
 }): CellUpdate[] {
-  const { questionSetId, unitId, form } = args;
+  const { questionSetId, unitId, batch } = args;
   const updates: CellUpdate[] = [];
   pushCell(updates, "ResourcesData!A2", questionSetId);
-  pushCell(updates, "ResourcesData!G3", form.childOrder);
-  pushCell(updates, "ResourcesData!H3", form.parentResource);
-  pushCell(updates, "ResourcesData!I2", form.autoUnlock);
+  if (batch.childOrder != null) {
+    if (!batch.parentResource) {
+      throw new Error(
+        "NKB_TESTING_PARENT_RESOURCE is not set, so the parent of the new testing unit is unknown — refusing to create it unparented.",
+      );
+    }
+    pushCell(updates, "ResourcesData!G3", String(batch.childOrder));
+    pushCell(updates, "ResourcesData!H3", batch.parentResource);
+  }
+  pushCell(updates, "ResourcesData!I2", AUTO_UNLOCK);
   pushCell(updates, "Units!A2", questionSetId);
   pushCell(updates, "Units!B2", unitId);
-  const duration = durationToSheetValue(form.durationInSec);
-  if (duration) updates.push({ range: "Units!D2", values: [[duration]] });
   pushCell(updates, "QuestionSet!A2", questionSetId);
-  pushCell(updates, "QuestionSet!B2", form.title);
+  pushCell(updates, "QuestionSet!B2", batch.unitTitle);
   return updates;
 }
 
+/**
+ * Google Drive name for the copied loading sheet — also sent as
+ * `spread_sheet_name`. Derived, not typed: the unit title says which unit it
+ * belongs to and the timestamp keeps repeat loads apart in the Drive list.
+ */
+export function deriveSheetName(
+  batch: Pick<LoadBatch, "questionSetId" | "unitTitle">,
+  now: Date = new Date(),
+): string {
+  const label = batch.unitTitle?.trim() || `Question set ${batch.questionSetId}`;
+  return `${label} ${now.toISOString().slice(0, 19).replace("T", " ")}`;
+}
+
 async function prepareSheet(
-  questionSetId: string,
+  batch: LoadBatch,
   unitId: string,
-  form: LoadForm,
   sheetName: string,
 ): Promise<string> {
   const templateId = spreadsheetIdFromUrl(CODING_QUESTIONS_TEMPLATE_URL);
@@ -153,7 +167,10 @@ async function prepareSheet(
   }
   const { spreadsheetId, url } = await copySpreadsheet(templateId, sheetName);
   await shareSpreadsheet(spreadsheetId);
-  await batchUpdateCells(spreadsheetId, buildSheetCellUpdates({ questionSetId, unitId, form }));
+  await batchUpdateCells(
+    spreadsheetId,
+    buildSheetCellUpdates({ questionSetId: batch.questionSetId, unitId, batch }),
+  );
   // The template ships with a stray second title row that breaks the load.
   await clearValues(spreadsheetId, "QuestionSet!B3").catch((err) =>
     console.warn("[Loadings] could not clear QuestionSet!B3:", (err as Error).message),
@@ -164,9 +181,6 @@ async function prepareSheet(
 async function runBatch(
   batch: LoadBatch,
   questions: CodingQuestionRow[],
-  form: LoadForm,
-  batchIndex: number,
-  batchTotal: number,
   onLog: (phase: string, message: string) => void,
 ): Promise<BatchResult> {
   const slice = questions.slice(batch.startIndex, batch.startIndex + batch.count);
@@ -222,22 +236,12 @@ async function runBatch(
     return result;
   }
 
-  // An auto-created testing unit's identity comes from the planner, not the
-  // operator's form — those three fields win over the caller's values.
-  const effectiveForm: LoadForm =
-    batch.unitTitle != null
-      ? {
-          ...form,
-          title: batch.unitTitle,
-          childOrder: String(batch.childOrder),
-          commonUnitId: batch.commonUnitId,
-        }
-      : form;
-
-  const unitId = effectiveForm.commonUnitId?.trim() || randomUUID();
-  const sheetName = batchTotal > 1 ? `${form.sheetName} (${batchIndex + 1})` : form.sheetName;
+  // The unit's whole identity — title, child order, parent, common unit id —
+  // comes from the planner. There is nothing for an operator to supply.
+  const unitId = batch.commonUnitId?.trim() || randomUUID();
+  const sheetName = deriveSheetName(batch);
   result.commonUnitId = unitId;
-  result.sheetUrl = await prepareSheet(batch.questionSetId, unitId, effectiveForm, sheetName);
+  result.sheetUrl = await prepareSheet(batch, unitId, sheetName);
 
   onLog("task", `set ${batch.questionSetId}: running SHEET_LOADING`);
   const load = await runNkbTask(
@@ -280,7 +284,6 @@ async function runBatch(
 
 export async function loadCodingQuestions(
   questions: CodingQuestionRow[],
-  form: LoadForm,
   opts: { onLog?: (phase: string, message: string) => void } = {},
 ): Promise<LoadResult> {
   // A throwing onLog (e.g. a DB write in the caller) must never fail an
@@ -311,12 +314,12 @@ export async function loadCodingQuestions(
   const results: BatchResult[] = [];
 
   for (let i = 0; i < batches.length; i++) {
-    const result = await runBatch(batches[i], questions, form, i, batches.length, onLog);
+    const result = await runBatch(batches[i], questions, onLog);
     results.push(result);
     if (result.success) {
       // Only a rollover-minted set is recorded, under its derived
-      // "Coding Testing N" title — never the operator's form.title, which
-      // would rename an existing row and break the next rollover's count.
+      // "Coding Testing N" title — renaming an existing row would break the
+      // next rollover's count.
       const upsert = registryUpsertForBatch(batches[i]);
       if (upsert) {
         await upsertRegistryRow(upsert.questionSetId, upsert.unitName).catch((err) =>

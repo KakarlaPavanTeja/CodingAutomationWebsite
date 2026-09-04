@@ -92,7 +92,18 @@ export async function createNextTestingUnit(opts: {
   onLog?: (phase: string, message: string) => void;
   /** Test seam — defaults to the real `fetchTestingUnitRows`. */
   fetchRows?: (parentResource: string) => Promise<string[][]>;
-}): Promise<{ questionSetId: string; commonUnitId: string; title: string; childOrder: number }> {
+}): Promise<{
+  questionSetId: string;
+  commonUnitId: string;
+  title: string;
+  childOrder: number;
+  /**
+   * The parent the child order was derived against. Returned (rather than
+   * re-read from config at sheet-writing time) so the unit can only ever be
+   * placed under the parent its order was computed for.
+   */
+  parentResource: string;
+}> {
   const parentResource = (process.env.NKB_TESTING_PARENT_RESOURCE || "").trim();
   if (!parentResource) {
     throw new Error(
@@ -120,7 +131,7 @@ export async function createNextTestingUnit(opts: {
   const commonUnitId = randomUUID();
   log("create unit", `"${title}" at child order ${childOrder} (set ${questionSetId})`);
 
-  return { questionSetId, commonUnitId, title, childOrder };
+  return { questionSetId, commonUnitId, title, childOrder, parentResource };
 }
 
 /**

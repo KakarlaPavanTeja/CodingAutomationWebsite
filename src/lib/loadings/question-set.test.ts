@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { capacityFromLookup, parseQuestionSetQuestionRows } from "./question-set";
-import { buildSheetCellUpdates, loadCodingQuestions } from "./load-coding-questions";
+import { buildSheetCellUpdates, deriveSheetName, loadCodingQuestions } from "./load-coding-questions";
 
 const SET = "11111111-1111-4111-8111-111111111111";
 const Q1 = "22222222-2222-4222-8222-222222222222";
@@ -53,19 +53,14 @@ test("capacityFromLookup reports room and the next order", () => {
   assert.equal(capacityFromLookup({ count: 0, maxOrder: 0, questionIds: [] }).nextOrder, 1);
 });
 
-test("buildSheetCellUpdates maps the documented cells and skips blanks", () => {
-  const updates = buildSheetCellUpdates({
-    questionSetId: SET,
-    unitId: "unit-1",
-    form: {
-      sheetName: "sheet",
-      childOrder: "5",
-      parentResource: "parent",
-      autoUnlock: "TRUE",
-      title: "My unit",
-      durationInSec: "",
-    },
-  });
+const MINTED = {
+  unitTitle: "Coding Testing 11",
+  childOrder: 11,
+  parentResource: "parent-resource-id",
+};
+
+test("buildSheetCellUpdates maps the documented cells for a minted unit", () => {
+  const updates = buildSheetCellUpdates({ questionSetId: SET, unitId: "unit-1", batch: MINTED });
   assert.deepEqual(
     updates.map((u) => u.range),
     [
@@ -81,24 +76,59 @@ test("buildSheetCellUpdates maps the documented cells and skips blanks", () => {
   );
 });
 
-test("buildSheetCellUpdates turns MM:SS into a seconds formula", () => {
-  const withDuration = (durationInSec: string) =>
-    buildSheetCellUpdates({
-      questionSetId: SET,
-      unitId: "unit-1",
-      form: {
-        sheetName: "s",
-        childOrder: "1",
-        parentResource: "p",
-        autoUnlock: "TRUE",
-        title: "t",
-        durationInSec,
-      },
-    }).find((u) => u.range === "Units!D2")?.values[0][0];
+test("the derived sheet carries the configured parent and auto-unlocks", () => {
+  // H3 decides where the unit lands in the real beta course tree, and the
+  // operator used to type it. It must now be exactly the parent the planner
+  // derived `childOrder` against, and auto-unlock is fixed by spec §3 step 2.
+  const cell = (range: string) =>
+    buildSheetCellUpdates({ questionSetId: SET, unitId: "unit-1", batch: MINTED }).find(
+      (u) => u.range === range,
+    )?.values[0][0];
 
-  assert.equal(withDuration("47:01"), "=47*60+01");
-  assert.equal(withDuration("120"), "120");
-  assert.equal(withDuration(""), undefined);
+  assert.equal(cell("ResourcesData!H3"), "parent-resource-id");
+  assert.equal(cell("ResourcesData!G3"), "11");
+  assert.equal(cell("ResourcesData!I2"), "TRUE");
+  assert.equal(cell("QuestionSet!B2"), "Coding Testing 11");
+});
+
+test("an existing unit is never re-placed in the course tree", () => {
+  // No childOrder means the planner did not mint this unit: it already sits
+  // somewhere under some parent at an order nothing here computed. Writing
+  // G3/H3 would move it.
+  const ranges = buildSheetCellUpdates({
+    questionSetId: SET,
+    unitId: "unit-1",
+    batch: { unitTitle: undefined, childOrder: undefined, parentResource: undefined },
+  }).map((u) => u.range);
+
+  assert.ok(!ranges.includes("ResourcesData!G3"));
+  assert.ok(!ranges.includes("ResourcesData!H3"));
+  assert.ok(ranges.includes("ResourcesData!I2"));
+});
+
+test("a minted unit with no parent resource fails loudly instead of going unparented", () => {
+  assert.throws(
+    () =>
+      buildSheetCellUpdates({
+        questionSetId: SET,
+        unitId: "unit-1",
+        batch: { unitTitle: "Coding Testing 11", childOrder: 11, parentResource: "" },
+      }),
+    /NKB_TESTING_PARENT_RESOURCE/,
+  );
+});
+
+test("deriveSheetName names the unit and stamps the time", () => {
+  const at = new Date("2026-09-04T10:15:30.000Z");
+  assert.equal(
+    deriveSheetName({ questionSetId: SET, unitTitle: "Coding Testing 11" }, at),
+    "Coding Testing 11 2026-09-04 10:15:30",
+  );
+  // No derived title (an existing set) still gets something findable in Drive.
+  assert.equal(
+    deriveSheetName({ questionSetId: SET, unitTitle: undefined }, at),
+    `Question set ${SET} 2026-09-04 10:15:30`,
+  );
 });
 
 test("loadCodingQuestions reports missing config through onLog", async () => {
@@ -106,11 +136,9 @@ test("loadCodingQuestions reports missing config through onLog", async () => {
   const prev = process.env.NKB_LOAD_DATA_PASSWORD;
   delete process.env.NKB_LOAD_DATA_PASSWORD;
 
-  const result = await loadCodingQuestions(
-    [{ question_id: "q1" }],
-    { sheetName: "s", title: "t", childOrder: "1", parentResource: "p", autoUnlock: "TRUE" },
-    { onLog: (phase, msg) => seen.push(`${phase}:${msg}`) },
-  );
+  const result = await loadCodingQuestions([{ question_id: "q1" }], {
+    onLog: (phase, msg) => seen.push(`${phase}:${msg}`),
+  });
 
   assert.equal(result.success, false);
   assert.match(result.error ?? "", /Missing/);
@@ -122,15 +150,11 @@ test("loadCodingQuestions swallows a throwing onLog instead of failing the call"
   const prev = process.env.NKB_LOAD_DATA_PASSWORD;
   delete process.env.NKB_LOAD_DATA_PASSWORD;
 
-  const result = await loadCodingQuestions(
-    [{ question_id: "q1" }],
-    { sheetName: "s", title: "t", childOrder: "1", parentResource: "p", autoUnlock: "TRUE" },
-    {
-      onLog: () => {
-        throw new Error("db write failed");
-      },
+  const result = await loadCodingQuestions([{ question_id: "q1" }], {
+    onLog: () => {
+      throw new Error("db write failed");
     },
-  );
+  });
 
   assert.equal(result.success, false);
   assert.match(result.error ?? "", /Missing/);

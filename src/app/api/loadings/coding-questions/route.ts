@@ -7,7 +7,7 @@ import {
   parseCodingQuestionsPayload,
   type CodingQuestionRow,
 } from "@/lib/loadings/coding-questions-json";
-import { loadCodingQuestions, type LoadForm } from "@/lib/loadings/load-coding-questions";
+import { loadCodingQuestions } from "@/lib/loadings/load-coding-questions";
 import { missingLoadingsConfig } from "@/lib/loadings/config";
 import { extractQuestionsFromUpload } from "@/lib/loadings/upload-input";
 import { regenerateQuestionIds } from "@/lib/loadings/regenerate-ids";
@@ -29,37 +29,13 @@ const DEFAULT_PATH = "forJSONPreparation/coding_questions.json";
 // boundedly rather than leaving it unbounded.
 const MAX_BODY_SIZE = 20 * 1024 * 1024; // 20MB
 
-function readForm(str: (key: string) => string): LoadForm {
-  return {
-    sheetName: str("sheetName"),
-    childOrder: str("childOrder"),
-    parentResource: str("parentResource"),
-    autoUnlock: str("autoUnlock"),
-    title: str("title"),
-    commonUnitId: str("commonUnitId") || undefined,
-    durationInSec: str("durationInSec") || undefined,
-  };
-}
-
-const REQUIRED_FIELDS: (keyof LoadForm)[] = [
-  "sheetName",
-  "childOrder",
-  "parentResource",
-  "autoUnlock",
-  "title",
-];
-
-// These form values reach Google Sheets cells (or a sheet/spreadsheet name)
-// with valueInputOption: USER_ENTERED — a leading =/+/-/@ turns them into a
-// live formula in a sheet the beta content pipeline reads. Reject at this
-// trust boundary rather than trusting the client.
-const FORMULA_PREFIX_RE = /^[=+\-@]/;
-function formulaInjectingField(form: LoadForm): string | null {
-  for (const [key, val] of Object.entries(form)) {
-    if (typeof val === "string" && FORMULA_PREFIX_RE.test(val)) return key;
-  }
-  return null;
-}
+// No load configuration is read from the request. The question set, the unit
+// title, its child order and its parent resource are all derived server-side
+// by the planner (see `src/lib/loadings/load-coding-questions.ts`), and
+// auto-unlock is fixed by the design spec. The only client-supplied values
+// left are the questions themselves and `remarks`, and neither reaches a
+// Google Sheets cell — so the former USER_ENTERED formula-injection guard on
+// the form fields now has nothing to check and is gone with them.
 
 /**
  * Is the flow configured, and (when `problemId` is given) what did this
@@ -128,7 +104,6 @@ export async function POST(request: NextRequest) {
   let userId: string;
   let source: LoadSource;
   let questions: CodingQuestionRow[];
-  let form: LoadForm;
   let remarks: string | null;
 
   if (isUpload) {
@@ -161,7 +136,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: (e as Error).message }, { status: 400 });
     }
 
-    form = readForm((key) => String(formData.get(key) ?? "").trim());
     remarks = String(formData.get("remarks") ?? "").trim() || null;
   } else {
     // Pipeline flow: authorise BEFORE reading the body.
@@ -187,7 +161,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
     }
 
-    form = readForm((key) => String(body[key] ?? "").trim());
     remarks = String(body.remarks ?? "").trim() || null;
 
     let safePath: string;
@@ -225,22 +198,6 @@ export async function POST(request: NextRequest) {
     questions = parsed;
   }
 
-  const missingFields = REQUIRED_FIELDS.filter((k) => !form[k]);
-  if (missingFields.length) {
-    return NextResponse.json(
-      { error: `Missing required field(s): ${missingFields.join(", ")}` },
-      { status: 400 },
-    );
-  }
-
-  const badField = formulaInjectingField(form);
-  if (badField) {
-    return NextResponse.json(
-      { error: `"${badField}" cannot start with =, +, - or @.` },
-      { status: 400 },
-    );
-  }
-
   if (problemId && !remarks) {
     const last = await latestLoadForProblem(problemId);
     if (last) {
@@ -260,7 +217,7 @@ export async function POST(request: NextRequest) {
   // whole Node process, not just this request (Node 15+ default).
   void (async () => {
     try {
-      const result = await loadCodingQuestions(questions, form, {
+      const result = await loadCodingQuestions(questions, {
         onLog: (phase, message) => {
           appendLoadLog(loadId, formatLogLine(phase, message)).catch((err) =>
             console.error("[Loadings] appendLoadLog failed:", (err as Error).message),

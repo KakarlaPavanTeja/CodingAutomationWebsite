@@ -4,39 +4,22 @@ import { useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoadLogPanel } from "@/components/problems/LoadLogPanel";
-
-const FIELDS = [
-  { key: "sheetName", label: "Sheet name", hint: "Name of the copied loading sheet" },
-  { key: "title", label: "QuestionSet title (B2)", hint: "" },
-  { key: "childOrder", label: "Child order (G3)", hint: "" },
-  { key: "parentResource", label: "Parent resource (H3)", hint: "" },
-  { key: "autoUnlock", label: "Auto unlock (I2)", hint: "" },
-] as const;
-
-type FieldKey = (typeof FIELDS)[number]["key"];
 
 export default function LoadCodingQuestionPage() {
   const { user, loading: authLoading } = useAuth();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [file, setFile] = useState<File | null>(null);
-  const [values, setValues] = useState<Record<FieldKey, string>>({
-    sheetName: "",
-    title: "",
-    childOrder: "",
-    parentResource: "",
-    autoUnlock: "",
-  });
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [loadId, setLoadId] = useState<string | null>(null);
 
-  const canSubmit =
-    !submitting && !!file && FIELDS.every((field) => values[field.key].trim() !== "");
+  // Pick a file, confirm. Everything else — question set, unit, order, parent
+  // — is derived server-side by the planner.
+  const canSubmit = !submitting && !!file;
 
   const submit = async () => {
     if (!canSubmit || !file) return;
@@ -45,7 +28,6 @@ export default function LoadCodingQuestionPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      for (const field of FIELDS) formData.append(field.key, values[field.key]);
 
       const res = await fetch("/api/loadings/coding-questions", {
         method: "POST",
@@ -113,25 +95,6 @@ export default function LoadCodingQuestionPage() {
             />
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            {FIELDS.map((field) => (
-              <div key={field.key} className="flex flex-col gap-1">
-                <Label htmlFor={`upload-${field.key}`} className="text-xs">
-                  {field.label}
-                </Label>
-                <Input
-                  id={`upload-${field.key}`}
-                  value={values[field.key]}
-                  placeholder={field.hint}
-                  disabled={submitting}
-                  onChange={(e) =>
-                    setValues((prev) => ({ ...prev, [field.key]: e.target.value }))
-                  }
-                />
-              </div>
-            ))}
-          </div>
-
           {loadId ? (
             <>
               <p className="text-xs text-muted-foreground">
@@ -145,12 +108,12 @@ export default function LoadCodingQuestionPage() {
           ) : (
             <div className="flex items-center gap-3">
               <Button size="sm" onClick={submit} disabled={!canSubmit}>
-                {submitting ? "Starting…" : "Run load"}
+                {submitting ? "Starting…" : "Load to beta"}
               </Button>
               <p className="text-xs text-muted-foreground">
                 {submitting
                   ? "Starting the load…"
-                  : "SHEET_LOADING can take several minutes; keep this tab open."}
+                  : "The question set, unit and order are picked automatically. SHEET_LOADING can take several minutes; keep this tab open."}
               </p>
             </div>
           )}

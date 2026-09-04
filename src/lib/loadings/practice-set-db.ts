@@ -99,6 +99,13 @@ export interface LoadBatch {
   childOrder?: number;
   /** Set only for a rollover-minted set — its Units common unit id. */
   commonUnitId?: string;
+  /**
+   * Set only for a rollover-minted set — the testing parent its `childOrder`
+   * was derived against, and the only parent the sheet may ever write. An
+   * existing unit is already placed in the beta tree, so it carries none and
+   * the placement cells are left alone.
+   */
+  parentResource?: string;
 }
 
 /**
@@ -107,10 +114,10 @@ export interface LoadBatch {
  *
  * Only a rollover-minted set is ever named here. Its row is new, and the
  * derived "Coding Testing N" title is exactly what the NEXT rollover counts
- * from. An ordinary set already has a row with its own name, and writing the
- * operator's form title into it would rename e.g. "Coding Testing 10" to
- * "Arrays practice" — `nextTestingUnitTitle` would then see max 9 and mint a
- * SECOND "Coding Testing 10".
+ * from. An ordinary set already has a row with its own name, and writing any
+ * other title into it would rename e.g. "Coding Testing 10" to "Arrays
+ * practice" — `nextTestingUnitTitle` would then see max 9 and mint a SECOND
+ * "Coding Testing 10".
  */
 export function registryUpsertForBatch(
   batch: Pick<LoadBatch, "questionSetId" | "unitTitle">,
@@ -179,8 +186,7 @@ export async function planQuestionSetBatches(
     // `loadCodingQuestions`). Writing it here left a phantom row for a set
     // holding nothing whenever SHEET_LOADING, the unlock or `confirmLinked`
     // then failed: the next load saw existingCount 0 with no minted title,
-    // fell into the "sheet" path, and created that set's unit under whatever
-    // parentResource / childOrder the operator happened to type.
+    // fell into the "sheet" path with no derived title or placement.
     batches.push({
       questionSetId: unit.questionSetId,
       startIndex: placed,
@@ -192,6 +198,7 @@ export async function planQuestionSetBatches(
       unitTitle: unit.title,
       childOrder: unit.childOrder,
       commonUnitId: unit.commonUnitId,
+      parentResource: unit.parentResource,
     });
     placed += count;
   }

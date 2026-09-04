@@ -58,6 +58,10 @@ test("createNextTestingUnit advances title and child order across two mints in o
     assert.equal(second.childOrder, 11);
     assert.notEqual(first.title, second.title);
     assert.notEqual(first.childOrder, second.childOrder);
+    // The parent the order was derived against travels with the mint, so the
+    // sheet can only ever place the unit under that same parent.
+    assert.equal(first.parentResource, "test-parent");
+    assert.equal(second.parentResource, "test-parent");
   } finally {
     if (prev) process.env.NKB_TESTING_PARENT_RESOURCE = prev;
     else delete process.env.NKB_TESTING_PARENT_RESOURCE;

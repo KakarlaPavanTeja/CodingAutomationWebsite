@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { LoadLogPanel, type LoadRecord } from "@/components/problems/LoadLogPanel";
@@ -11,22 +10,15 @@ import { canSubmitLoad, mayForceLoad, type PriorLoadStatus } from "@/components/
 
 interface LoadToBetaProps {
   problemId: string;
-  /** Seeds the sheet name and question set title. */
-  defaultTitle?: string;
 }
 
-const FIELDS = [
-  { key: "sheetName", label: "Sheet name", hint: "Name of the copied loading sheet" },
-  { key: "title", label: "QuestionSet title (B2)", hint: "" },
-  { key: "childOrder", label: "Child order (G3)", hint: "" },
-  { key: "parentResource", label: "Parent resource (H3)", hint: "" },
-  { key: "autoUnlock", label: "Auto unlock (I2)", hint: "" },
-  { key: "durationInSec", label: "Duration (optional)", hint: "Seconds or MM:SS" },
-] as const;
-
-type FieldKey = (typeof FIELDS)[number]["key"];
-
-export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
+/**
+ * One button. The load needs no configuration — the question set, unit title,
+ * child order and parent all come from the server-side planner — so clicking
+ * "Load to beta" starts it. The only thing that can stop it is the safety
+ * gate: a load that already completed needs "Load anyway" plus remarks.
+ */
+export function LoadToBeta({ problemId }: LoadToBetaProps) {
   const [open, setOpen] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
@@ -38,14 +30,9 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
   const [submitError, setSubmitError] = useState("");
   const [activeLoadId, setActiveLoadId] = useState<string | null>(null);
   const [done, setDone] = useState(false);
-  const [values, setValues] = useState<Record<FieldKey, string>>({
-    sheetName: defaultTitle,
-    title: defaultTitle,
-    childOrder: "",
-    parentResource: "",
-    autoUnlock: "",
-    durationInSec: "",
-  });
+  // Set once the first load of this component's life has been auto-started, so
+  // reopening the panel never fires a second one behind the operator's back.
+  const [autoStarted, setAutoStarted] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,9 +97,7 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            loadAnyway ? { ...values, remarks: remarks.trim() } : values,
-          ),
+          body: JSON.stringify(loadAnyway ? { remarks: remarks.trim() } : {}),
         },
       );
       const data = await res.json();
@@ -135,15 +120,31 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
     }
   };
 
+  const openAndMaybeStart = () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    // Auto-start only for a problem with no load history, and only once the
+    // status GET has answered. A prior load — completed or failed — has a
+    // banner the operator needs to read before deciding, so that case opens
+    // the panel and waits.
+    if (!autoStarted && !activeLoadId && configured !== null && priorStatus === "none" && canSubmit) {
+      setAutoStarted(true);
+      void submit();
+    }
+  };
+
   return (
     <>
       <Button
         size="sm"
         variant={open ? "secondary" : "default"}
-        onClick={() => setOpen((v) => !v)}
+        onClick={openAndMaybeStart}
         className="shrink-0"
       >
-        {open ? "Cancel" : "Load to beta"}
+        {open ? "Hide" : "Load to beta"}
       </Button>
 
       {open && (
@@ -208,25 +209,6 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
                 </div>
               ) : null}
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                {FIELDS.map((field) => (
-                  <div key={field.key} className="flex flex-col gap-1">
-                    <Label htmlFor={`load-${field.key}`} className="text-xs">
-                      {field.label}
-                    </Label>
-                    <Input
-                      id={`load-${field.key}`}
-                      value={values[field.key]}
-                      placeholder={field.hint}
-                      disabled={submitting}
-                      onChange={(e) =>
-                        setValues((prev) => ({ ...prev, [field.key]: e.target.value }))
-                      }
-                    />
-                  </div>
-                ))}
-              </div>
-
               {mayForceLoad(priorStatus) && (
                 <div className="basis-full mt-3 flex items-center gap-2">
                   <Checkbox
@@ -261,12 +243,12 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
 
               <div className="mt-3 flex items-center gap-3">
                 <Button size="sm" onClick={submit} disabled={!canSubmit}>
-                  {submitting ? "Starting…" : "Run load"}
+                  {submitting ? "Starting…" : "Load to beta"}
                 </Button>
                 <p className="text-xs text-muted-foreground">
                   {submitting
                     ? "Starting the load…"
-                    : "Sheet prep → S3 upload → SHEET_LOADING → unlock. This can take several minutes."}
+                    : "Question set, unit and order are picked automatically. Sheet prep → S3 upload → SHEET_LOADING → unlock takes several minutes."}
                 </p>
               </div>
 

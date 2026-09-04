@@ -35,10 +35,10 @@ export const ZIP_PUBLIC_URL_BASE = (
   "https://new-assets.ccbp.in/frontend/ccbp_beta/content_loading/uploads/"
 ).replace(/\/$/, "");
 
-/** Parent resource the auto-created "Coding Testing N" units hang off. */
-export const NKB_TESTING_PARENT_RESOURCE = (
-  process.env.NKB_TESTING_PARENT_RESOURCE || ""
-).trim();
+// NKB_TESTING_PARENT_RESOURCE (the parent the auto-created "Coding Testing N"
+// units hang off) is deliberately NOT a constant here: a module-load snapshot
+// could drift from what `createNextTestingUnit` derives the child order
+// against. It is read there, at call time, and travels with the batch.
 
 export function nkbLoadCredentials() {
   return {
