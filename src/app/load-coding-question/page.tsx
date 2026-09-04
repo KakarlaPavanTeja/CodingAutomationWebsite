@@ -69,7 +69,7 @@ export default function LoadCodingQuestionPage() {
   return (
     <div className="container mx-auto max-w-2xl space-y-6 px-4 py-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Load coding question</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Load CQ</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Upload a <code className="text-xs">coding_questions.json</code> (or a zip
           containing one) directly into NKB beta, without going through a problem.

@@ -160,8 +160,60 @@ export function LoadToBeta({ problemId }: LoadToBetaProps) {
     }
   };
 
+  // Prior-load status ("already loaded" / "last attempt failed", including the
+  // beta links) is status the operator wants at a glance, not part of the load
+  // form — so it renders unconditionally here, outside `open`, instead of only
+  // once the collapsed panel below is expanded. It reads the same `lastLoad`
+  // / `lastFailedLoad` state the panel's form logic uses (one fetch, above),
+  // so there is exactly one place this banner is rendered. "completed" takes
+  // priority, same as `priorStatus`: a load that has since succeeded is what
+  // matters now, even if an earlier attempt had failed. A failed banner never
+  // lists question links — a link to a question not actually in beta is the
+  // false-success this feature exists to prevent.
+  const banner = lastLoad ? (
+    <div className="basis-full rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+      <p className="font-medium text-foreground">
+        Already loaded{" "}
+        {lastLoad.finishedAt ? new Date(lastLoad.finishedAt).toLocaleString() : "previously"}
+        {lastLoad.questionSetId ? ` — question set ${lastLoad.questionSetId}` : ""}
+      </p>
+      {lastLoad.questionIds.length > 0 && (
+        <ul className="mt-1 space-y-0.5">
+          {lastLoad.questionIds.map((questionId, i) => (
+            <li key={`${i}-${questionId}`}>
+              <a
+                className="underline"
+                href={`https://learning-beta.earlywave.in/question/${questionId}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {questionId}
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  ) : lastFailedLoad ? (
+    <div className="basis-full rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
+      <p className="font-medium text-foreground">
+        Last attempt failed{" "}
+        {lastFailedLoad.finishedAt
+          ? new Date(lastFailedLoad.finishedAt).toLocaleString()
+          : "previously"}
+      </p>
+      {lastFailedLoad.error && <p className="mt-1 text-muted-foreground">{lastFailedLoad.error}</p>}
+      <p className="mt-1 text-muted-foreground">
+        A plain retry will hit the same error if the cause hasn&apos;t changed — expand &quot;Load
+        to beta&quot; below and check &quot;Load anyway&quot; to regenerate ids instead.
+      </p>
+    </div>
+  ) : null;
+
   return (
     <>
+      {banner}
+
       <Button
         size="sm"
         variant={open ? "secondary" : "default"}
@@ -191,50 +243,6 @@ export function LoadToBeta({ problemId }: LoadToBetaProps) {
             </>
           ) : (
             <>
-              {lastLoad ? (
-                <div className="basis-full mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
-                  <p className="font-medium text-foreground">
-                    Already loaded{" "}
-                    {lastLoad.finishedAt
-                      ? new Date(lastLoad.finishedAt).toLocaleString()
-                      : "previously"}
-                    {lastLoad.questionSetId ? ` — question set ${lastLoad.questionSetId}` : ""}
-                  </p>
-                  {lastLoad.questionIds.length > 0 && (
-                    <ul className="mt-1 space-y-0.5">
-                      {lastLoad.questionIds.map((questionId, i) => (
-                        <li key={`${i}-${questionId}`}>
-                          <a
-                            className="underline"
-                            href={`https://learning-beta.earlywave.in/question/${questionId}`}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {questionId}
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              ) : lastFailedLoad ? (
-                <div className="basis-full mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
-                  <p className="font-medium text-foreground">
-                    Last attempt failed{" "}
-                    {lastFailedLoad.finishedAt
-                      ? new Date(lastFailedLoad.finishedAt).toLocaleString()
-                      : "previously"}
-                  </p>
-                  {lastFailedLoad.error && (
-                    <p className="mt-1 text-muted-foreground">{lastFailedLoad.error}</p>
-                  )}
-                  <p className="mt-1 text-muted-foreground">
-                    A plain retry will hit the same error if the cause hasn&apos;t changed — check
-                    &quot;Load anyway&quot; below to regenerate ids instead.
-                  </p>
-                </div>
-              ) : null}
-
               {mayForceLoad(priorStatus) && (
                 <div className="basis-full mt-3 flex items-center gap-2">
                   <Checkbox

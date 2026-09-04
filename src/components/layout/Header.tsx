@@ -16,7 +16,7 @@ const BASE_NAV = [
 const ADMIN_NAV_INSERT = { href: "/admin", label: "Admin" };
 const PROBLEMS_NAV = { href: "/problems", label: "Problems" };
 const PREPARE_EXAM_NAV = { href: "/prepare-exam-json", label: "Prepare Exam JSON" };
-const LOAD_CODING_QUESTION_NAV = { href: "/load-coding-question", label: "Load Coding Question" };
+const LOAD_CODING_QUESTION_NAV = { href: "/load-coding-question", label: "Load CQ" };
 const WHATS_NEW_NAV = { href: "/whats-new", label: "What's New" };
 const GUIDE_NAV = { href: "/guide", label: "Guide" };
 
