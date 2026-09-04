@@ -62,6 +62,24 @@ export default {
   dbCredentials: {
     url: resolveDatabaseUrl(target),
   },
+  /**
+   * The `pg_stat_statements` extension (enabled by default on this Aiven cluster)
+   * owns two views in `public`. drizzle-kit introspects `public`, does not find them
+   * in schema.ts, and emits `DROP VIEW` — which Postgres refuses, because the
+   * extension requires them:
+   *
+   *   cannot drop view pg_stat_statements because extension pg_stat_statements requires it
+   *
+   * That error aborts the ENTIRE push, so statements queued after it never run. On
+   * 2026-09-04 this left `coding_question_loads` created but without its two foreign
+   * keys, which then had to be added by hand. Excluding the views here stops
+   * drizzle-kit generating the DROP at all.
+   *
+   * The alternative — relocating the extension to its own schema — is a change to a
+   * managed cluster whose provider may query or restore it; not worth the risk for a
+   * problem a filter solves.
+   */
+  tablesFilter: ["!pg_stat_statements", "!pg_stat_statements_info"],
   strict: true,
   verbose: true,
 } satisfies Config;

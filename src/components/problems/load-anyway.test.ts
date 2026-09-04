@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canSubmitLoad, mayForceLoad, type PriorLoadStatus } from "./load-anyway";
+import {
+  canSubmitLoad,
+  canSubmitUpload,
+  mayForceLoad,
+  mayForceUploadRetry,
+  type PriorLoadStatus,
+} from "./load-anyway";
 
 const STATUSES: PriorLoadStatus[] = ["none", "failed", "completed"];
 
@@ -67,4 +73,50 @@ test("canSubmitLoad: a running load blocks a FORCED submit too, remarks or not",
 test("canSubmitLoad: the same states submit fine once nothing is running", () => {
   assert.equal(canSubmitLoad("none", false, "", false), true);
   assert.equal(canSubmitLoad("completed", true, "reload with new ids", false), true);
+});
+
+test("mayForceUploadRetry: hidden with no prior attempt — a first upload is never a forced upload", () => {
+  assert.equal(mayForceUploadRetry("none"), false);
+});
+
+test("mayForceUploadRetry: hidden after a completed prior attempt — nothing to pre-empt without a problemId", () => {
+  assert.equal(mayForceUploadRetry("completed"), false);
+});
+
+test("mayForceUploadRetry: shown once this session's own attempt failed", () => {
+  assert.equal(mayForceUploadRetry("failed"), true);
+});
+
+test("canSubmitUpload: no file blocks submit, forced or not", () => {
+  assert.equal(canSubmitUpload(false, false, "", false), false);
+  assert.equal(canSubmitUpload(false, true, "reason", false), false);
+});
+
+test("canSubmitUpload: a first upload needs no force ticked", () => {
+  assert.equal(canSubmitUpload(true, false, "", false), true);
+});
+
+test("canSubmitUpload: forcing requires real remarks", () => {
+  assert.equal(canSubmitUpload(true, true, "reload with new ids", false), true);
+});
+
+test("canSubmitUpload: empty remarks block a forced submit", () => {
+  assert.equal(canSubmitUpload(true, true, "", false), false);
+});
+
+test("canSubmitUpload: whitespace-only remarks block a forced submit", () => {
+  assert.equal(canSubmitUpload(true, true, "   \n\t ", false), false);
+});
+
+test("canSubmitUpload: mid-submit blocks another submit, forced or not", () => {
+  assert.equal(canSubmitUpload(true, false, "", true), false);
+  assert.equal(canSubmitUpload(true, true, "reload with new ids", true), false);
+});
+
+test("canSubmitUpload: a bare resubmit is fine even after a completed prior upload (no 409 to dodge)", () => {
+  // Unlike canSubmitLoad, canSubmitUpload takes no priorStatus at all — a
+  // completed prior attempt in this session never blocks the next bare
+  // submit, because the server's completed-duplicate 409 gate is
+  // problemId-only and an upload request never reaches it.
+  assert.equal(canSubmitUpload(true, false, "", false), true);
 });

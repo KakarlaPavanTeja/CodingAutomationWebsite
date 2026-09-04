@@ -278,6 +278,15 @@ export async function POST(request: NextRequest) {
       // sheet can legitimately list an id twice, hence the de-dupe.
       const { batches } = result;
       const questionSetIds = [...new Set(batches.map((b) => b.questionSetId))];
+      // Only meaningful for the success-summary log (see `finishLoadRecord`)
+      // — computed regardless of outcome since it's cheap, but ignored there
+      // unless `status` is "completed".
+      const orderRange = batches.length
+        ? {
+            start: Math.min(...batches.map((b) => b.orderStart)),
+            end: Math.max(...batches.map((b) => b.orderStart + b.questionCount - 1)),
+          }
+        : null;
       await finishLoadRecord(loadId, {
         status: result.success ? "completed" : "failed",
         questionSetId: questionSetIds.join(", ") || null,
@@ -286,6 +295,7 @@ export async function POST(request: NextRequest) {
         // task output is the one worth linking to.
         taskOutputUrl: batches[batches.length - 1]?.taskOutputUrl ?? null,
         error: result.error ?? null,
+        orderRange,
       });
     } catch (e) {
       const message = (e as Error).message;
