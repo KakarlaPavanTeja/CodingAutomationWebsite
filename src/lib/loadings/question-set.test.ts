@@ -6,7 +6,12 @@ import {
   findAlreadyLoadedQuestions,
   parseQuestionSetQuestionRows,
 } from "./question-set";
-import { buildSheetCellUpdates, deriveSheetName, loadCodingQuestions } from "./load-coding-questions";
+import {
+  buildSheetCellUpdates,
+  deriveSheetName,
+  loadCodingQuestions,
+  resolveOrderStart,
+} from "./load-coding-questions";
 
 const SET = "11111111-1111-4111-8111-111111111111";
 const Q1 = "22222222-2222-4222-8222-222222222222";
@@ -245,4 +250,22 @@ test("alreadyLoadedMessage names the ids, their sets and the way out", () => {
   assert.match(message, new RegExp(Q1));
   assert.match(message, new RegExp(SET));
   assert.match(message, /Load anyway \(regenerate ids\)/);
+});
+
+test("prefers a freshly-read order over a stale planned one", () => {
+  assert.equal(resolveOrderStart({ planned: 29, fresh: 30 }), 30);
+});
+
+test("keeps the planned order when the fresh read is not higher", () => {
+  // A set that lost questions must not rewind the order and overwrite rows.
+  assert.equal(resolveOrderStart({ planned: 30, fresh: 28 }), 30);
+});
+
+test("keeps the planned order when the fresh read is unavailable", () => {
+  // The admin scrape can fail; a stale order beats refusing to load.
+  assert.equal(resolveOrderStart({ planned: 29, fresh: null }), 29);
+});
+
+test("a new set starts at its planned order", () => {
+  assert.equal(resolveOrderStart({ planned: 1, fresh: null }), 1);
 });

@@ -40,9 +40,11 @@ import {
 } from "./practice-set-db";
 import {
   alreadyLoadedMessage,
+  capacityFromLookup,
   findAlreadyLoadedQuestions,
   lookupQuestionSetQuestions,
 } from "./question-set";
+import { withSetLock } from "./set-lock";
 
 const SHEET_LOADING_POLL = { maxAttempts: 100, pollMs: 3000 };
 const UNLOCK_POLL = { maxAttempts: 60, pollMs: 3000 };
@@ -190,19 +192,74 @@ async function prepareSheet(
   return url;
 }
 
-async function runBatch(
+/**
+ * Which order does this batch actually start at?
+ *
+ * `planned` was computed before the registry sweep, the zip build and the S3
+ * upload; `fresh` is the value re-read inside the set lock, or null when the
+ * admin scrape failed. Take the fresh value only when it is HIGHER: a set that
+ * lost questions must not rewind the order and overwrite existing rows.
+ */
+export function resolveOrderStart({
+  planned,
+  fresh,
+}: {
+  planned: number;
+  fresh: number | null;
+}): number {
+  return fresh != null && fresh > planned ? fresh : planned;
+}
+
+/**
+ * Serialised per question set: two loads into the same set both read its
+ * `maxOrder`, both claim the same order, and the backend rejects the loser
+ * with a bare FAILURE. See `set-lock.ts`.
+ */
+function runBatch(
+  batch: LoadBatch,
+  questions: CodingQuestionRow[],
+  onLog: (phase: string, message: string) => void,
+): Promise<BatchResult> {
+  return withSetLock(batch.questionSetId, () => runBatchLocked(batch, questions, onLog));
+}
+
+async function runBatchLocked(
   batch: LoadBatch,
   questions: CodingQuestionRow[],
   onLog: (phase: string, message: string) => void,
 ): Promise<BatchResult> {
   const slice = questions.slice(batch.startIndex, batch.startIndex + batch.count);
+
+  // The planner's `orderStart` can be minutes old by now. Re-read it inside
+  // the lock so the value used is the value that was true a moment ago. Only
+  // for `json`: a `sheet` batch CREATES the set, so there is nothing to
+  // re-read and the planner's value is authoritative.
+  let orderStart = batch.orderStart;
+  if (batch.loadVia === "json") {
+    try {
+      const fresh = capacityFromLookup(await lookupQuestionSetQuestions(batch.questionSetId));
+      orderStart = resolveOrderStart({ planned: batch.orderStart, fresh: fresh.nextOrder });
+    } catch (err) {
+      // Fail open, like the pre-flight duplicate check: a flaky admin scrape
+      // must not block a legitimate load.
+      onLog(
+        "zip",
+        `set ${batch.questionSetId}: could not re-read the order (${(err as Error).message}) — continuing at the planned order ${batch.orderStart}`,
+      );
+    }
+  }
+
   const prepared = prepareQuestionsForAdminZip(slice, {
     questionSetId: batch.questionSetId,
-    orderStart: batch.orderStart,
+    orderStart,
   });
+  // The resolved order is logged because this failure is silent: the backend
+  // returns FAILURE with no message, so without this line the next collision
+  // costs the same investigation again.
   onLog(
     "zip",
-    `set ${batch.questionSetId}: packing ${slice.length} question(s) starting at order ${batch.orderStart}`,
+    `set ${batch.questionSetId}: packing ${slice.length} question(s) starting at order ${orderStart}` +
+      (orderStart === batch.orderStart ? "" : ` (planned ${batch.orderStart}, re-read inside the set lock)`),
   );
   const zip = await buildAdminZip(
     prepared,
@@ -214,7 +271,7 @@ async function runBatch(
   const result: BatchResult = {
     questionSetId: batch.questionSetId,
     questionCount: slice.length,
-    orderStart: batch.orderStart,
+    orderStart,
     loadVia: batch.loadVia,
     isNewSet: batch.isNewSet,
     questionIds: prepared.normalized.map((r) => String(r.question_id)),
