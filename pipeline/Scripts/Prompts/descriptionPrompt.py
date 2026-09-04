@@ -52,8 +52,26 @@ The scenario adds flavor; it must NEVER make the problem harder to understand th
 # is hedged layout prose like "may appear on separate lines or on the same line,
 # because the input is read token by token" — which never tells the solver the
 # actual layout.
-_INPUT_LAYOUT_RULE = """
-- **STATE ONE EXACT LAYOUT — NO HEDGING (APPLIES AT EVERY SCENARIO LEVEL).** Commit to a SINGLE concrete input layout and describe it precisely. NEVER write vague either-or phrasing such as "may appear on separate lines or on the same line", "in any whitespace-separated form", or "because the input is read token by token". Even when the `USER CODE` reads token-by-token (`cin >>`, `scanf`, `input().split()`) and would technically accept any whitespace, pick the ONE layout shown in your Examples and describe THAT. Be explicit about what sits on each line and the separator between items — e.g. "The first line contains the integer `n`." then "The second line contains the `n` strings separated by single spaces.", OR "Each of the next `n` lines contains one string." when that is what the Examples show. The layout you describe MUST match the Input blocks of your Examples exactly (same lines, same separators)."""
+_INPUT_LAYOUT_RULE_BODY = """
+- **STATE ONE EXACT LAYOUT — NO HEDGING (APPLIES AT EVERY SCENARIO LEVEL).** Commit to a SINGLE concrete input layout and describe it precisely. NEVER write vague either-or phrasing such as "may appear on separate lines or on the same line", "in any whitespace-separated form", or "because the input is read token by token". Even when the `USER CODE` reads token-by-token (`cin >>`, `scanf`, `input().split()`) and would technically accept any whitespace, pick the ONE layout shown in your Examples and describe THAT. Be explicit about what sits on each line and the separator between items — e.g. "The first line contains the integer `n`." then "The second line contains the `n` strings separated by single spaces.", OR "Each of the next `n` lines contains one string." when that is what the Examples show."""
+
+
+def _is_function_style(question_type: str) -> bool:
+    return (question_type or "").lower() not in ("node", "nonfunction")
+
+
+# Function-type Examples deliberately show `name = value` display form while the Input
+# Format states the raw stdin layout, so the byte-for-byte match demanded above cannot
+# apply there — the two forms must agree on VALUES, not on characters. Without this
+# split the model gets two contradictory orders and collapses the Input Format back to
+# `n = 4` prose, which is what students then have to read.
+_INPUT_LAYOUT_RULE_FUNCTION = _INPUT_LAYOUT_RULE_BODY + """ Your Examples show this SAME data in `name = value` display form (see the FUNCTION-BASED EXAMPLE block), so they will NOT match this layout character for character — that is intended. What MUST match is the DATA: every variable this layout carries appears in the Example Input block, in the same order, with the same values, none added and none dropped."""
+
+_INPUT_LAYOUT_RULE = _INPUT_LAYOUT_RULE_BODY + """ The layout you describe MUST match the Input blocks of your Examples exactly (same lines, same separators)."""
+
+
+def _input_layout_rule(question_type: str) -> str:
+    return _INPUT_LAYOUT_RULE_FUNCTION if _is_function_style(question_type) else _INPUT_LAYOUT_RULE
 
 
 def get_structure_only_prompt(problem_name, question_type, user_code):
@@ -175,7 +193,7 @@ Your response MUST END immediately after the **Output Format** section.
 - Title: **Input Format** followed by a blank line.
 - Describe the input structure consistent with the ORIGINAL examples and the `USER CODE` logic.
 - **BULLET POINTS**: Use bullet points to describe inputs line-by-line or item-by-item.
-- Keep the original variable names.{_INPUT_LAYOUT_RULE}
+- Keep the original variable names.{_input_layout_rule(question_type)}
 
 **Output Format**
 - Title: **Output Format** followed by a blank line.
@@ -202,8 +220,7 @@ If any instruction above ever conflicts with the FOUR PILLARS (scenario, variabl
 
 
 def _function_example_format_addon(question_type: str) -> str:
-    qt = (question_type or "").lower()
-    if qt in ("node", "nonfunction"):
+    if not _is_function_style(question_type):
         return ""
     return """
 **FUNCTION-BASED EXAMPLE INPUT/OUTPUT (MANDATORY)**:
@@ -211,7 +228,8 @@ def _function_example_format_addon(question_type: str) -> str:
 - Include size/count variables (such as `m`) even when they are NOT function parameters. The example must mirror the **Input Format** exactly, not just the function signature — never silently drop a variable the Input Format defines.
 - Do NOT use raw stdin layout or anonymous lines without variable names.
 - In each **Output:** block, write ONLY the function return value (scalar, array, or structured value) exactly as the reference code returns it — not full-program stdout unless the code prints as its final result.
-- **Input Format** and **Output Format** must describe the same variable-based representation shown in the examples.
+- **Input Format** and **Output Format** are the ONE EXCEPTION: they describe the RAW STDIN / STDOUT layout line by line, NOT the `name = value` display form — e.g. "The first line contains two space-separated integers `n` and `k`." then "The second line contains `n` space-separated integers — the elements of `nums`.". Never write an Input Format bullet as an assignment (`n = 4`), and never name a collection without saying which line it sits on and what separates its items.
+- The two forms carry the SAME data. Every variable the Input Format layout lists appears in each Example **Input:** block as `name = value`, in the same order, with the same values — none added, none dropped. The layout tells the solver how the data arrives on stdin; the display form lets a student see at a glance WHICH number is which. They must never disagree on the data itself.
 """
 
 def _node_type_addon(question_type: str) -> str:
@@ -458,7 +476,7 @@ Your response MUST END immediately after the **Output Format** section.
 - Examples of good phrasing:
   - "- The first string represents `text`, the string to be matched."
   - "- The second string represents `regex`, the pattern to match against."
-- Your description MUST be consistent with the Examples you generated earlier.{_INPUT_LAYOUT_RULE}
+- Your description MUST be consistent with the Examples you generated earlier.{_input_layout_rule(question_type)}
 
 **Output Format**
 - Title: **Output Format** followed by a blank line.
