@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { capacityFromLookup, parseQuestionSetQuestionRows } from "./question-set";
-import { buildSheetCellUpdates } from "./load-coding-questions";
+import { buildSheetCellUpdates, loadCodingQuestions } from "./load-coding-questions";
 
 const SET = "11111111-1111-4111-8111-111111111111";
 const Q1 = "22222222-2222-4222-8222-222222222222";
@@ -99,4 +99,21 @@ test("buildSheetCellUpdates turns MM:SS into a seconds formula", () => {
   assert.equal(withDuration("47:01"), "=47*60+01");
   assert.equal(withDuration("120"), "120");
   assert.equal(withDuration(""), undefined);
+});
+
+test("loadCodingQuestions reports missing config through onLog", async () => {
+  const seen: string[] = [];
+  const prev = process.env.NKB_LOAD_DATA_PASSWORD;
+  delete process.env.NKB_LOAD_DATA_PASSWORD;
+
+  const result = await loadCodingQuestions(
+    [{ question_id: "q1" }],
+    { sheetName: "s", title: "t", childOrder: "1", parentResource: "p", autoUnlock: "TRUE" },
+    { onLog: (phase, msg) => seen.push(`${phase}:${msg}`) },
+  );
+
+  assert.equal(result.success, false);
+  assert.match(result.error ?? "", /Missing/);
+  assert.ok(seen.some((l) => l.startsWith("config:")));
+  if (prev) process.env.NKB_LOAD_DATA_PASSWORD = prev;
 });

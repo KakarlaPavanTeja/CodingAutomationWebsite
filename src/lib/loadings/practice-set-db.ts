@@ -107,7 +107,6 @@ export interface LoadBatch {
  */
 export async function planQuestionSetBatches(
   total: number,
-  unitName = "",
   onLog: (phase: string, message: string) => void = () => {},
 ): Promise<{ batches: LoadBatch[]; registryRows: number }> {
   if (total <= 0) return { batches: [], registryRows: 0 };

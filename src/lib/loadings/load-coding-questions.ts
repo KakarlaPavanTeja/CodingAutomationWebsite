@@ -162,16 +162,22 @@ async function runBatch(
   form: LoadForm,
   batchIndex: number,
   batchTotal: number,
+  onLog: (phase: string, message: string) => void,
 ): Promise<BatchResult> {
   const slice = questions.slice(batch.startIndex, batch.startIndex + batch.count);
   const prepared = prepareQuestionsForAdminZip(slice, {
     questionSetId: batch.questionSetId,
     orderStart: batch.orderStart,
   });
+  onLog(
+    "zip",
+    `set ${batch.questionSetId}: packing ${slice.length} question(s) starting at order ${batch.orderStart}`,
+  );
   const zip = await buildAdminZip(
     prepared,
     batch.loadVia === "json" ? LINK_FILE_JSON_LOADING : LINK_FILE_SHEET_LOADING,
   );
+  onLog("upload", `set ${batch.questionSetId}: uploading zip`);
   const uploadedZipUrl = await uploadZipToS3(zip);
 
   const result: BatchResult = {
@@ -188,6 +194,7 @@ async function runBatch(
   };
 
   if (batch.loadVia === "json") {
+    onLog("task", `set ${batch.questionSetId}: running JSON_LOADING`);
     const load = await runNkbTask(
       "JSON_LOADING",
       { load_data_type: "QUESTION_SET", input_dir_path_url: uploadedZipUrl },
@@ -198,6 +205,10 @@ async function runBatch(
       result.error = load.error;
       return result;
     }
+    onLog(
+      "verify",
+      `set ${batch.questionSetId}: confirming ${result.questionIds.length} question(s) linked`,
+    );
     const check = await confirmLinked(batch.questionSetId, result.questionIds);
     result.success = check.linked;
     if (!check.linked) {
@@ -206,11 +217,24 @@ async function runBatch(
     return result;
   }
 
-  const unitId = form.commonUnitId?.trim() || randomUUID();
+  // An auto-created testing unit's identity comes from the planner, not the
+  // operator's form — those three fields win over the caller's values.
+  const effectiveForm: LoadForm =
+    batch.unitTitle != null
+      ? {
+          ...form,
+          title: batch.unitTitle,
+          childOrder: String(batch.childOrder),
+          commonUnitId: batch.commonUnitId,
+        }
+      : form;
+
+  const unitId = effectiveForm.commonUnitId?.trim() || randomUUID();
   const sheetName = batchTotal > 1 ? `${form.sheetName} (${batchIndex + 1})` : form.sheetName;
   result.commonUnitId = unitId;
-  result.sheetUrl = await prepareSheet(batch.questionSetId, unitId, form, sheetName);
+  result.sheetUrl = await prepareSheet(batch.questionSetId, unitId, effectiveForm, sheetName);
 
+  onLog("task", `set ${batch.questionSetId}: running SHEET_LOADING`);
   const load = await runNkbTask(
     "SHEET_LOADING",
     {
@@ -226,6 +250,7 @@ async function runBatch(
     return result;
   }
 
+  onLog("unlock", `set ${batch.questionSetId}: unlocking for users`);
   const unlock = await runNkbTask(
     "UNLOCK_RESOURCES_FOR_USERS",
     { resource_ids: [batch.questionSetId] },
@@ -236,6 +261,10 @@ async function runBatch(
     return result;
   }
 
+  onLog(
+    "verify",
+    `set ${batch.questionSetId}: confirming ${result.questionIds.length} question(s) linked`,
+  );
   const check = await confirmLinked(batch.questionSetId, result.questionIds);
   result.success = check.linked;
   if (!check.linked) {
@@ -247,8 +276,12 @@ async function runBatch(
 export async function loadCodingQuestions(
   questions: CodingQuestionRow[],
   form: LoadForm,
+  opts: { onLog?: (phase: string, message: string) => void } = {},
 ): Promise<LoadResult> {
+  const onLog = opts.onLog ?? (() => {});
+
   const missing = missingLoadingsConfig();
+  onLog("config", missing.length ? `missing: ${missing.join(", ")}` : "loading is configured");
   if (missing.length) {
     return {
       success: false,
@@ -258,11 +291,13 @@ export async function loadCodingQuestions(
     };
   }
 
-  const { batches } = await planQuestionSetBatches(questions.length, form.title);
+  onLog("plan", `planning batches for ${questions.length} question(s)`);
+  const { batches } = await planQuestionSetBatches(questions.length, onLog);
+  onLog("plan", `${batches.length} batch(es) across question sets`);
   const results: BatchResult[] = [];
 
   for (let i = 0; i < batches.length; i++) {
-    const result = await runBatch(batches[i], questions, form, i, batches.length);
+    const result = await runBatch(batches[i], questions, form, i, batches.length, onLog);
     results.push(result);
     if (result.success) {
       await upsertRegistryRow(result.questionSetId, form.title).catch((err) =>
