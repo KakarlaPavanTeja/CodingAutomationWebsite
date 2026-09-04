@@ -61,7 +61,8 @@ export function dedupeEvaluationMetricsByLanguage(rows: CodingQuestionRow[]): Co
   });
 }
 
-function readQuestionId(item: CodingQuestionRow): string {
+/** Where a question's id lives in the many shapes the pipeline/composer emit. */
+export function readQuestionId(item: CodingQuestionRow): string {
   if (!item || typeof item !== "object") return "";
   const nested = item.question as Record<string, unknown> | undefined;
   const raw =

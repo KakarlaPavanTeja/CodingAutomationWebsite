@@ -118,6 +118,14 @@ export function LoadLogPanel({ loadId, onDone }: LoadLogPanelProps) {
         </p>
       )}
 
+      {status === "failed" && record?.taskOutputUrl && (
+        <p className="text-xs">
+          <a className="underline" href={record.taskOutputUrl} target="_blank" rel="noreferrer">
+            Task output from the backend
+          </a>
+        </p>
+      )}
+
       {status === "completed" && record && record.questionIds.length > 0 && (
         <ul className="space-y-0.5 text-xs">
           {record.questionIds.map((questionId, i) => (

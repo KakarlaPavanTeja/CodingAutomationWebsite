@@ -63,11 +63,45 @@ export async function createLoadRecord(args: {
   return row.id;
 }
 
-/** Append rather than overwrite, so concurrent phase writes cannot lose lines. */
+/**
+ * Ceiling on the stored log. No real load comes near it (a whole load logs
+ * well under 1 kB), but `appendLoadLog` appends without bound, so the column
+ * gets a limit before something in a retry loop finds it.
+ */
+export const LOG_CAP_CHARS = 64 * 1024;
+export const LOG_TRUNCATION_MARKER = "[... earlier log lines dropped: log truncated ...]";
+
+/**
+ * Keep the MOST RECENT `cap` characters and head them with a marker on its own
+ * line, so a truncated log can never be mistaken for a complete one. The first
+ * line after the marker may be a partial one — that is what the marker says,
+ * and it beats dropping the newest line when the cut lands mid-line.
+ *
+ * The SQL in `appendLoadLog` is a transcription of this function. The append
+ * has to stay ONE statement — a read-modify-write would reintroduce the
+ * lost-line race the SQL concatenation exists to avoid — so this is the
+ * testable statement of the rule, and the two change together.
+ */
+export function capLogText(text: string, cap: number = LOG_CAP_CHARS): string {
+  if (text.length <= cap) return text;
+  const marker = `${LOG_TRUNCATION_MARKER}\n`;
+  return marker + text.slice(text.length - Math.max(0, cap - marker.length));
+}
+
+/**
+ * Append rather than overwrite, so concurrent phase writes cannot lose lines —
+ * and cap the result in the SAME statement (see `capLogText`), because a
+ * read-modify-write would bring that lost-line race straight back.
+ */
 export async function appendLoadLog(id: string, line: string): Promise<void> {
+  const marker = `${LOG_TRUNCATION_MARKER}\n`;
+  const appended = sql`${codingQuestionLoads.logs} || ${line + "\n"}`;
   await db
     .update(codingQuestionLoads)
-    .set({ logs: sql`${codingQuestionLoads.logs} || ${line + "\n"}` })
+    .set({
+      logs: sql`case when length(${appended}) <= ${sql.raw(String(LOG_CAP_CHARS))} then ${appended}
+        else ${marker} || right(${appended}, ${sql.raw(String(LOG_CAP_CHARS - marker.length))}) end`,
+    })
     .where(eq(codingQuestionLoads.id, id));
 }
 

@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { capacityFromLookup, parseQuestionSetQuestionRows } from "./question-set";
+import {
+  alreadyLoadedMessage,
+  capacityFromLookup,
+  findAlreadyLoadedQuestions,
+  parseQuestionSetQuestionRows,
+} from "./question-set";
 import { buildSheetCellUpdates, deriveSheetName, loadCodingQuestions } from "./load-coding-questions";
 
 const SET = "11111111-1111-4111-8111-111111111111";
@@ -202,4 +207,42 @@ test("loadCodingQuestions swallows a throwing onLog instead of failing the call"
   assert.equal(result.success, false);
   assert.match(result.error ?? "", /Missing/);
   if (prev) process.env.NKB_LOAD_DATA_PASSWORD = prev;
+});
+
+test("a question-id search reports the set that holds it (live-admin row shape)", () => {
+  // Verified against the beta admin: searching the changelist by QUESTION id
+  // returns that question's row, and the parser — matching the cell equal to
+  // the search term — reports the row's other uuid, the question set.
+  const html = changelist([`<tr><td>${SET}</td><td>${Q1}</td><td>26</td><td>True</td></tr>`]);
+  assert.deepEqual(parseQuestionSetQuestionRows(html, Q1), [
+    { questionSetId: Q1, questionId: SET, order: 26 },
+  ]);
+});
+
+test("findAlreadyLoadedQuestions reports only the ids the admin knows, de-duped", async () => {
+  const asked: string[] = [];
+  const existing = await findAlreadyLoadedQuestions([Q1, " ", Q2, Q1, ""], async (id) => {
+    asked.push(id);
+    return id === Q1 ? [SET, OTHER_SET] : [];
+  });
+  assert.deepEqual(asked, [Q1, Q2]);
+  assert.deepEqual(existing, [{ questionId: Q1, questionSetIds: [SET, OTHER_SET] }]);
+});
+
+test("findAlreadyLoadedQuestions returns nothing when no id is in beta", async () => {
+  assert.deepEqual(await findAlreadyLoadedQuestions([Q1, Q2], async () => []), []);
+});
+
+test("findAlreadyLoadedQuestions propagates a failed lookup so the caller can proceed", async () => {
+  await assert.rejects(
+    () => findAlreadyLoadedQuestions([Q1], async () => { throw new Error("admin 502"); }),
+    /admin 502/,
+  );
+});
+
+test("alreadyLoadedMessage names the ids, their sets and the way out", () => {
+  const message = alreadyLoadedMessage([{ questionId: Q1, questionSetIds: [SET] }]);
+  assert.match(message, new RegExp(Q1));
+  assert.match(message, new RegExp(SET));
+  assert.match(message, /Load anyway \(regenerate ids\)/);
 });

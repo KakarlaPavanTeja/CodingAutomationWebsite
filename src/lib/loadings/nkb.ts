@@ -167,12 +167,28 @@ export async function runNkbTask(
       };
     }
     if (status === "FAILURE" || status === "FAILED" || status === "FAIL") {
+      // The backend's own words when it gives any, because `${taskType} failed`
+      // on its own reads like a bug in this app. Observed beta failures (a
+      // duplicate question id, for one) come back as FAILURE with
+      // `response: null` and an empty `exception_url`, so say that plainly and
+      // point at the task output instead of inventing a reason.
+      const nestedPolled = polled.data.data as Record<string, unknown> | undefined;
+      const message = String(polled.data.message ?? nestedPolled?.message ?? "").trim();
+      const exceptionUrl = String(
+        polled.data.exception_url ?? nestedPolled?.exception_url ?? "",
+      ).trim();
+      const outputUrl = exceptionUrl || firstUrl(polled.text);
       return {
         success: false,
         status: "FAILURE",
-        error: String(polled.data.message || `${taskType} failed`),
+        error: message
+          ? `${taskType} failed: ${message}`
+          : `${taskType} failed and the backend reported no reason (status FAILURE, no message). ` +
+            (outputUrl
+              ? `Read the task output for what it rejected: ${outputUrl}`
+              : "It returned no task output either — check the NKB task in the beta admin."),
         taskId,
-        taskOutputUrl: firstUrl(polled.text),
+        taskOutputUrl: outputUrl,
         taskOutputRaw: polled.text,
       };
     }

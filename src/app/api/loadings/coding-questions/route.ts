@@ -262,6 +262,9 @@ export async function POST(request: NextRequest) {
   void (async () => {
     try {
       const result = await loadCodingQuestions(questions, {
+        // Ids were just regenerated when remarks are present, so they cannot
+        // collide with anything already in beta.
+        skipDuplicateCheck: Boolean(remarks),
         onLog: (phase, message) => {
           appendLoadLog(loadId, formatLogLine(phase, message)).catch((err) =>
             console.error("[Loadings] appendLoadLog failed:", (err as Error).message),

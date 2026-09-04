@@ -121,3 +121,74 @@ export function capacityFromLookup(lookup: QuestionSetLookup): SetCapacity {
     full: lookup.count >= QUESTION_SET_MAX,
   };
 }
+
+export interface ExistingQuestion {
+  questionId: string;
+  questionSetIds: string[];
+}
+
+/**
+ * Which question set(s) in beta already hold this question id?
+ *
+ * The same changelist `lookupQuestionSetQuestions` scrapes is searchable by
+ * QUESTION id as well as set id (verified against the live beta admin: a known
+ * id returns its one row, an unknown one returns "0 question set questions").
+ * `parseQuestionSetQuestionRows` matches the cell equal to the search term, so
+ * with a question id as the term the row's OTHER uuid — the field it calls
+ * `questionId` — is the set that holds it.
+ */
+export async function findQuestionSetsForQuestionId(
+  questionId: string,
+  session?: DjangoAdminSession,
+): Promise<string[]> {
+  const id = String(questionId || "").trim();
+  if (!id) return [];
+  const admin = session ?? new DjangoAdminSession();
+  const html = await admin.fetchHtml(
+    `${admin.adminBase}${QUESTIONSETQUESTION_PATH}?q=${encodeURIComponent(id)}`,
+  );
+  return parseQuestionSetQuestionRows(html, id)
+    .map((row) => row.questionId)
+    .filter(Boolean);
+}
+
+/**
+ * Pre-flight duplicate check: which of these question ids are already in beta?
+ *
+ * The backend rejects a re-load of an existing question id, and says nothing
+ * useful about why, ~70s in. `lookup` is injected so the decision logic is
+ * testable without the admin; the default shares one logged-in session across
+ * all ids.
+ */
+export async function findAlreadyLoadedQuestions(
+  questionIds: string[],
+  lookup?: (questionId: string) => Promise<string[]>,
+): Promise<ExistingQuestion[]> {
+  const ids = [...new Set(questionIds.map((id) => String(id || "").trim()).filter(Boolean))];
+  if (!ids.length) return [];
+  const session = lookup ? null : new DjangoAdminSession();
+  const find = lookup ?? ((id: string) => findQuestionSetsForQuestionId(id, session!));
+
+  const existing: ExistingQuestion[] = [];
+  for (const id of ids) {
+    const questionSetIds = await find(id);
+    if (questionSetIds.length) existing.push({ questionId: id, questionSetIds });
+  }
+  return existing;
+}
+
+/** What the operator is told when the pre-flight finds the ids already in beta. */
+export function alreadyLoadedMessage(existing: ExistingQuestion[]): string {
+  const named = existing
+    .map((e) =>
+      e.questionSetIds.length
+        ? `${e.questionId} (in question set ${e.questionSetIds.join(", ")})`
+        : e.questionId,
+    )
+    .join("; ");
+  return (
+    `${existing.length} question id(s) are already loaded in beta: ${named}. ` +
+    "The backend rejects a duplicate id, so this load would fail. " +
+    'Tick "Load anyway (regenerate ids)", add remarks and retry to load a fresh copy with new ids.'
+  );
+}

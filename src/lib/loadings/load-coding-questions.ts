@@ -18,6 +18,7 @@ import { CODING_QUESTIONS_TEMPLATE_URL, missingLoadingsConfig } from "./config";
 import {
   buildAdminZip,
   prepareQuestionsForAdminZip,
+  readQuestionId,
   LINK_FILE_JSON_LOADING,
   LINK_FILE_SHEET_LOADING,
   type CodingQuestionRow,
@@ -37,7 +38,11 @@ import {
   upsertRegistryRow,
   type LoadBatch,
 } from "./practice-set-db";
-import { lookupQuestionSetQuestions } from "./question-set";
+import {
+  alreadyLoadedMessage,
+  findAlreadyLoadedQuestions,
+  lookupQuestionSetQuestions,
+} from "./question-set";
 
 const SHEET_LOADING_POLL = { maxAttempts: 100, pollMs: 3000 };
 const UNLOCK_POLL = { maxAttempts: 60, pollMs: 3000 };
@@ -291,7 +296,15 @@ async function runBatch(
 
 export async function loadCodingQuestions(
   questions: CodingQuestionRow[],
-  opts: { onLog?: (phase: string, message: string) => void } = {},
+  opts: {
+    onLog?: (phase: string, message: string) => void;
+    /**
+     * Set when the caller has just regenerated every question id (the
+     * "load anyway" path): fresh ids cannot collide, so the beta lookup would
+     * be pure cost.
+     */
+    skipDuplicateCheck?: boolean;
+  } = {},
 ): Promise<LoadResult> {
   // A throwing onLog (e.g. a DB write in the caller) must never fail an
   // otherwise-successful load — swallow it once here, for every call site.
@@ -313,6 +326,30 @@ export async function loadCodingQuestions(
       questionCount: questions.length,
       error: `Loading is not configured. Missing: ${missing.join(", ")}`,
     };
+  }
+
+  // Fail fast on ids beta already holds. The backend rejects them ~70s in
+  // with a bare FAILURE and no reason, so the cheap admin lookup up front is
+  // the difference between an actionable message and an opaque one.
+  if (!opts.skipDuplicateCheck) {
+    const ids = questions.map(readQuestionId).filter(Boolean);
+    onLog("duplicate-check", `checking whether ${ids.length} question id(s) already exist in beta`);
+    try {
+      const existing = await findAlreadyLoadedQuestions(ids);
+      if (existing.length) {
+        const error = alreadyLoadedMessage(existing);
+        onLog("duplicate-check", error);
+        return { success: false, batches: [], questionCount: questions.length, error };
+      }
+      onLog("duplicate-check", "no question id is in beta yet");
+    } catch (err) {
+      // A flaky scrape must not block a legitimate load: a false "already
+      // exists" is worse than the opaque error this check exists to prevent.
+      onLog(
+        "duplicate-check",
+        `lookup failed (${(err as Error).message}) — continuing with the load`,
+      );
+    }
   }
 
   onLog("plan", `planning batches for ${questions.length} question(s)`);

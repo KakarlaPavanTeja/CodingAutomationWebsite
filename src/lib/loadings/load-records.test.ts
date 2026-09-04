@@ -34,3 +34,22 @@ test("formatLogLine keeps multi-line messages on one entry", async () => {
   assert.ok(line.includes("line one line two"));
   assert.equal(line.split("\n").length, 1);
 });
+
+test("capLogText leaves a log that fits the cap untouched", async () => {
+  process.env.DATABASE_URL ??= "postgres://test:test@localhost:5432/test";
+  const { capLogText } = await import("./load-records");
+  const log = "[a] one\n[b] two\n";
+  assert.equal(capLogText(log, 64), log);
+});
+
+test("capLogText keeps the newest lines, marks the drop and never exceeds the cap", async () => {
+  process.env.DATABASE_URL ??= "postgres://test:test@localhost:5432/test";
+  const { capLogText, LOG_TRUNCATION_MARKER } = await import("./load-records");
+  const log = Array.from({ length: 400 }, (_, i) => `[line ${i}] ${"x".repeat(40)}`).join("\n") + "\n";
+  const capped = capLogText(log, 1000);
+
+  assert.equal(capped.length, 1000);
+  assert.equal(capped.startsWith(`${LOG_TRUNCATION_MARKER}\n`), true);
+  assert.equal(capped.endsWith("[line 399] " + "x".repeat(40) + "\n"), true);
+  assert.equal(capped.includes("[line 0]"), false);
+});
