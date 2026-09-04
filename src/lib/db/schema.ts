@@ -175,6 +175,36 @@ export const pipelineRuns = pgTable(
   }),
 );
 
+export const codingQuestionLoads = pgTable(
+  "coding_question_loads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // Null for uploads: an uploaded JSON has no problem behind it.
+    problemId: uuid("problem_id").references(() => problems.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => profiles.id),
+    source: text("source").notNull(),
+    questionSetId: text("question_set_id"),
+    questionIds: text("question_ids").array().notNull().default(sql`'{}'::text[]`),
+    status: text("status").notNull().default("running"),
+    taskOutputUrl: text("task_output_url"),
+    error: text("error"),
+    remarks: text("remarks"),
+    logs: text("logs").notNull().default(""),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => ({
+    statusCheck: check(
+      "coding_question_loads_status_check",
+      sql`${t.status} IN ('running','completed','failed')`,
+    ),
+    sourceCheck: check(
+      "coding_question_loads_source_check",
+      sql`${t.source} IN ('pipeline','upload')`,
+    ),
+  }),
+);
+
 export const pipelineStates = pgTable("pipeline_states", {
   id: uuid("id").primaryKey().defaultRandom(),
   problemId: uuid("problem_id")

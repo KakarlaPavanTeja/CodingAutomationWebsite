@@ -114,3 +114,6 @@ file-handling-medium/
 file-handling-problems/
 file-handling-hard/
 file-handling-mediumhard/
+
+# Google service account key (Loadings / Sheets API)
+service-account.json
