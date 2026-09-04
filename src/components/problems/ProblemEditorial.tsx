@@ -819,6 +819,13 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
   };
 
   const prereqsReady = prereqCheck?.ready ?? false;
+  // Execute Solutions is the natural next step after Generate Editorial, so it
+  // is chained by default. Armed at CLICK time rather than read live: unticking
+  // mid-run must not cancel a chain already promised, and ticking after the fact
+  // must not retro-fire on a run that finished minutes ago.
+  const [autoExecute, setAutoExecute] = useState(true);
+  const autoExecuteArmed = useRef(false);
+
   const editorialComplete = generateState?.status === "completed";
   const canGenerate =
     prereqsReady && !genRunning && !execRunning && generateState?.status !== "running";
@@ -843,16 +850,45 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
       enabledLanguages: [],
       testcaseCount: 0,
     };
+    autoExecuteArmed.current = autoExecute;
     runStep(state, refineNote);
     onStatusChange?.();
   };
 
-  const handleExecuteSolutions = () => {
+  const handleExecuteSolutions = useCallback(() => {
     const state = executeState;
     if (!state) return;
     runStep({ ...state, enabledLanguages: globalLanguages });
     onStatusChange?.();
-  };
+  }, [executeState, globalLanguages, runStep, onStatusChange]);
+
+  // Fire the chained execute the moment the same readiness the button uses is
+  // satisfied — `canExecute` already covers "generate completed", "nothing else
+  // running" and "execute not already going", so there is no second definition
+  // of ready to keep in sync.
+  useEffect(() => {
+    if (!autoExecuteArmed.current || !canExecute) return;
+    autoExecuteArmed.current = false;
+    handleExecuteSolutions();
+  }, [canExecute, handleExecuteSolutions]);
+
+  // Rendered in BOTH toolbars — the "No editorial yet" branch returns early with
+  // its own copy of the header, so a control added only to the main toolbar is
+  // invisible in exactly the state where you first reach for it.
+  const autoExecuteToggle = (
+    <label
+      className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground"
+      title="Run Execute Solutions automatically once the editorial is generated"
+    >
+      <input
+        type="checkbox"
+        className="h-3 w-3 accent-primary"
+        checked={autoExecute}
+        onChange={(e) => setAutoExecute(e.target.checked)}
+      />
+      Execute editorials
+    </label>
+  );
 
   const handleStopGenerate = () => stopStep("generate_editorial");
   const handleStopExecute = () => stopStep("execute_editorial");
@@ -912,6 +948,7 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
                 Generate Editorial
               </Button>
             )}
+            {!genRunning && autoExecuteToggle}
           </div>
         </div>
         {genLogPane}
@@ -1025,6 +1062,7 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
                 <Sparkles className="mr-1.5 h-3.5 w-3.5" />
                 Generate Editorial
               </Button>
+              {autoExecuteToggle}
             </>
           )}
           {execRunning ? (
