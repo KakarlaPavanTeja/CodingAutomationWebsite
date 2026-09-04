@@ -53,3 +53,42 @@ test("capLogText keeps the newest lines, marks the drop and never exceeds the ca
   assert.equal(capped.endsWith("[line 399] " + "x".repeat(40) + "\n"), true);
   assert.equal(capped.includes("[line 0]"), false);
 });
+
+test("buildCompletionSummary reports success, the set id, the count and an order range", async () => {
+  process.env.DATABASE_URL ??= "postgres://test:test@localhost:5432/test";
+  const { buildCompletionSummary } = await import("./load-records");
+  const instant = new Date(Date.UTC(2026, 8, 4, 9, 32, 18)); // 2026-09-04 15:02:18 IST
+  const line = buildCompletionSummary(
+    {
+      questionSetId: "9339f11e",
+      questionIds: ["q1", "q2", "q3"],
+      orderRange: { start: 25, end: 27 },
+    },
+    instant,
+  );
+  assert.equal(
+    line,
+    "[2026-09-04 15:02:18 IST] [summary] succeeded: loaded 3 question(s) into set 9339f11e (order 25-27)",
+  );
+});
+
+test("buildCompletionSummary omits the order range when none is available", async () => {
+  process.env.DATABASE_URL ??= "postgres://test:test@localhost:5432/test";
+  const { buildCompletionSummary } = await import("./load-records");
+  const instant = new Date(Date.UTC(2026, 8, 4, 9, 32, 18));
+  const line = buildCompletionSummary(
+    { questionSetId: "abc123", questionIds: ["q1"] },
+    instant,
+  );
+  assert.equal(
+    line,
+    "[2026-09-04 15:02:18 IST] [summary] succeeded: loaded 1 question(s) into set abc123",
+  );
+});
+
+test("buildCompletionSummary falls back to a placeholder when there is no set id", async () => {
+  process.env.DATABASE_URL ??= "postgres://test:test@localhost:5432/test";
+  const { buildCompletionSummary } = await import("./load-records");
+  const line = buildCompletionSummary({ questionSetId: null, questionIds: [] });
+  assert.match(line, /\[summary\] succeeded: loaded 0 question\(s\) into set \(none\)$/);
+});

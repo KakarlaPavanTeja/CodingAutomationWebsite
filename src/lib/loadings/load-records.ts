@@ -105,6 +105,48 @@ export async function appendLoadLog(id: string, line: string): Promise<void> {
     .where(eq(codingQuestionLoads.id, id));
 }
 
+/**
+ * The log exists for live progress and post-mortem debugging. Once a load has
+ * gone green nobody reads the phase-by-phase detail again, so a completed row
+ * keeps only this one line instead of the full log — reclaiming ~55% of the
+ * row's storage (measured). A failed row is untouched by this: it is the
+ * diagnostic value, see `finishLoadRecord`.
+ *
+ * Reuses `formatLogLine` so the timestamp is the same IST stamp, in the same
+ * format, as every other line this feature writes.
+ */
+export function buildCompletionSummary(
+  args: { questionSetId: string | null; questionIds: string[]; orderRange?: { start: number; end: number } | null },
+  now: Date = new Date(),
+): string {
+  const range = args.orderRange ? ` (order ${args.orderRange.start}-${args.orderRange.end})` : "";
+  const set = args.questionSetId ?? "(none)";
+  return formatLogLine(
+    "summary",
+    `succeeded: loaded ${args.questionIds.length} question(s) into set ${set}${range}`,
+    now,
+  );
+}
+
+/**
+ * Only path that flips a row to a terminal status, so this is also the only
+ * place the log gets trimmed — and only for `completed`. `failed` never gets
+ * a `logs` key in the SET clause, so that column is untouched: the full log
+ * survives (see `buildCompletionSummary`).
+ *
+ * The trim is a plain overwrite in this SAME statement as the status flip —
+ * not a read-modify-write — so a poll lands on either the pre-trim row
+ * (running, full log) or the post-trim row (completed, summary), never
+ * something in between.
+ *
+ * `onLog` callbacks in the caller are fire-and-forget (`.catch()`'d, not
+ * awaited), so one can still be in flight when this runs and land AFTER it.
+ * That is fine, not silently lost: `appendLoadLog` only ever *concatenates*
+ * (`logs || line`), so a late line lands as a stray orphan after the summary
+ * — readable, if odd — never overwrites or erases it. A late line that lands
+ * BEFORE this UPDATE is simply superseded by the overwrite, which is exactly
+ * the intended trim.
+ */
 export async function finishLoadRecord(
   id: string,
   patch: {
@@ -113,11 +155,25 @@ export async function finishLoadRecord(
     questionIds?: string[];
     taskOutputUrl?: string | null;
     error?: string | null;
+    orderRange?: { start: number; end: number } | null;
   },
 ): Promise<void> {
+  const { orderRange, ...rest } = patch;
   await db
     .update(codingQuestionLoads)
-    .set({ ...patch, finishedAt: new Date() })
+    .set({
+      ...rest,
+      finishedAt: new Date(),
+      ...(patch.status === "completed"
+        ? {
+            logs: buildCompletionSummary({
+              questionSetId: patch.questionSetId ?? null,
+              questionIds: patch.questionIds ?? [],
+              orderRange,
+            }),
+          }
+        : {}),
+    })
     .where(eq(codingQuestionLoads.id, id));
 }
 
