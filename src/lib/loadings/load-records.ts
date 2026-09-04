@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { codingQuestionLoads } from "@/lib/db/schema";
 
@@ -91,6 +91,45 @@ export async function latestLoadForProblem(problemId: string): Promise<LoadRecor
       and(
         eq(codingQuestionLoads.problemId, problemId),
         eq(codingQuestionLoads.status, "completed"),
+      ),
+    )
+    .orderBy(desc(codingQuestionLoads.startedAt))
+    .limit(1);
+  return (row as LoadRecord) ?? null;
+}
+
+/**
+ * A "running" row older than this is not a load in flight, it is wreckage: the
+ * job is fire-and-forget in the API process, so a restart or a crash between
+ * `createLoadRecord` and `finishLoadRecord` strands the row at "running"
+ * forever and nothing reaps it. The longest real run is bounded by the task
+ * polls in `load-coding-questions.ts` (SHEET_LOADING 100x3s + unlock 60x3s +
+ * link confirmation, per batch), so 30 minutes is well past a live load and
+ * still stops one crash from bricking the problem's Load-to-beta button.
+ */
+export const RUNNING_LOAD_STALE_MS = 30 * 60 * 1000;
+
+/**
+ * The load actually in flight for a problem, if any — the row `latestLoadForProblem`
+ * (completed-only) and `latestAttemptForProblem` (newest, whatever that is) both
+ * miss. Two callers need exactly this row and nothing else:
+ *   - POST refuses to start a second concurrent load into shared beta,
+ *   - GET hands the UI an id to re-attach its log panel to after a remount.
+ * Deliberately a separate query: `latestLoadForProblem`'s completed-only
+ * semantics drive the 409 duplicate gate and must not shift.
+ */
+export async function runningLoadForProblem(
+  problemId: string,
+  now: Date = new Date(),
+): Promise<LoadRecord | null> {
+  const [row] = await db
+    .select()
+    .from(codingQuestionLoads)
+    .where(
+      and(
+        eq(codingQuestionLoads.problemId, problemId),
+        eq(codingQuestionLoads.status, "running"),
+        gt(codingQuestionLoads.startedAt, new Date(now.getTime() - RUNNING_LOAD_STALE_MS)),
       ),
     )
     .orderBy(desc(codingQuestionLoads.startedAt))

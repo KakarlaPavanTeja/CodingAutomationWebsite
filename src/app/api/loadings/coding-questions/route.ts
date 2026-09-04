@@ -18,6 +18,7 @@ import {
   formatLogLine,
   latestAttemptForProblem,
   latestLoadForProblem,
+  runningLoadForProblem,
   type LoadSource,
 } from "@/lib/loadings/load-records";
 
@@ -36,6 +37,13 @@ const MAX_BODY_SIZE = 20 * 1024 * 1024; // 20MB
 // left are the questions themselves and `remarks`, and neither reaches a
 // Google Sheets cell — so the former USER_ENTERED formula-injection guard on
 // the form fields now has nothing to check and is gone with them.
+//
+// That says no CLIENT-SUPPLIED string reaches a cell. It does NOT say nothing
+// untrusted does: `ResourcesData!A2` is written verbatim from the registry
+// sheet's own column A (`readRegistry`), which the separate Loadings app also
+// writes, so a `=`-prefixed value there would still land as a live formula.
+// Guarding that belongs at the registry read, not on request fields that no
+// longer exist.
 
 /**
  * Is the flow configured, and (when `problemId` is given) what did this
@@ -73,7 +81,19 @@ export async function GET(request: NextRequest) {
   // still-`running` attempt has nothing useful to say here.
   const lastAttempt = await latestAttemptForProblem(safeProblemId);
   const lastFailedLoad = lastAttempt?.status === "failed" ? lastAttempt : null;
-  return NextResponse.json({ configured: missing.length === 0, missing, lastLoad, lastFailedLoad });
+  // A load in flight is invisible in both rows above (`lastLoad` is
+  // completed-only, a running attempt is neither completed nor failed), which
+  // is what let a remounted panel read "never loaded" and start a second one.
+  // Reporting it lets the UI refuse to start another AND re-attach its log
+  // panel after a tab switch or a page reload.
+  const runningLoad = await runningLoadForProblem(safeProblemId);
+  return NextResponse.json({
+    configured: missing.length === 0,
+    missing,
+    lastLoad,
+    lastFailedLoad,
+    runningLoad,
+  });
 }
 
 /**
@@ -196,6 +216,30 @@ export async function POST(request: NextRequest) {
       );
     }
     questions = parsed;
+  }
+
+  // Two gates, deliberately distinct so the UI can tell them apart:
+  //   423 — a load for this problem is still running. Remarks do NOT lift it:
+  //         a forced second load would race the first for the same childOrder
+  //         under the real testing parent, or write the same questions twice.
+  //   409 — a load already COMPLETED (below). That one is lifted by remarks,
+  //         which is what regenerates the ids for a deliberate second copy.
+  // ponytail: check-then-insert, so two POSTs landing in the same millisecond
+  // can both pass. Closing that needs a partial unique index on
+  // (problem_id) WHERE status = 'running' — a schema change. This gate already
+  // covers the real case (one operator, two tabs / a remounted panel).
+  if (problemId) {
+    const running = await runningLoadForProblem(problemId);
+    if (running) {
+      return NextResponse.json(
+        {
+          error:
+            "A load for this problem is already running. Watch it finish before starting another — starting a second one now would load into beta twice.",
+          loadId: running.id,
+        },
+        { status: 423 },
+      );
+    }
   }
 
   if (problemId && !remarks) {

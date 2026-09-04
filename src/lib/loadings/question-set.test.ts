@@ -91,19 +91,62 @@ test("the derived sheet carries the configured parent and auto-unlocks", () => {
   assert.equal(cell("QuestionSet!B2"), "Coding Testing 11");
 });
 
-test("an existing unit is never re-placed in the course tree", () => {
-  // No childOrder means the planner did not mint this unit: it already sits
-  // somewhere under some parent at an order nothing here computed. Writing
-  // G3/H3 would move it.
-  const ranges = buildSheetCellUpdates({
-    questionSetId: SET,
-    unitId: "unit-1",
-    batch: { unitTitle: undefined, childOrder: undefined, parentResource: undefined },
-  }).map((u) => u.range);
+test("the sheet path refuses to load when the planner derived no placement", () => {
+  // An existing-but-empty registry set (its questions deleted in beta admin)
+  // reaches the sheet path with no title, order or parent. Skipping G3/H3/B2
+  // does NOT blank them: the sheet is a copy of a template that ships sample
+  // rows, so SHEET_LOADING would submit the TEMPLATE's parent and title and
+  // drop an untitled unit somewhere in the real beta course tree. Refusing is
+  // the only safe answer, and the message has to tell the operator what to do.
+  assert.throws(
+    () =>
+      buildSheetCellUpdates({
+        questionSetId: SET,
+        unitId: "unit-1",
+        batch: { unitTitle: undefined, childOrder: undefined, parentResource: undefined },
+      }),
+    (err: Error) => {
+      assert.match(err.message, /Refusing to load/);
+      assert.match(err.message, /registry/);
+      assert.ok(err.message.includes(SET), "names the question set");
+      return true;
+    },
+  );
+});
 
-  assert.ok(!ranges.includes("ResourcesData!G3"));
-  assert.ok(!ranges.includes("ResourcesData!H3"));
-  assert.ok(ranges.includes("ResourcesData!I2"));
+test("the sheet path refuses a placement that is only half derived", () => {
+  // A title with no child order (or an order with no title) is still the
+  // template's own placement for whichever cell goes unwritten.
+  for (const batch of [
+    { unitTitle: "Coding Testing 11", childOrder: undefined, parentResource: "parent-resource-id" },
+    { unitTitle: undefined, childOrder: 11, parentResource: "parent-resource-id" },
+    { unitTitle: "   ", childOrder: 11, parentResource: "parent-resource-id" },
+  ]) {
+    assert.throws(
+      () => buildSheetCellUpdates({ questionSetId: SET, unitId: "unit-1", batch }),
+      /Refusing to load/,
+      JSON.stringify(batch),
+    );
+  }
+});
+
+test("a fully derived placement still produces every documented cell value", () => {
+  const cells = Object.fromEntries(
+    buildSheetCellUpdates({ questionSetId: SET, unitId: "unit-1", batch: MINTED }).map((u) => [
+      u.range,
+      u.values[0][0],
+    ]),
+  );
+  assert.deepEqual(cells, {
+    "ResourcesData!A2": SET,
+    "ResourcesData!G3": "11",
+    "ResourcesData!H3": "parent-resource-id",
+    "ResourcesData!I2": "TRUE",
+    "Units!A2": SET,
+    "Units!B2": "unit-1",
+    "QuestionSet!A2": SET,
+    "QuestionSet!B2": "Coding Testing 11",
+  });
 });
 
 test("a minted unit with no parent resource fails loudly instead of going unparented", () => {

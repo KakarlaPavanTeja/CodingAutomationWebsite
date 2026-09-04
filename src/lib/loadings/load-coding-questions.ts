@@ -107,16 +107,17 @@ function pushCell(updates: CellUpdate[], range: string, value?: string): void {
  * and unit identity come from the planner, auto-unlock is fixed by the spec —
  * so no operator input reaches a sheet cell.
  *
- * `ResourcesData!G3`/`H3` place the unit in the real beta course tree, so they
- * are written ONLY for a unit this run minted, and then with the very parent
- * `createNextTestingUnit` derived the child order against. A set that already
- * exists is already placed at an order nothing here computed; writing those
- * cells would move it.
+ * `ResourcesData!G3`/`H3` place the unit in the real beta course tree and
+ * `QuestionSet!B2` names it. All three MUST be written, because the sheet is a
+ * copy of a template that ships sample rows and `prepareSheet` clears only
+ * `QuestionSet!B3`: leaving a placement cell unwritten does not blank it, it
+ * submits the TEMPLATE's own value. A sample parent id would drop an untitled
+ * unit at an arbitrary point in the real beta tree; a blank one would create
+ * an unparented unit. So the sheet path is only ever taken with the placement
+ * the planner derived — anything else refuses to load, below.
  *
- * ponytail: a non-minted set on the sheet path (a registry row whose questions
- * were later deleted) therefore gets no title and no placement — its unit
- * normally already exists in beta. If that ever stops holding, carry the
- * registry row's `unitName` onto the batch rather than reintroducing a form.
+ * This is only ever reached from `prepareSheet`, i.e. `loadVia === "sheet"`.
+ * The `json` path writes no sheet at all.
  */
 export function buildSheetCellUpdates(args: {
   questionSetId: string;
@@ -124,17 +125,23 @@ export function buildSheetCellUpdates(args: {
   batch: Pick<LoadBatch, "unitTitle" | "childOrder" | "parentResource">;
 }): CellUpdate[] {
   const { questionSetId, unitId, batch } = args;
+  if (batch.childOrder == null || !batch.unitTitle?.trim()) {
+    throw new Error(
+      `Question set ${questionSetId} needs the sheet path (it holds no questions in beta) but the planner derived no unit title or placement for it, ` +
+        "so the loading sheet would submit the template's own sample title and parent — creating a misplaced or unparented unit in the real beta course tree. " +
+        "Refusing to load. This is what a registry row whose questions were deleted in beta admin looks like: either restore that question set's questions, " +
+        "or remove its row from the question-set registry sheet so the next load mints a fresh set instead.",
+    );
+  }
+  if (!batch.parentResource) {
+    throw new Error(
+      "NKB_TESTING_PARENT_RESOURCE is not set, so the parent of the new testing unit is unknown — refusing to create it unparented.",
+    );
+  }
   const updates: CellUpdate[] = [];
   pushCell(updates, "ResourcesData!A2", questionSetId);
-  if (batch.childOrder != null) {
-    if (!batch.parentResource) {
-      throw new Error(
-        "NKB_TESTING_PARENT_RESOURCE is not set, so the parent of the new testing unit is unknown — refusing to create it unparented.",
-      );
-    }
-    pushCell(updates, "ResourcesData!G3", String(batch.childOrder));
-    pushCell(updates, "ResourcesData!H3", batch.parentResource);
-  }
+  pushCell(updates, "ResourcesData!G3", String(batch.childOrder));
+  pushCell(updates, "ResourcesData!H3", batch.parentResource);
   pushCell(updates, "ResourcesData!I2", AUTO_UNLOCK);
   pushCell(updates, "Units!A2", questionSetId);
   pushCell(updates, "Units!B2", unitId);

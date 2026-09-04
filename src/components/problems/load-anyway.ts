@@ -23,17 +23,29 @@ export function mayForceLoad(priorStatus: PriorLoadStatus): boolean {
 }
 
 /**
- * Is the load form submittable right now? A bare submit is blocked once a
- * completed prior load is known (it would just bounce off the server's 409
- * duplicate gate); forcing is always available but requires non-blank
- * remarks, since supplying them is what triggers server-side id
- * regeneration.
+ * May a new load start right now?
+ *
+ * `loadRunning` wins over everything, forced or not: a load already in flight
+ * for this problem would be joined by a second one loading the same question
+ * ids into shared beta twice, or racing it for the same `childOrder` under the
+ * real testing parent. Remarks do not make that safe, so they do not lift it —
+ * the server refuses the same case with 423, this is only the fast local no.
+ *
+ * Otherwise a bare submit is blocked once a completed prior load is known (it
+ * would just bounce off the server's 409 duplicate gate); forcing is always
+ * available but requires non-blank remarks, since supplying them is what
+ * triggers server-side id regeneration.
+ *
+ * `loadRunning` is a required argument on purpose: defaulting it to false is
+ * exactly the bug this function exists to stop a caller from reintroducing.
  */
 export function canSubmitLoad(
   priorStatus: PriorLoadStatus,
   forceLoad: boolean,
   remarks: string,
+  loadRunning: boolean,
 ): boolean {
+  if (loadRunning) return false;
   if (forceLoad) return remarks.trim() !== "";
   return priorStatus !== "completed";
 }
