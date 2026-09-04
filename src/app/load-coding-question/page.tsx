@@ -1,25 +1,36 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { LoadLogPanel } from "@/components/problems/LoadLogPanel";
+import { LoadLogPanel, type LoadRecord } from "@/components/problems/LoadLogPanel";
+import { canSubmitUpload, mayForceUploadRetry, type PriorLoadStatus } from "@/components/problems/load-anyway";
 
 export default function LoadCodingQuestionPage() {
   const { user, loading: authLoading } = useAuth();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [file, setFile] = useState<File | null>(null);
+  const [loadAnyway, setLoadAnyway] = useState(false);
+  const [remarks, setRemarks] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [loadId, setLoadId] = useState<string | null>(null);
+  // This browser session's own last finished attempt. There is no problemId
+  // here, so — unlike LoadToBeta — there is no server-known prior state to
+  // fetch on mount: an uploaded file's beta history is unknown until the
+  // pre-flight duplicate check inside its own load actually runs. Starts
+  // "none" so a first upload never shows the force control.
+  const [priorStatus, setPriorStatus] = useState<PriorLoadStatus>("none");
 
   // Pick a file, confirm. Everything else — question set, unit, order, parent
   // — is derived server-side by the planner.
-  const canSubmit = !submitting && !!file;
+  const canSubmit = canSubmitUpload(!!file, loadAnyway, remarks, submitting);
 
   const submit = async () => {
     if (!canSubmit || !file) return;
@@ -28,6 +39,10 @@ export default function LoadCodingQuestionPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
+      // Only sent when forcing, which is exactly when the server regenerates
+      // ids — see coding-questions/route.ts's `if (remarks) { ... }` gate,
+      // which applies regardless of surface.
+      if (loadAnyway) formData.append("remarks", remarks.trim());
 
       const res = await fetch("/api/loadings/coding-questions", {
         method: "POST",
@@ -43,10 +58,16 @@ export default function LoadCodingQuestionPage() {
     }
   };
 
+  const handleDone = useCallback((record: LoadRecord) => {
+    setPriorStatus(record.status === "failed" ? "failed" : "completed");
+  }, []);
+
   const resetForAnotherLoad = () => {
     setLoadId(null);
     setSubmitError("");
     setFile(null);
+    setLoadAnyway(false);
+    setRemarks("");
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -98,24 +119,60 @@ export default function LoadCodingQuestionPage() {
           {loadId ? (
             <>
               <p className="text-xs text-muted-foreground">
-                Load started — the questions keep the ids in the uploaded file.
+                {loadAnyway
+                  ? "Load started — question ids are regenerated, so beta gets a new copy alongside the previous one."
+                  : "Load started — the questions keep the ids in the uploaded file."}
               </p>
-              <LoadLogPanel loadId={loadId} />
+              <LoadLogPanel loadId={loadId} onDone={handleDone} />
               <Button size="sm" variant="outline" onClick={resetForAnotherLoad}>
                 Start another load
               </Button>
             </>
           ) : (
-            <div className="flex items-center gap-3">
-              <Button size="sm" onClick={submit} disabled={!canSubmit}>
-                {submitting ? "Starting…" : "Load to beta"}
-              </Button>
-              <p className="text-xs text-muted-foreground">
-                {submitting
-                  ? "Starting the load…"
-                  : "The question set, unit and order are picked automatically. Takes anywhere from a couple of minutes to several, depending on whether this appends to an existing question set or a new sheet needs preparing first; keep this tab open."}
-              </p>
-            </div>
+            <>
+              {mayForceUploadRetry(priorStatus) && (
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="upload-load-anyway"
+                    checked={loadAnyway}
+                    disabled={submitting}
+                    onCheckedChange={setLoadAnyway}
+                  />
+                  <Label htmlFor="upload-load-anyway" className="text-xs font-normal">
+                    Load anyway (regenerate ids)
+                  </Label>
+                </div>
+              )}
+
+              {loadAnyway && (
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="upload-load-remarks" className="text-xs">
+                    Remarks (required)
+                  </Label>
+                  <Textarea
+                    id="upload-load-remarks"
+                    value={remarks}
+                    disabled={submitting}
+                    placeholder="Why load again?"
+                    onChange={(e) => setRemarks(e.target.value)}
+                  />
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    All ids will be regenerated — beta will get a new copy of this question.
+                  </p>
+                </div>
+              )}
+
+              <div className="flex items-center gap-3">
+                <Button size="sm" onClick={submit} disabled={!canSubmit}>
+                  {submitting ? "Starting…" : "Load to beta"}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  {submitting
+                    ? "Starting the load…"
+                    : "The question set, unit and order are picked automatically. Takes anywhere from a couple of minutes to several, depending on whether this appends to an existing question set or a new sheet needs preparing first; keep this tab open."}
+                </p>
+              </div>
+            </>
           )}
 
           {submitError && (
