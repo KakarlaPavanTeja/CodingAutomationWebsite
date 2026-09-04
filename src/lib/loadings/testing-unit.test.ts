@@ -31,3 +31,35 @@ test("createNextTestingUnit refuses to run without a configured parent", async (
   await assert.rejects(() => createNextTestingUnit({}), /NKB_TESTING_PARENT_RESOURCE/);
   if (prev) process.env.NKB_TESTING_PARENT_RESOURCE = prev;
 });
+
+test("createNextTestingUnit advances title and child order across two mints in one run", async () => {
+  const prev = process.env.NKB_TESTING_PARENT_RESOURCE;
+  process.env.NKB_TESTING_PARENT_RESOURCE = "test-parent";
+  const stubRows = async () => [
+    ["unit_id", "parent_resource_id", "unit_order"],
+    ["u1", "test-parent", "9"],
+  ];
+  try {
+    const first = await createNextTestingUnit({
+      existingUnitNames: ["Coding Testing 9"],
+      fetchRows: stubRows,
+    });
+    // Simulate the planner loop: fold the first mint's title into the names
+    // for the second call, and bump the offset — nothing here touches beta.
+    const second = await createNextTestingUnit({
+      existingUnitNames: ["Coding Testing 9", first.title],
+      childOrderOffset: 1,
+      fetchRows: stubRows,
+    });
+
+    assert.equal(first.title, "Coding Testing 10");
+    assert.equal(first.childOrder, 10);
+    assert.equal(second.title, "Coding Testing 11");
+    assert.equal(second.childOrder, 11);
+    assert.notEqual(first.title, second.title);
+    assert.notEqual(first.childOrder, second.childOrder);
+  } finally {
+    if (prev) process.env.NKB_TESTING_PARENT_RESOURCE = prev;
+    else delete process.env.NKB_TESTING_PARENT_RESOURCE;
+  }
+});

@@ -145,11 +145,18 @@ export async function planQuestionSetBatches(
     placed += count;
   }
 
+  // A single `total` can need more than one new set. Beta isn't written to
+  // here, so a second `fetchTestingUnitRows` call in this same run would see
+  // identical rows and re-derive the same order/title as the first — mint
+  // names and an offset accumulate across iterations so each one advances.
+  const mintedTitles: string[] = [];
   while (placed < total) {
     const unit = await createNextTestingUnit({
-      existingUnitNames: rows.map((r) => r.unitName),
+      existingUnitNames: [...rows.map((r) => r.unitName), ...mintedTitles],
+      childOrderOffset: mintedTitles.length,
       onLog,
     });
+    mintedTitles.push(unit.title);
     const count = Math.min(total - placed, QUESTION_SET_MAX);
     await upsertRegistryRow(unit.questionSetId, unit.title);
     batches.push({

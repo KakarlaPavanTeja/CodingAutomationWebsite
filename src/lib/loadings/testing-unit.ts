@@ -81,7 +81,17 @@ export async function fetchTestingUnitRows(parentResource: string): Promise<stri
 
 export async function createNextTestingUnit(opts: {
   existingUnitNames?: string[];
+  /**
+   * How many units this same rollover run has already minted, so a second
+   * (or third...) mint in one `planQuestionSetBatches` call advances past the
+   * first instead of re-deriving the same order from unchanged beta state —
+   * this task writes nothing to beta, so a second `fetchTestingUnitRows` call
+   * in the same run would otherwise see identical rows and repeat order 10.
+   */
+  childOrderOffset?: number;
   onLog?: (phase: string, message: string) => void;
+  /** Test seam — defaults to the real `fetchTestingUnitRows`. */
+  fetchRows?: (parentResource: string) => Promise<string[][]>;
 }): Promise<{ questionSetId: string; commonUnitId: string; title: string; childOrder: number }> {
   const parentResource = (process.env.NKB_TESTING_PARENT_RESOURCE || "").trim();
   if (!parentResource) {
@@ -90,10 +100,11 @@ export async function createNextTestingUnit(opts: {
     );
   }
   const log = opts.onLog ?? (() => {});
+  const fetchRows = opts.fetchRows ?? fetchTestingUnitRows;
 
   log("create unit", "reading existing testing units");
-  const rows = await fetchTestingUnitRows(parentResource);
-  const childOrder = nextChildOrder(rows);
+  const rows = await fetchRows(parentResource);
+  const childOrder = nextChildOrder(rows) + (opts.childOrderOffset ?? 0);
   const title = nextTestingUnitTitle(opts.existingUnitNames ?? []);
   const questionSetId = randomUUID();
   const commonUnitId = randomUUID();
@@ -104,8 +115,8 @@ export async function createNextTestingUnit(opts: {
 
 /**
  * Child order for a new unit under the testing parent: one past the highest
- * existing unit_order. Rows come from the NKB GET_UNIT_RESOURCE_DETAILS CSV,
- * header first.
+ * existing unit_order. Rows come from `fetchTestingUnitRows` scraping the
+ * Django admin resourceparentresourcethroughmodel changelist, header first.
  */
 export function nextChildOrder(rows: string[][]): number {
   if (!rows.length) return 1;
