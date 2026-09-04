@@ -221,6 +221,9 @@ export const pipelineStates = pgTable("pipeline_states", {
   testcaseCount: integer("testcase_count"),
   stepConfigs: jsonb("step_configs").default(sql`'{}'::jsonb`),
   stepStatuses: jsonb("step_statuses").default(sql`'{}'::jsonb`),
+  // Ordered StepIds still to run for an in-flight "Run all", plus the context
+  // the decision needs. Null when no run-all is active.
+  runAllQueue: jsonb("run_all_queue"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
