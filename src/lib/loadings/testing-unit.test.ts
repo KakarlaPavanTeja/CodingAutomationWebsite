@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { nextChildOrder, nextTestingUnitTitle } from "./testing-unit";
+import { nextChildOrder, nextTestingUnitTitle, createNextTestingUnit } from "./testing-unit";
 
 const HEADER = ["unit_id", "unit_name", "topic_order", "unit_order"];
 
@@ -23,4 +23,11 @@ test("nextTestingUnitTitle continues the numbering", () => {
   assert.equal(nextTestingUnitTitle(["Coding Testing 1", "Coding Testing 9"]), "Coding Testing 10");
   assert.equal(nextTestingUnitTitle([]), "Coding Testing 1");
   assert.equal(nextTestingUnitTitle(["Unrelated unit"]), "Coding Testing 1");
+});
+
+test("createNextTestingUnit refuses to run without a configured parent", async () => {
+  const prev = process.env.NKB_TESTING_PARENT_RESOURCE;
+  delete process.env.NKB_TESTING_PARENT_RESOURCE;
+  await assert.rejects(() => createNextTestingUnit({}), /NKB_TESTING_PARENT_RESOURCE/);
+  if (prev) process.env.NKB_TESTING_PARENT_RESOURCE = prev;
 });

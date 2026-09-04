@@ -9,7 +9,6 @@
  * instead of overflowing one past 50.
  */
 
-import { randomUUID } from "crypto";
 import { PRACTICE_SET_SHEET_GID, PRACTICE_SET_SHEET_ID, QUESTION_SET_MAX } from "./config";
 import {
   appendValues,
@@ -22,6 +21,7 @@ import {
 } from "./google-sheets";
 import { DjangoAdminSession } from "./django-admin";
 import { capacityFromLookup, lookupQuestionSetQuestions } from "./question-set";
+import { createNextTestingUnit } from "./testing-unit";
 
 const HEADER = ["question_set_id", "unit_name"];
 
@@ -93,6 +93,12 @@ export interface LoadBatch {
    */
   loadVia: "sheet" | "json";
   isNewSet: boolean;
+  /** Set only for a rollover-minted set — the derived "Coding Testing N" title. */
+  unitTitle?: string;
+  /** Set only for a rollover-minted set — its child order under the testing parent. */
+  childOrder?: number;
+  /** Set only for a rollover-minted set — its Units common unit id. */
+  commonUnitId?: string;
 }
 
 /**
@@ -102,6 +108,7 @@ export interface LoadBatch {
 export async function planQuestionSetBatches(
   total: number,
   unitName = "",
+  onLog: (phase: string, message: string) => void = () => {},
 ): Promise<{ batches: LoadBatch[]; registryRows: number }> {
   if (total <= 0) return { batches: [], registryRows: 0 };
 
@@ -139,17 +146,23 @@ export async function planQuestionSetBatches(
   }
 
   while (placed < total) {
-    const questionSetId = randomUUID();
+    const unit = await createNextTestingUnit({
+      existingUnitNames: rows.map((r) => r.unitName),
+      onLog,
+    });
     const count = Math.min(total - placed, QUESTION_SET_MAX);
-    await upsertRegistryRow(questionSetId, unitName);
+    await upsertRegistryRow(unit.questionSetId, unit.title);
     batches.push({
-      questionSetId,
+      questionSetId: unit.questionSetId,
       startIndex: placed,
       count,
       orderStart: 1,
       existingCount: 0,
       loadVia: "sheet",
       isNewSet: true,
+      unitTitle: unit.title,
+      childOrder: unit.childOrder,
+      commonUnitId: unit.commonUnitId,
     });
     placed += count;
   }

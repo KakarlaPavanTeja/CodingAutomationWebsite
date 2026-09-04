@@ -35,6 +35,11 @@ export const ZIP_PUBLIC_URL_BASE = (
   "https://new-assets.ccbp.in/frontend/ccbp_beta/content_loading/uploads/"
 ).replace(/\/$/, "");
 
+/** Parent resource the auto-created "Coding Testing N" units hang off. */
+export const NKB_TESTING_PARENT_RESOURCE = (
+  process.env.NKB_TESTING_PARENT_RESOURCE || ""
+).trim();
+
 export function nkbLoadCredentials() {
   return {
     username: (process.env.NKB_LOAD_DATA_USERNAME || "content_loader").trim(),
