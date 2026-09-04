@@ -99,6 +99,14 @@ _PURPOSE_DEFAULTS: dict[str, str] = {
     # Advisory-only judge (callers never fail on it), so the cheapest capable
     # reasoner wins: v4-flash is ~32x cheaper on output than gemini-3.5-flash.
     "validate_solutions": _DEEPSEEK_V4_FLASH,
+    # Mechanical transcription: read the statement's Input Format and the
+    # reference's parser, emit ~100 tokens of stdin. EVERY proposal is executed
+    # against the reference before it is accepted, so a weak model cannot ship a
+    # wrong layout — it can only cost the one informed retry. It used to fall
+    # through _canonical_purpose to "chat" (gpt-5.4, effort=high, 32K cap), which
+    # was tolerable while the call was a rare fallback and is not now that it runs
+    # on every function-type problem.
+    "io_contract_layout": _DEEPSEEK_V4_FLASH,
 }
 
 # Default reasoning + fallback ladder per purpose (429/5xx only).
@@ -170,6 +178,13 @@ _PURPOSE_CONFIG: dict[str, dict] = {
             {"model": _GPT_54, "effort": "low"},
         ],
     },
+    "io_contract_layout": {
+        "default_effort": "low",
+        "fallbacks": [
+            {"model": _GEMINI_FLASH, "effort": "low"},
+            {"model": _GPT_54, "effort": "low"},
+        ],
+    },
     # The tiered ladder in _TESTCASES_TIER_DEFAULTS only reaches call_llm via the
     # env vars apply_testcases_routing() writes. Without an entry here, any
     # caller that skips that call (or runs before it) got a single model with no
@@ -221,6 +236,7 @@ _ENV_SUFFIX = {
     "wrong_solutions": "WRONG_SOLUTIONS",
     "brute_force": "BRUTE_FORCE",
     "validate_solutions": "VALIDATE_SOLUTIONS",
+    "io_contract_layout": "IO_CONTRACT_LAYOUT",
 }
 
 
@@ -268,6 +284,9 @@ _DEFAULT_MAX_TOKENS: dict[str, int] = {
     "editorial": 100000,
     "wrong_solutions": 48000,
     "validate_solutions": 8000,
+    # The answer is a handful of stdin lines; the budget is headroom for hidden
+    # reasoning tokens, not for the output.
+    "io_contract_layout": 8000,
 }
 
 
@@ -996,7 +1015,8 @@ def _resolve_reasoning_effort(purpose: str) -> str | None:
         raw = os.environ.get("OPENAI_REASONING_EFFORT_HARDEN")
         effort = "medium" if raw is None else str(raw).strip().lower()
         return effort if effort in _REASONING_EFFORT_ALLOWED else None
-    if p in {"code", "wrong_solutions", "enrichment", "chat", "validate_solutions"}:
+    if p in {"code", "wrong_solutions", "enrichment", "chat", "validate_solutions",
+             "io_contract_layout"}:
         env_key = f"OPENAI_REASONING_EFFORT_{_ENV_SUFFIX[p]}"
         raw = os.environ.get(env_key)
         if raw is None and p == "chat":
@@ -1117,6 +1137,8 @@ def call_llm(
       - "code"        — multi-language conversion / code_splitter
       - "enrichment"  — hints, real-life, follow-ups
       - "editorial"   — full multi-solution DSA editorial (100K output cap)
+      - "io_contract_layout" — example -> raw stdin transcription (cheap; verified
+                        by executing the reference, so a miss costs one retry)
 
     Returns (content, usage) where usage has:
       prompt_tokens, completion_tokens, total_tokens, cost (USD), model

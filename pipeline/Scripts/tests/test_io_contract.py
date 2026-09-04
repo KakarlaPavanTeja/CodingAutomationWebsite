@@ -199,9 +199,10 @@ class TestVerifyIoContract(unittest.TestCase):
         self.assertEqual(contract["pairs"][0]["stdin"], "2\n3\n1 2 3\n")
         self.assertEqual(contract["pairs"][0]["stdout"], "12")
 
-    def test_the_model_is_told_which_layouts_already_failed(self):
-        """Without this the model re-proposes the verbatim layout the pre-check just
-        disproved, burning both attempts on the same dead end."""
+    def test_the_model_is_handed_the_statements_own_io_format(self):
+        """The contract must freeze the layout the student was SHOWN. Without the
+        declared Input Format in the prompt the model can only guess one off the
+        parser, and any layout that happens to parse gets frozen instead."""
         seen = {}
 
         def capture(system, user, purpose=None):
@@ -210,6 +211,11 @@ class TestVerifyIoContract(unittest.TestCase):
                                      "model": "fake", "cost": 0.0}
 
         desc = NL.join([
+            "**Input Format**", "",
+            "- The first line contains `k` and the length of `arr`, space separated.",
+            "- The second line contains the elements of `arr`, space separated.", "",
+            "**Output Format**", "",
+            "- A single integer.", "",
             "## Example 1", "**Input:**", FENCE, "arr = [1, 2, 3]", "k = 2", FENCE,
             "**Output:**", FENCE, "12", FENCE, "",
         ])
@@ -219,8 +225,8 @@ class TestVerifyIoContract(unittest.TestCase):
             + "print(int(d[0]) * int(d[1]) * int(d[2]))" + NL
         )
         _m.verify_io_contract(desc, ref, outputs_dir=self.out, llm=capture)
-        self.assertIn("already tried", seen["user"])
-        self.assertIn("1 2 3", seen["user"])
+        self.assertIn("space separated", seen["user"])
+        self.assertIn("A single integer", seen["user"])
 
     def test_named_var_conversion_failure_is_reported_not_silent(self):
         """No proposed layout reproduces the stated answer -> a loud NOT VERIFIED with
