@@ -19,10 +19,30 @@ export interface LoadRecord {
   finishedAt: Date | null;
 }
 
-/** One log entry: timestamped and single-line, so the column stays greppable. */
-export function formatLogLine(phase: string, message: string): string {
+const IST_STAMP_FORMAT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Kolkata",
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+/**
+ * One log entry: timestamped and single-line, so the column stays greppable.
+ * The stamp is pinned to Asia/Kolkata (the team reading these logs is IST),
+ * independent of the host process's timezone, and labelled "IST" so it can't
+ * be misread as UTC next to the UI's `toLocaleString` banners.
+ * `now` defaults to the real clock; it exists only so tests can pin an instant.
+ */
+export function formatLogLine(phase: string, message: string, now: Date = new Date()): string {
   const flat = String(message).replace(/\s*\n\s*/g, " ").trim();
-  return `[${new Date().toISOString()}] [${phase}] ${flat}`;
+  const parts = IST_STAMP_FORMAT.formatToParts(now);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const stamp = `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
+  return `[${stamp} IST] [${phase}] ${flat}`;
 }
 
 export async function createLoadRecord(args: {
