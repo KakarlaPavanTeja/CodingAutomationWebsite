@@ -68,6 +68,10 @@ export default function LoadCodingQuestionPage() {
     setFile(null);
     setLoadAnyway(false);
     setRemarks("");
+    // A newly picked file has not failed anything yet, so it has not earned the
+    // force control — leaving it visible offers a remedy for a problem this file
+    // has not hit. A genuine duplicate re-reveals it on the next attempt.
+    setPriorStatus("none");
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
