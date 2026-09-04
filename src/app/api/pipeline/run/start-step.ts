@@ -25,6 +25,25 @@ import { pipelineStateCacheInvalidate } from "@/lib/pipeline-state-cache";
 import { resolveOpenRouterBaseUrl } from "@/lib/openrouter";
 import type { PipelineMode, QuestionType, StepId } from "@/types/pipeline";
 
+export interface StartStepArgs {
+  /** Already validated with `assertSafeProblemId`. */
+  problemId: string;
+  userId: string;
+  stepId: StepId;
+  /** When set, must equal the problem's stored mode. */
+  mode?: PipelineMode;
+  subSteps?: string[];
+  languages?: string[];
+  testcaseCount?: number;
+  /** Composite `pipeline_runs.step_id` for a per-language run (`split_code__cpp`). */
+  runKey?: string;
+  refineNote?: string;
+}
+
+export type StartStepResult =
+  | { ok: true; runId: string | null; stepId: StepId; pid: number | null }
+  | { ok: false; status: number; error: string };
+
 async function markRunTerminal(
   runId: string | null,
   status: "failed" | "completed",
@@ -112,39 +131,30 @@ function pipelineSpawnEnv(overrides: Record<string, string>): NodeJS.ProcessEnv 
   return env;
 }
 
-export interface StartStepArgs {
-  /** Already through `assertSafeProblemId`. */
-  problemId: string;
-  stepId: StepId;
-  /** Owner of the resulting `pipeline_runs` row — NOT NULL in the schema. */
-  userId: string;
-  mode?: PipelineMode;
-  subSteps?: string[];
-  languages?: string[];
-  testcaseCount?: number;
-  runKey?: string;
-  refineNote?: string;
+/**
+ * Called once a spawned step's process closes and its run row is terminal.
+ * Injected so `advance-queue` can import `startStep` without `startStep`
+ * importing it back — the two would otherwise form a require cycle.
+ */
+type OnStepClosed = (problemId: string) => void;
+let onStepClosed: OnStepClosed = () => {};
+export function setOnStepClosed(handler: OnStepClosed): void {
+  onStepClosed = handler;
 }
 
-export type StartStepResult =
-  | { ok: true; runId: string | null; stepId: StepId; logStepKey: string }
-  | { ok: false; error: string; status: number };
-
 /**
- * Launch one pipeline step: validate it against the problem's STORED config,
- * insert the run row, spawn Python, and own the process from here to `close`.
+ * Launch one pipeline step as one Python process.
  *
- * Extracted from the run route so the server-side Run All orchestrator can
- * launch a step in-process. It has no session cookie and self-HTTP calls to our
- * own server are fragile, so calling this directly is the only supported path.
- * Auth and request-shape validation stay with the route — this function trusts
- * its caller to have done both.
+ * Extracted from the run route unchanged so the server-side Run All
+ * orchestrator can launch a step in-process: it has no session cookie, and an
+ * HTTP call from the server back to itself is fragile. The route keeps auth,
+ * argument validation and the HTTP response; everything below is the launch.
  */
 export async function startStep(args: StartStepArgs): Promise<StartStepResult> {
   const {
     problemId: safeProblemId,
+    userId,
     stepId,
-    userId: callerUserId,
     mode,
     subSteps,
     languages,
@@ -153,11 +163,11 @@ export async function startStep(args: StartStepArgs): Promise<StartStepResult> {
     refineNote,
   } = args;
 
-  // The stored problem config — not the client request — is the source of truth
-  // for which steps are valid and which mode the pipeline runs in. This stops a
-  // caller from running, say, a function-only step (split_code / execute_tests_function)
-  // on a non-function problem, or driving the pipeline in a mode the problem
-  // was never set up for.
+  // The stored problem config — not the caller — is the source of truth for
+  // which steps are valid and which mode the pipeline runs in. This stops a
+  // caller from running, say, a function-only step (split_code /
+  // execute_tests_function) on a non-function problem, or driving the pipeline
+  // in a mode the problem was never set up for.
   const cfgRows = await db
     .select({
       questionType: problems.questionType,
@@ -169,7 +179,7 @@ export async function startStep(args: StartStepArgs): Promise<StartStepResult> {
     .where(eq(problems.id, safeProblemId))
     .limit(1);
   if (!cfgRows[0]) {
-    return { ok: false, error: "Not found", status: 404 };
+    return { ok: false, status: 404, error: "Not found" };
   }
   const storedQuestionType = cfgRows[0].questionType as QuestionType;
   const storedMode = cfgRows[0].mode as PipelineMode;
@@ -191,12 +201,12 @@ export async function startStep(args: StartStepArgs): Promise<StartStepResult> {
   // Reject a step that isn't tracked for this problem (workflow + GQ-embedded e.g. brute force).
   const allowedSteps = getAllTrackedStepIds(storedQuestionType, storedMode);
   if (!allowedSteps.includes(stepId)) {
-    return { ok: false, error: "Step is not part of this problem's workflow", status: 400 };
+    return { ok: false, status: 400, error: "Step is not part of this problem's workflow" };
   }
 
   // Reject a client mode that contradicts the stored mode; otherwise derive it.
   if (mode !== undefined && mode !== storedMode) {
-    return { ok: false, error: "Mode does not match the problem configuration", status: 400 };
+    return { ok: false, status: 400, error: "Mode does not match the problem configuration" };
   }
   const effectiveMode: PipelineMode = storedMode;
 
@@ -204,8 +214,8 @@ export async function startStep(args: StartStepArgs): Promise<StartStepResult> {
   if (stepMayCallLlm(stepId) && !openRouterKey) {
     return {
       ok: false,
-      error: "OPENROUTER_API_KEY is not set. Add it to .env.local (https://openrouter.ai/keys).",
       status: 503,
+      error: "OPENROUTER_API_KEY is not set. Add it to .env.local (https://openrouter.ai/keys).",
     };
   }
 
@@ -228,37 +238,32 @@ export async function startStep(args: StartStepArgs): Promise<StartStepResult> {
   const scriptPath = path.join(scriptsDir, scriptBasename);
 
   let runId: string | null = null;
-  let userId: string | null = callerUserId;
   let previousStatus: string | null = null;
 
   try {
-    {
-      userId = callerUserId;
+    const probRows = await db
+      .select({ status: problems.status })
+      .from(problems)
+      .where(eq(problems.id, safeProblemId))
+      .limit(1);
+    previousStatus = probRows[0]?.status ?? null;
 
-      const probRows = await db
-        .select({ status: problems.status })
-        .from(problems)
-        .where(eq(problems.id, safeProblemId))
-        .limit(1);
-      previousStatus = probRows[0]?.status ?? null;
+    await db
+      .update(problems)
+      .set({ status: "processing", updatedAt: new Date() })
+      .where(eq(problems.id, safeProblemId));
 
-      await db
-        .update(problems)
-        .set({ status: "processing", updatedAt: new Date() })
-        .where(eq(problems.id, safeProblemId));
+    const runRows = await db
+      .insert(pipelineRuns)
+      .values({
+        problemId: safeProblemId,
+        userId,
+        stepId: logStepKey,
+        status: "running",
+      })
+      .returning({ id: pipelineRuns.id });
 
-      const runRows = await db
-        .insert(pipelineRuns)
-        .values({
-          problemId: safeProblemId,
-          userId: callerUserId,
-          stepId: logStepKey,
-          status: "running",
-        })
-        .returning({ id: pipelineRuns.id });
-
-      runId = runRows[0]?.id ?? null;
-    }
+    runId = runRows[0]?.id ?? null;
   } catch {
     // Don't block execution
   }
@@ -282,8 +287,8 @@ export async function startStep(args: StartStepArgs): Promise<StartStepResult> {
     }
     return {
       ok: false,
-      error: `Failed to create workspace: ${err instanceof Error ? err.message : "Unknown"}`,
       status: 500,
+      error: `Failed to create workspace: ${err instanceof Error ? err.message : "Unknown"}`,
     };
   }
 
@@ -477,14 +482,14 @@ export async function startStep(args: StartStepArgs): Promise<StartStepResult> {
         // sub-runs, so writing the bare parent here would clobber sibling
         // progress (P1-C2/M2).
         if (logStepKey === stepId) {
-          const closeStateRows = await db
+          const stateRows = await db
             .select({ stepStatuses: pipelineStates.stepStatuses })
             .from(pipelineStates)
             .where(eq(pipelineStates.problemId, safeProblemId))
             .limit(1);
 
-          if (closeStateRows[0]) {
-            const stepStatuses = (closeStateRows[0].stepStatuses as Record<string, unknown>) || {};
+          if (stateRows[0]) {
+            const stepStatuses = (stateRows[0].stepStatuses as Record<string, unknown>) || {};
             stepStatuses[stepId] = {
               status: wasStopped ? "failed" : code === 0 ? "completed" : "failed",
               exitCode: wasStopped ? -1 : code ?? 1,
@@ -511,9 +516,14 @@ export async function startStep(args: StartStepArgs): Promise<StartStepResult> {
     }
 
     await cleanupTempDir(tmpDir);
+
+    // The run row is terminal — let the server-side Run All queue advance.
+    // This is a `close` handler: an unhandled rejection here would take the
+    // whole Node process down (Node 15+), so the callee must never throw.
+    onStepClosed(safeProblemId);
   });
 
   proc.unref();
 
-  return { ok: true, runId, stepId, logStepKey };
+  return { ok: true, runId, stepId, pid: proc.pid ?? null };
 }
