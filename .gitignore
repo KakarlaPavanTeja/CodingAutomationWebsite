@@ -117,3 +117,6 @@ file-handling-mediumhard/
 
 # Google service account key (Loadings / Sheets API)
 service-account.json
+
+# Ad-hoc analysis output, not part of the app
+Claude outputs/
