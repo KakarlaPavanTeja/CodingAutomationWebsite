@@ -74,3 +74,13 @@ test("a queued step with no run row yet is pending, not dropped", () => {
   const d = decideQueue({ ...base, queue: ["generate_question"] as StepId[], stepStates: states([]) });
   assert.deepEqual(d.launch, ["generate_question"]);
 });
+
+test("keeps a running step queued so its remaining waves can still launch", () => {
+  const d = decideQueue({
+    ...base,
+    queue: ["generate_question"] as StepId[],
+    stepStates: states([["generate_question", "running"]]),
+  });
+  assert.equal(d.launch.length, 0);
+  assert.deepEqual(d.remaining, ["generate_question"]);
+});

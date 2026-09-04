@@ -64,14 +64,19 @@ export function decideQueue(input: QueueInput): QueueDecision {
 
   for (const id of queue) {
     const status = stepStates.get(id)?.status ?? "pending";
-    // Drop steps that are done or already executing.
-    if (status === "completed" || status === "running") continue;
+    // Drop steps that are done.
+    if (status === "completed") continue;
     // Non-blocking steps (if any) are best-effort: once they've failed, drop
     // them from the queue instead of retrying, so Run All continues to the next
     // steps rather than looping on the failure.
     if (status === "failed" && config(id).nonBlocking) continue;
 
-    if (input.launching.has(id)) {
+    // A running step is KEPT, where the client dropped it. The client dropped it
+    // because its own await-loop drove the step to completion; the server has no
+    // such loop, and a multi-process step (Generate Question's waves, the
+    // per-language fan-out) reads `running` between waves and still has work to
+    // launch. Dropping it here would abandon the step half-done.
+    if (status === "running" || input.launching.has(id)) {
       remaining.push(id);
       alive.add(id);
       continue;

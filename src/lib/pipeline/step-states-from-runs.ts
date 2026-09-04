@@ -1,6 +1,23 @@
 import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
 import { effectiveStepStatus } from "@/lib/pipeline-orphan";
-import type { StepId, StepState, StepStatus, SubStepRunState } from "@/types/pipeline";
+import {
+  getLangsForStep,
+  PARALLEL_LANG_STEPS,
+  recomputeLanguageStepStatus,
+} from "@/lib/pipeline-language-steps";
+import {
+  deriveEnabledQuestionSubSteps,
+  recomputeGenerateQuestionStatus,
+  shouldRunTitlesLlm,
+  type GQSubStepContext,
+} from "@/lib/pipeline-question";
+import type {
+  QuestionType,
+  StepId,
+  StepState,
+  StepStatus,
+  SubStepRunState,
+} from "@/types/pipeline";
 
 /** The `pipeline_runs` columns a readiness decision needs. Logs are irrelevant. */
 export interface RunRow {
@@ -89,6 +106,48 @@ export function stepStatesFromRuns(rows: RunRow[]): Map<StepId, StepState> {
     state.startTime = run.startTime;
     state.endTime = run.endTime;
     state.activeRunId = run.activeRunId;
+  }
+
+  return states;
+}
+
+/**
+ * Fill in the parent status of steps that run as SEVERAL processes.
+ *
+ * `generate_question` and the per-language steps have no top-level run row of
+ * their own — the client recomputes their status from the sub-runs and persists
+ * that. The server has to do the same recompute, with the same two functions, or
+ * a half-finished Generate Question reads as `pending` and Run All relaunches it.
+ *
+ * Mutates and returns the map it is given.
+ */
+export function deriveParentStatuses(
+  states: Map<StepId, StepState>,
+  opts: { questionType: QuestionType; gqContext: GQSubStepContext; languages: string[] }
+): Map<StepId, StepState> {
+  const gq = states.get("generate_question");
+  if (gq?.subStepRuns) {
+    gq.enabledSubSteps = deriveEnabledQuestionSubSteps(opts.gqContext);
+    // With the AI title toggle off, Titles never spawns: the client marks it
+    // `skipped` in place. `pipeline_runs.status` only allows running/completed/
+    // failed, so there is no row to read that back from — synthesize the same
+    // skipped run here, or Generate Question waits forever for a step that will
+    // never produce one.
+    if (!shouldRunTitlesLlm(opts.gqContext) && !gq.subStepRuns.titles) {
+      gq.subStepRuns = {
+        ...gq.subStepRuns,
+        titles: { status: "skipped", logs: [], exitCode: 0, startTime: null, endTime: null },
+      };
+    }
+    Object.assign(gq, recomputeGenerateQuestionStatus(gq, opts.questionType, opts.gqContext));
+  }
+
+  for (const id of PARALLEL_LANG_STEPS) {
+    const state = states.get(id);
+    if (!state?.languageSubRuns) continue;
+    const langs = getLangsForStep(id, opts.languages);
+    state.enabledLanguages = langs;
+    Object.assign(state, recomputeLanguageStepStatus(state, langs));
   }
 
   return states;
