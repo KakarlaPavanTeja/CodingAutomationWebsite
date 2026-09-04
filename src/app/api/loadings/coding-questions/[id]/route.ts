@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireProblemAccess } from "@/lib/auth/ownership";
 import { requireAuthApi } from "@/lib/auth/server";
+import { assertSafeProblemId } from "@/lib/storage-path";
 import { getLoadRecord } from "@/lib/loadings/load-records";
 
-const NOT_FOUND = NextResponse.json({ error: "Not found" }, { status: 404 });
+// A `NextResponse` body is single-use — a module-level instance returned
+// more than once serves an empty body from the second call on, and (worse)
+// makes malformed/missing/forbidden ids distinguishable by body content
+// instead of all reading as the same generic 404. Build a fresh one per call.
+function notFound(): NextResponse {
+  return NextResponse.json({ error: "Not found" }, { status: 404 });
+}
 
 /**
  * Poll a background load's status/logs.
@@ -24,8 +31,19 @@ export async function GET(
   if (auth.error) return auth.error;
 
   const { id } = await params;
-  const record = await getLoadRecord(id);
-  if (!record) return NOT_FOUND;
+  // The column is `uuid`, so a malformed id would otherwise reach Postgres
+  // and raise 22P02 (uncaught -> 500) instead of the same generic 404 a
+  // well-formed-but-missing id gets. Reuse the sibling route's UUID-shape
+  // check rather than hand-rolling a new one.
+  let safeId: string;
+  try {
+    safeId = assertSafeProblemId(id);
+  } catch {
+    return notFound();
+  }
+
+  const record = await getLoadRecord(safeId);
+  if (!record) return notFound();
 
   if (record.problemId) {
     const problemAuth = await requireProblemAccess(record.problemId);
@@ -33,7 +51,7 @@ export async function GET(
   } else {
     const isOwner = record.userId === auth.session.userId;
     const isAdmin = auth.session.profile.role === "admin";
-    if (!isOwner && !isAdmin) return NOT_FOUND;
+    if (!isOwner && !isAdmin) return notFound();
   }
 
   return NextResponse.json(record);

@@ -48,6 +48,18 @@ const REQUIRED_FIELDS: (keyof LoadForm)[] = [
   "title",
 ];
 
+// These form values reach Google Sheets cells (or a sheet/spreadsheet name)
+// with valueInputOption: USER_ENTERED — a leading =/+/-/@ turns them into a
+// live formula in a sheet the beta content pipeline reads. Reject at this
+// trust boundary rather than trusting the client.
+const FORMULA_PREFIX_RE = /^[=+\-@]/;
+function formulaInjectingField(form: LoadForm): string | null {
+  for (const [key, val] of Object.entries(form)) {
+    if (typeof val === "string" && FORMULA_PREFIX_RE.test(val)) return key;
+  }
+  return null;
+}
+
 /**
  * Is the flow configured, and (when `problemId` is given) what did this
  * problem last load? Lets the UI hide the button / show the warning instead
@@ -117,6 +129,17 @@ export async function POST(request: NextRequest) {
     const file = formData.get("file");
     if (!(file instanceof File)) {
       return NextResponse.json({ error: "file is required." }, { status: 400 });
+    }
+    // The content-length pre-check above is only a fast path: HTTP/2 omits
+    // that header and chunked transfer-encoding omits it too, so a large
+    // body can skip it entirely. `file.size` is accurate once formData() has
+    // parsed the body, regardless of transfer encoding — check it before
+    // buffering the whole file into memory.
+    if (file.size > MAX_BODY_SIZE) {
+      return NextResponse.json(
+        { error: `File too large. Max ${MAX_BODY_SIZE / (1024 * 1024)}MB.` },
+        { status: 413 },
+      );
     }
     const buffer = Buffer.from(await file.arrayBuffer());
     try {
@@ -197,6 +220,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const badField = formulaInjectingField(form);
+  if (badField) {
+    return NextResponse.json(
+      { error: `"${badField}" cannot start with =, +, - or @.` },
+      { status: 400 },
+    );
+  }
+
   if (problemId && !remarks) {
     const last = await latestLoadForProblem(problemId);
     if (last) {
@@ -232,8 +263,14 @@ export async function POST(request: NextRequest) {
         error: result.error ?? null,
       });
     } catch (e) {
-      await appendLoadLog(loadId, formatLogLine("error", (e as Error).message));
-      await finishLoadRecord(loadId, { status: "failed", error: (e as Error).message });
+      const message = (e as Error).message;
+      // Do NOT await the log write here: finishLoadRecord must run even if
+      // this rejects, or a transient DB blip strands the row at "running"
+      // forever (no reaper polls it back to a terminal state).
+      appendLoadLog(loadId, formatLogLine("error", message)).catch((err) =>
+        console.error("[Loadings] appendLoadLog failed:", (err as Error).message),
+      );
+      await finishLoadRecord(loadId, { status: "failed", error: message });
     }
   })().catch((err) => {
     console.error("[Loadings] background coding-question load failed:", (err as Error).message);
