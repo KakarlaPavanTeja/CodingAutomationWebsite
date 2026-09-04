@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { OutputBrowser } from "@/components/files/OutputBrowser";
 import { TabbedEditor } from "@/components/files/TabbedEditor";
+import { LoadToBeta } from "@/components/problems/LoadToBeta";
 import type { OutputFile } from "@/types/pipeline";
 
 const CODING_QUESTIONS_PATH = "forJSONPreparation/coding_questions.json";
@@ -161,7 +162,7 @@ export function ProblemOutputs({ problemId }: ProblemOutputsProps) {
   return (
     <div className="flex flex-col gap-3">
       {hasCodingQuestions && (
-        <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3">
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-foreground">
               Upload-ready question file
@@ -192,6 +193,7 @@ export function ProblemOutputs({ problemId }: ProblemOutputsProps) {
             </svg>
             Download
           </a>
+          <LoadToBeta problemId={problemId} />
         </div>
       )}
 
