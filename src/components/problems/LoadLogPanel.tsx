@@ -120,8 +120,8 @@ export function LoadLogPanel({ loadId, onDone }: LoadLogPanelProps) {
 
       {status === "completed" && record && record.questionIds.length > 0 && (
         <ul className="space-y-0.5 text-xs">
-          {record.questionIds.map((questionId) => (
-            <li key={questionId}>
+          {record.questionIds.map((questionId, i) => (
+            <li key={`${i}-${questionId}`}>
               <a
                 className="underline"
                 href={`${QUESTION_URL_BASE}${questionId}`}

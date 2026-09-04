@@ -135,7 +135,7 @@ export default function LoadCodingQuestionPage() {
           {loadId ? (
             <>
               <p className="text-xs text-muted-foreground">
-                Load started — question ids will be regenerated for this copy.
+                Load started — the questions keep the ids in the uploaded file.
               </p>
               <LoadLogPanel loadId={loadId} />
               <Button size="sm" variant="outline" onClick={resetForAnotherLoad}>

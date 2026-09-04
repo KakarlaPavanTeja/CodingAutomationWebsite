@@ -63,10 +63,17 @@ function formulaInjectingField(form: LoadForm): string | null {
 /**
  * Is the flow configured, and (when `problemId` is given) what did this
  * problem last load? Lets the UI hide the button / show the warning instead
- * of failing mid-load. `problemId` is optional so the zero-argument contract
- * this route has always had keeps working (LoadToBeta polls it on mount).
+ * of failing mid-load.
+ *
+ * `missing` names unset environment variables, so this needs a session even
+ * without a `problemId`: /api is exempt from the proxy's page auth, and an
+ * anonymous caller would otherwise learn which credentials this deployment
+ * lacks. Both callers (LoadToBeta, the upload page) are signed in.
  */
 export async function GET(request: NextRequest) {
+  const auth = await requireAuthApi();
+  if (auth.error) return auth.error;
+
   const missing = missingLoadingsConfig();
   const problemId = request.nextUrl.searchParams.get("problemId");
   if (!problemId) {
@@ -80,8 +87,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }
 
-  const auth = await requireProblemAccess(safeProblemId);
-  if (auth.error) return auth.error;
+  const access = await requireProblemAccess(safeProblemId);
+  if (access.error) return access.error;
 
   const lastLoad = await latestLoadForProblem(safeProblemId);
   return NextResponse.json({ configured: missing.length === 0, missing, lastLoad });
@@ -254,12 +261,20 @@ export async function POST(request: NextRequest) {
           );
         },
       });
-      const batch = result.batches[result.batches.length - 1];
+      // A load can split across several question sets, and every one of them
+      // belongs in the audit row: recording only the last batch under-reported
+      // both the sets written to and the questions loaded. `question_set_id`
+      // is a single text column, so multiple sets are joined — the registry
+      // sheet can legitimately list an id twice, hence the de-dupe.
+      const { batches } = result;
+      const questionSetIds = [...new Set(batches.map((b) => b.questionSetId))];
       await finishLoadRecord(loadId, {
         status: result.success ? "completed" : "failed",
-        questionSetId: batch?.questionSetId ?? null,
-        questionIds: batch?.questionIds ?? [],
-        taskOutputUrl: batch?.taskOutputUrl ?? null,
+        questionSetId: questionSetIds.join(", ") || null,
+        questionIds: batches.flatMap((b) => b.questionIds),
+        // On failure the loop stops at the failed batch, so the last batch's
+        // task output is the one worth linking to.
+        taskOutputUrl: batches[batches.length - 1]?.taskOutputUrl ?? null,
         error: result.error ?? null,
       });
     } catch (e) {

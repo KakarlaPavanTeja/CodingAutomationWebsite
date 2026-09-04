@@ -102,6 +102,24 @@ export interface LoadBatch {
 }
 
 /**
+ * What the registry should get once a batch has loaded, or null for "leave the
+ * sheet alone".
+ *
+ * Only a rollover-minted set is ever named here. Its row is new, and the
+ * derived "Coding Testing N" title is exactly what the NEXT rollover counts
+ * from. An ordinary set already has a row with its own name, and writing the
+ * operator's form title into it would rename e.g. "Coding Testing 10" to
+ * "Arrays practice" — `nextTestingUnitTitle` would then see max 9 and mint a
+ * SECOND "Coding Testing 10".
+ */
+export function registryUpsertForBatch(
+  batch: Pick<LoadBatch, "questionSetId" | "unitTitle">,
+): { questionSetId: string; unitName: string } | null {
+  const unitName = String(batch.unitTitle ?? "").trim();
+  return unitName ? { questionSetId: batch.questionSetId, unitName } : null;
+}
+
+/**
  * Split `total` questions across registry sets with room, minting new sets when
  * the registry is exhausted. Every returned batch fits inside the 50-per-set cap.
  */
@@ -157,7 +175,12 @@ export async function planQuestionSetBatches(
     });
     mintedTitles.push(unit.title);
     const count = Math.min(total - placed, QUESTION_SET_MAX);
-    await upsertRegistryRow(unit.questionSetId, unit.title);
+    // The registry row is written only AFTER the batch loads (see
+    // `loadCodingQuestions`). Writing it here left a phantom row for a set
+    // holding nothing whenever SHEET_LOADING, the unlock or `confirmLinked`
+    // then failed: the next load saw existingCount 0 with no minted title,
+    // fell into the "sheet" path, and created that set's unit under whatever
+    // parentResource / childOrder the operator happened to type.
     batches.push({
       questionSetId: unit.questionSetId,
       startIndex: placed,

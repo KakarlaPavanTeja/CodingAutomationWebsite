@@ -27,7 +27,12 @@ import {
   type CellUpdate,
 } from "./google-sheets";
 import { runNkbTask, uploadZipToS3 } from "./nkb";
-import { planQuestionSetBatches, upsertRegistryRow, type LoadBatch } from "./practice-set-db";
+import {
+  planQuestionSetBatches,
+  registryUpsertForBatch,
+  upsertRegistryRow,
+  type LoadBatch,
+} from "./practice-set-db";
 import { lookupQuestionSetQuestions } from "./question-set";
 
 const SHEET_LOADING_POLL = { maxAttempts: 100, pollMs: 3000 };
@@ -309,14 +314,15 @@ export async function loadCodingQuestions(
     const result = await runBatch(batches[i], questions, form, i, batches.length, onLog);
     results.push(result);
     if (result.success) {
-      // A rollover-minted set's registry name is already the derived
-      // "Coding Testing N" title (written inside planQuestionSetBatches) —
-      // writing form.title here would clobber it and break the next
-      // rollover's `nextTestingUnitTitle` count. Only an ordinary load, with
-      // no minted title, uses the operator's form.title.
-      await upsertRegistryRow(result.questionSetId, batches[i].unitTitle ?? form.title).catch(
-        (err) => console.warn("[Loadings] registry upsert failed:", (err as Error).message),
-      );
+      // Only a rollover-minted set is recorded, under its derived
+      // "Coding Testing N" title — never the operator's form.title, which
+      // would rename an existing row and break the next rollover's count.
+      const upsert = registryUpsertForBatch(batches[i]);
+      if (upsert) {
+        await upsertRegistryRow(upsert.questionSetId, upsert.unitName).catch((err) =>
+          console.warn("[Loadings] registry upsert failed:", (err as Error).message),
+        );
+      }
     } else {
       // Stop before loading later batches into other sets — the operator needs
       // to see the failure while the remaining questions are still unloaded.

@@ -104,6 +104,16 @@ export async function createNextTestingUnit(opts: {
 
   log("create unit", "reading existing testing units");
   const rows = await fetchRows(parentResource);
+  // Row 0 is the synthetic header, so <= 1 means no children were scraped.
+  // The testing parent always has children, so this is a BROKEN scrape (the
+  // admin changelist columns, its ?q= search or the paginator changed), not an
+  // empty parent. Proceeding would mint a unit at child order 1 in the live
+  // beta course tree, silently reordering real content.
+  if (rows.length <= 1) {
+    throw new Error(
+      `No child units found under NKB_TESTING_PARENT_RESOURCE ${parentResource}. That parent always has children, so the Django admin scrape in fetchTestingUnitRows is broken (changelist columns, the ?q= search or pagination changed). Refusing to mint a unit that would land at child order 1 — fix the scrape, then load again.`,
+    );
+  }
   const childOrder = nextChildOrder(rows) + (opts.childOrderOffset ?? 0);
   const title = nextTestingUnitTitle(opts.existingUnitNames ?? []);
   const questionSetId = randomUUID();

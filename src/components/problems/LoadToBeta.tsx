@@ -138,7 +138,9 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
           {activeLoadId ? (
             <>
               <p className="text-xs text-muted-foreground">
-                Load started — question ids will be regenerated for this copy.
+                {loadAnyway
+                  ? "Load started — question ids are regenerated, so beta gets a new copy alongside the previous one."
+                  : "Load started — the questions keep the ids in the prepared file."}
               </p>
               <LoadLogPanel loadId={activeLoadId} onDone={handleDone} />
               {done && (
@@ -160,8 +162,8 @@ export function LoadToBeta({ problemId, defaultTitle = "" }: LoadToBetaProps) {
                   </p>
                   {lastLoad.questionIds.length > 0 && (
                     <ul className="mt-1 space-y-0.5">
-                      {lastLoad.questionIds.map((questionId) => (
-                        <li key={questionId}>
+                      {lastLoad.questionIds.map((questionId, i) => (
+                        <li key={`${i}-${questionId}`}>
                           <a
                             className="underline"
                             href={`https://learning-beta.earlywave.in/question/${questionId}`}

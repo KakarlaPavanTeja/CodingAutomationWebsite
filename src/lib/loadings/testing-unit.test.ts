@@ -63,3 +63,21 @@ test("createNextTestingUnit advances title and child order across two mints in o
     else delete process.env.NKB_TESTING_PARENT_RESOURCE;
   }
 });
+
+test("createNextTestingUnit refuses to mint when the admin scrape finds no children", async () => {
+  const prev = process.env.NKB_TESTING_PARENT_RESOURCE;
+  process.env.NKB_TESTING_PARENT_RESOURCE = "test-parent";
+  // Header row only: the testing parent always has children, so this means the
+  // scrape broke. Minting anyway would put the unit at child order 1 in the
+  // live course tree.
+  const emptyRows = async () => [["unit_id", "parent_resource_id", "unit_order"]];
+  try {
+    await assert.rejects(
+      () => createNextTestingUnit({ existingUnitNames: ["Coding Testing 9"], fetchRows: emptyRows }),
+      /No child units found/,
+    );
+  } finally {
+    if (prev) process.env.NKB_TESTING_PARENT_RESOURCE = prev;
+    else delete process.env.NKB_TESTING_PARENT_RESOURCE;
+  }
+});
