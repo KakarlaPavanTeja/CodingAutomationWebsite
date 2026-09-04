@@ -117,3 +117,22 @@ test("loadCodingQuestions reports missing config through onLog", async () => {
   assert.ok(seen.some((l) => l.startsWith("config:")));
   if (prev) process.env.NKB_LOAD_DATA_PASSWORD = prev;
 });
+
+test("loadCodingQuestions swallows a throwing onLog instead of failing the call", async () => {
+  const prev = process.env.NKB_LOAD_DATA_PASSWORD;
+  delete process.env.NKB_LOAD_DATA_PASSWORD;
+
+  const result = await loadCodingQuestions(
+    [{ question_id: "q1" }],
+    { sheetName: "s", title: "t", childOrder: "1", parentResource: "p", autoUnlock: "TRUE" },
+    {
+      onLog: () => {
+        throw new Error("db write failed");
+      },
+    },
+  );
+
+  assert.equal(result.success, false);
+  assert.match(result.error ?? "", /Missing/);
+  if (prev) process.env.NKB_LOAD_DATA_PASSWORD = prev;
+});

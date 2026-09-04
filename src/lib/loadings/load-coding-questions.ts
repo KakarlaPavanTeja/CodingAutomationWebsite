@@ -278,7 +278,16 @@ export async function loadCodingQuestions(
   form: LoadForm,
   opts: { onLog?: (phase: string, message: string) => void } = {},
 ): Promise<LoadResult> {
-  const onLog = opts.onLog ?? (() => {});
+  // A throwing onLog (e.g. a DB write in the caller) must never fail an
+  // otherwise-successful load — swallow it once here, for every call site.
+  const rawOnLog = opts.onLog ?? (() => {});
+  const onLog = (phase: string, message: string): void => {
+    try {
+      rawOnLog(phase, message);
+    } catch (err) {
+      console.warn("[Loadings] onLog failed:", (err as Error).message);
+    }
+  };
 
   const missing = missingLoadingsConfig();
   onLog("config", missing.length ? `missing: ${missing.join(", ")}` : "loading is configured");
@@ -300,8 +309,13 @@ export async function loadCodingQuestions(
     const result = await runBatch(batches[i], questions, form, i, batches.length, onLog);
     results.push(result);
     if (result.success) {
-      await upsertRegistryRow(result.questionSetId, form.title).catch((err) =>
-        console.warn("[Loadings] registry upsert failed:", (err as Error).message),
+      // A rollover-minted set's registry name is already the derived
+      // "Coding Testing N" title (written inside planQuestionSetBatches) —
+      // writing form.title here would clobber it and break the next
+      // rollover's `nextTestingUnitTitle` count. Only an ordinary load, with
+      // no minted title, uses the operator's form.title.
+      await upsertRegistryRow(result.questionSetId, batches[i].unitTitle ?? form.title).catch(
+        (err) => console.warn("[Loadings] registry upsert failed:", (err as Error).message),
       );
     } else {
       // Stop before loading later batches into other sets — the operator needs
