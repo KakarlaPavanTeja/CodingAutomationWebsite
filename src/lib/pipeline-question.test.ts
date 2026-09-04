@@ -97,7 +97,9 @@ test("every applicable sub-step appears exactly once across the waves", () => {
 // while every other test still passes, which is precisely how the bug shipped.
 // ---------------------------------------------------------------------------
 
-const ROUTE = path.join(process.cwd(), "src/app/api/pipeline/run/route.ts");
+// The spawn path moved out of the route into start-step.ts so the Run All
+// orchestrator can call it in-process; the bound it asserts moved with it.
+const ROUTE = path.join(process.cwd(), "src/app/api/pipeline/run/start-step.ts");
 
 test("the pipeline route bounds both uploads to files the step actually wrote", async () => {
   const src = await readFile(ROUTE, "utf-8");
