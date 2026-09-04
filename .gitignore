@@ -117,3 +117,12 @@ file-handling-mediumhard/
 
 # Google service account key (Loadings / Sheets API)
 service-account.json
+
+# Ad-hoc analysis output, not part of the app
+Claude outputs/
+
+# Has no effect while .gitignore is tracked (git ignores only untracked paths).
+# Kept because it was asked for; to actually stop sharing this file you would
+# need `git rm --cached .gitignore`, which deletes it for every other clone.
+# For rules you want local-only, use .git/info/exclude instead.
+.gitignore
