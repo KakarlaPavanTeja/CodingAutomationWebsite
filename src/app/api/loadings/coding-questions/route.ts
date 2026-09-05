@@ -12,7 +12,9 @@ import { missingLoadingsConfig } from "@/lib/loadings/config";
 import { extractQuestionsFromUpload } from "@/lib/loadings/upload-input";
 import { regenerateQuestionIds } from "@/lib/loadings/regenerate-ids";
 import {
+  anyRunningLoad,
   appendLoadLog,
+  concurrentLoadRefusal,
   createLoadRecord,
   finishLoadRecord,
   formatLogLine,
@@ -219,27 +221,24 @@ export async function POST(request: NextRequest) {
   }
 
   // Two gates, deliberately distinct so the UI can tell them apart:
-  //   423 — a load for this problem is still running. Remarks do NOT lift it:
-  //         a forced second load would race the first for the same childOrder
-  //         under the real testing parent, or write the same questions twice.
+  //   423 — ANY load is still running, whatever its problem (or an upload).
+  //         Remarks do NOT lift it: a forced second load would race the
+  //         first for the same order inside a shared question set, or write
+  //         the same questions twice. Widened beyond one problem because two
+  //         DIFFERENT problems (or an upload, which has no problemId) still
+  //         contend for that same shared order sequence — see
+  //         docs/superpowers/plans/2026-09-04-load-order-collision.md.
   //   409 — a load already COMPLETED (below). That one is lifted by remarks,
   //         which is what regenerates the ids for a deliberate second copy.
   // ponytail: check-then-insert, so two POSTs landing in the same millisecond
-  // can both pass. Closing that needs a partial unique index on
-  // (problem_id) WHERE status = 'running' — a schema change. This gate already
-  // covers the real case (one operator, two tabs / a remounted panel).
-  if (problemId) {
-    const running = await runningLoadForProblem(problemId);
-    if (running) {
-      return NextResponse.json(
-        {
-          error:
-            "A load for this problem is already running. Watch it finish before starting another — starting a second one now would load into beta twice.",
-          loadId: running.id,
-        },
-        { status: 423 },
-      );
-    }
+  // can both pass. Closing that needs a database-level lock — Tasks 1-2 of
+  // the plan above make a collision survivable even then.
+  const refusal = concurrentLoadRefusal(await anyRunningLoad(), problemId);
+  if (refusal) {
+    return NextResponse.json(
+      { error: refusal.message, loadId: refusal.loadId },
+      { status: 423 },
+    );
   }
 
   if (problemId && !remarks) {

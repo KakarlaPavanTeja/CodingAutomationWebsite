@@ -248,6 +248,56 @@ export async function runningLoadForProblem(
 }
 
 /**
+ * The load actually in flight ANYWHERE, if any — widens `runningLoadForProblem`
+ * from "this problem" to "any problem, or an upload (`problemId` null)".
+ *
+ * Two different problems loading at once still contend for the same shared
+ * resource: the order sequence inside one question set. `runningLoadForProblem`
+ * lets them both pass because it's keyed on `problemId`; this is the query
+ * behind the global refusal that closes that gap. Same staleness window as
+ * `runningLoadForProblem`, for the same reason (a crashed process must not
+ * block loading forever).
+ */
+export async function anyRunningLoad(now: Date = new Date()): Promise<LoadRecord | null> {
+  const [row] = await db
+    .select()
+    .from(codingQuestionLoads)
+    .where(
+      and(
+        eq(codingQuestionLoads.status, "running"),
+        gt(codingQuestionLoads.startedAt, new Date(now.getTime() - RUNNING_LOAD_STALE_MS)),
+      ),
+    )
+    .orderBy(desc(codingQuestionLoads.startedAt))
+    .limit(1);
+  return (row as LoadRecord) ?? null;
+}
+
+/**
+ * Decision behind the global 423: is there ANY load running right now, no
+ * matter which problem it belongs to (or none, for an upload)? Pure and
+ * database-free so it's testable on its own — the caller does the
+ * `anyRunningLoad()` query and passes the row (or null) in.
+ *
+ * Deliberately NOT liftable by `remarks`: regenerating ids makes a SECOND
+ * copy safe, it does not make two loads racing the same order sequence safe.
+ */
+export function concurrentLoadRefusal(
+  running: Pick<LoadRecord, "id" | "problemId"> | null,
+  _problemId: string | null,
+): { message: string; loadId: string } | null {
+  if (!running) return null;
+  const target = running.problemId ? `problem ${running.problemId}` : "an upload";
+  return {
+    message:
+      `Another coding-question load (${target}, id ${running.id}) is already running. ` +
+      "Wait for it to finish — two loads into the same question set can claim the same order, " +
+      "and the backend rejects the loser without saying why.",
+    loadId: running.id,
+  };
+}
+
+/**
  * Most recent load attempt for a problem, any status — lets the UI tell a
  * failed (or still-running) last attempt apart from "never loaded", instead
  * of only ever seeing a completed row or nothing at all.
