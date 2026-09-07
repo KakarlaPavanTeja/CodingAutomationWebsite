@@ -1944,7 +1944,23 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         console.error("[run-all] start failed:", data?.error ?? res.status);
         return;
       }
-      setRunAllSteps(data.queued ?? []);
+      const queued = (data.queued ?? []) as StepId[];
+      setRunAllSteps(queued);
+
+      // An empty queue is a legitimate answer, not a failure — but clicking a
+      // button and getting no reaction reads as broken. Say what happened.
+      if (queued.length === 0) {
+        const skipped = (data.skipped ?? []) as StepId[];
+        setLegacyPipelineNotice(
+          skipped.length > 0
+            ? `Nothing to run: ${skipped
+                .map((id) => getStepConfig(id).label)
+                .join(", ")} still need a problem title. Set one in Pipeline settings and click Save.`
+            : "Nothing to run — every step in this workflow is already complete. Use Re-run on a step, or Re-run affected."
+        );
+      } else {
+        setLegacyPipelineNotice(null);
+      }
     } catch (e) {
       console.error("[run-all] start failed:", e);
     }
