@@ -88,14 +88,32 @@ export async function POST(request: NextRequest) {
     .from(pipelineStates)
     .where(eq(pipelineStates.problemId, safeProblemId))
     .limit(1);
+  // A brand-new problem may have no pipeline_states row yet: the page writes
+  // one when something changes, so Run All can legitimately arrive first. The
+  // queue is stored ON that row via UPDATE, so without it the queue would be
+  // silently discarded and nothing would ever run. Create it with the same
+  // defaults the client starts from.
+  //
+  // enabled_languages is set explicitly: the column's DB default holds display
+  // LABELS ('Python', 'Node.js') while every consumer matches on ids
+  // ('python', 'nodejs'), so letting the default apply yields a language set
+  // that nothing recognises.
+  const defaultLanguages = LANGUAGES.filter((l) => l.defaultEnabled).map((l) => l.id);
   if (!stateRows[0]) {
-    // No pipeline state saved yet — the page writes one on first load, and
-    // without it there is no language selection or global config to run with.
-    return NextResponse.json({ error: "Pipeline state not initialised" }, { status: 409 });
+    await db
+      .insert(pipelineStates)
+      .values({
+        problemId: safeProblemId,
+        userId: auth.session.userId,
+        questionType,
+        mode,
+        enabledLanguages: defaultLanguages,
+      })
+      .onConflictDoNothing();
+    pipelineStateCacheInvalidate(safeProblemId);
   }
-  const languages =
-    stateRows[0].enabledLanguages ?? LANGUAGES.filter((l) => l.defaultEnabled).map((l) => l.id);
-  const stepConfigs = (stateRows[0].stepConfigs as Record<string, unknown>) ?? {};
+  const languages = stateRows[0]?.enabledLanguages ?? defaultLanguages;
+  const stepConfigs = (stateRows[0]?.stepConfigs as Record<string, unknown>) ?? {};
   const globalCfg = (stepConfigs["__global__"] as GlobalCfg | undefined) ?? {};
   const ownerTitle = globalCfg.ownerTitle?.trim() ?? "";
   const generateTitleWithAi = globalCfg.generateTitleWithAi ?? false;

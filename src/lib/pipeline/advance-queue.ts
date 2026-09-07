@@ -53,12 +53,15 @@ async function readContext(problemId: string): Promise<QueueContext | null> {
     .from(pipelineStates)
     .where(eq(pipelineStates.problemId, problemId))
     .limit(1);
+  // No row is not a reason to stall: the run-all endpoint creates one when it
+  // stores the queue, but a queue written by an older build (or a row deleted
+  // underneath us) must still advance on the client's defaults rather than
+  // freezing the run.
   const row = rows[0];
-  if (!row) return null;
   return {
     languages:
-      row.enabledLanguages ?? LANGUAGES.filter((l) => l.defaultEnabled).map((l) => l.id),
-    stepConfigs: (row.stepConfigs as QueueContext["stepConfigs"]) ?? {},
+      row?.enabledLanguages ?? LANGUAGES.filter((l) => l.defaultEnabled).map((l) => l.id),
+    stepConfigs: (row?.stepConfigs as QueueContext["stepConfigs"]) ?? {},
   };
 }
 
