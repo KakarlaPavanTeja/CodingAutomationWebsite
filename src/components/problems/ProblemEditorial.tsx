@@ -862,6 +862,19 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
     onStatusChange?.();
   }, [executeState, globalLanguages, runStep, onStatusChange]);
 
+  // Keep the arm alive for as long as generation is actually running.
+  //
+  // It used to be set ONLY inside the generate handler, which lost it in two
+  // ordinary cases: ticking the checkbox after pressing Generate, and leaving
+  // the Editorial tab mid-generation (the ref dies with the component). Either
+  // way `canExecute` later flipped true with nothing armed, and the chained
+  // execute silently never ran. Re-arming while the run is in flight covers
+  // both, and cannot fire on its own: a generation this tab never saw running
+  // leaves the ref false.
+  useEffect(() => {
+    if (autoExecute && genRunning) autoExecuteArmed.current = true;
+  }, [autoExecute, genRunning]);
+
   // Fire the chained execute the moment the same readiness the button uses is
   // satisfied — `canExecute` already covers "generate completed", "nothing else
   // running" and "execute not already going", so there is no second definition
