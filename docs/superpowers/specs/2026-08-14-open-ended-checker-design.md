@@ -1,6 +1,7 @@
 # Open-Ended Problems: Grade With a Checker, Not a Stored Answer
 
-**Status:** approved design. Planned in `docs/superpowers/plans/2026-08-17-open-ended-checker.md`.
+**Status:** shipped. Implemented in `pipeline/Scripts/open_ended_checker.py` (the
+implementation plan was deleted once the work landed; see git history for it).
 **Depends on:** the testcase-generation redesign (`2026-08-13-...-design.md`) landing first
 
 > ## Corrections — read the plan, not this file, for implementation detail
