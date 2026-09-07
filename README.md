@@ -10,7 +10,7 @@ A Next.js 16 platform for automating the creation, translation, and validation o
 - Enrichment content (hints, follow-ups, real-world scenarios)
 - A packaged LUA bundle ready to upload to a learning platform
 
-The frontend orchestrates spawned Python processes, streams logs in real time, and persists artifacts to Replit App Storage (GCS).
+The frontend orchestrates spawned Python processes, streams logs in real time, and persists artifacts to object storage (S3, or Replit App Storage / local FS as fallbacks).
 
 ---
 
@@ -21,14 +21,14 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 | Framework | **Next.js 16** (App Router, React 19, Turbopack dev) |
 | Language (web) | TypeScript |
 | Styling | Tailwind CSS + shadcn/ui (Base UI) |
-| Database | **PostgreSQL** (Replit Postgres) |
+| Database | **PostgreSQL** (shared cloud cluster — Aiven; see `docs/local-setup.md`) |
 | ORM | **Drizzle ORM** + `drizzle-kit` |
 | Auth | Custom — `bcryptjs` + DB-backed session-cookie |
-| File storage | **Replit App Storage** (GCS-backed via sidecar) |
+| File storage | **AWS S3** when `AWS_*` is set, else Replit App Storage (GCS), else local FS — see `src/lib/object-storage.ts` |
 | Pipeline runtime | Python 3.11+ |
 | LLM | OpenRouter via proxy gateway (`open-router-gateway.replit.app`, `OPENROUTER_API_KEY`) |
 | Email | Resend (`RESEND_API_KEY`) |
-| Deployment | Replit Autoscale (`.replit` + Publishing UI) |
+| Deployment | **Render** (`coding-automation.onrender.com`), built from `Dockerfile`; `.replit` + `replit.md` are legacy |
 
 > ⚠ **Next.js 16 has breaking changes.** Routing uses `src/proxy.ts` (NOT `middleware.ts`). API route handlers receive `params` as a **Promise** (`{ params: Promise<{ id: string }> }`). `cookies()` and `headers()` are async. See `AGENTS.md`.
 
@@ -62,13 +62,13 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 │   │   │   ├── schema.ts       # Drizzle schema — single source of truth for DB
 │   │   │   └── index.ts        # postgres.js client + Drizzle instance
 │   │   ├── auth/
-│   │   │   ├── server.ts       # requireAuth, requireAdmin (server components)
-│   │   │   ├── api.ts          # requireAuthApi, requireAdminApi (route handlers)
-│   │   │   ├── ownership.ts    # requireProblemAccess (per-resource auth)
-│   │   │   ├── session.ts      # Session creation/validation, cookie management
-│   │   │   └── password.ts     # bcrypt hash/verify wrappers
-│   │   ├── object-storage.ts   # GCS client (Replit App Storage)
-│   │   ├── storage-sync.ts     # Local <→ GCS bidirectional sync for pipeline files
+│   │   │   ├── server.ts      # requireAuth/requireAdmin + requireAuthApi/requireAdminApi
+│   │   │   ├── service.ts     # Login/signup/reset service layer
+│   │   │   ├── ownership.ts   # requireProblemAccess (per-resource auth)
+│   │   │   ├── session.ts     # Session creation/validation, cookie management
+│   │   │   └── passwords.ts   # bcrypt hash/verify wrappers
+│   │   ├── object-storage.ts   # S3 → Replit GCS → local FS (that priority)
+│   │   ├── storage-sync.ts     # Local <→ object-storage sync for pipeline files
 │   │   ├── storage-path.ts     # Path validators (UUID-only, no traversal)
 │   │   ├── pipeline-config.ts  # PIPELINE_ROOT, PIPELINE_SCRIPTS_DIR, languages, steps
 │   │   ├── auth-context.tsx    # React context — current user + refreshAuth()
@@ -86,7 +86,7 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 │   │   ├── code_splitter.py
 │   │   ├── code_cleaner.py
 │   │   ├── execution_manager_v2.py
-│   │   ├── execution_manager_nonfunctionbased.py
+│   │   ├── execution_manager_v3.py   # current runner; --nonfunction for stdin/stdout mode
 │   │   ├── enrichment_manager.py
 │   │   ├── prepare_lua_and_testcases.py
 │   │   └── Prompts/            # All LLM prompt templates (.md / .txt)
@@ -96,22 +96,22 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 │   ├── zReferenceFiles/        # LUA template + reference files
 │   └── requirements.txt        # Python deps (openai, boto3, requests, etc.)
 │
-├── attached_assets/            # Static assets uploaded by user
-├── replit.md                   # Replit Agent's working notes (architecture log)
+├── replit.md                   # Legacy Replit Agent notes (historical; not the deploy path)
 ├── AGENTS.md                   # Next.js 16 rules for AI coding agents
 ├── CLAUDE.md                   # Anthropic-specific agent notes
 ├── drizzle.config.ts           # Drizzle Kit config (points to src/lib/db/schema.ts)
 ├── next.config.ts              # Next.js config
 ├── tsconfig.json
 ├── package.json
-└── .replit                     # Replit workflow + deployment config
+├── Dockerfile                  # Container build (current deploy path)
+└── .replit                     # Legacy Replit workflow config (unused)
 ```
 
 ---
 
 ## Database Schema (`src/lib/db/schema.ts`)
 
-All tables live in Replit Postgres. Use `npm run db:push` to sync schema changes. **Never write raw SQL migrations.**
+All tables live in the shared cloud Postgres cluster. Use `npm run db:push` to sync schema changes — it targets whatever `.env.local` points at (production), so use `DRIZZLE_DATABASE_URL=…` to aim elsewhere. **Never write raw SQL migrations.**
 
 | Table | Purpose |
 |---|---|
@@ -140,7 +140,7 @@ The pipeline turns one input pair (`problem.md` + `solution.py`) into a fully va
 | 1 | `generate_question` | `generate_full_question.py` | Generates polished MD description, translates solution to all selected languages, predicts difficulty + topics |
 | 2 | `generate_testcases` | `testcase_manager_v4.py` | LLM writes a Python script that *generates* N diverse test cases; runs it; auto-retries on failure |
 | 3 | `split_code` | `code_splitter.py` | Splits each language solution into `driver.{ext}`, `solution.{ext}`, `default.{ext}`, `debugger.{ext}` |
-| 4 | `execute_tests` | `execution_manager_v2.py` (or `_nonfunctionbased.py`) | Runs all language solutions against all test cases via external compiler API; records pass/fail |
+| 4 | `execute_tests` | `execution_manager_v3.py` (`_v2.py` for nodejs-only) | Runs all language solutions against all test cases via external compiler API; records pass/fail |
 | 5 | `enrichment` | `enrichment_manager.py` | Generates hints, follow-up questions, real-world scenarios |
 | 6 | `package_platform` | `prepare_lua_and_testcases.py` | Bundles everything into LUA script + JSON testcases for platform upload |
 
@@ -151,7 +151,7 @@ Defined in `src/lib/pipeline-config.ts`. IDs are `python`, `cpp`, `java`, `nodej
 ### Modes
 
 - **`function`** (default) — solution is a function; tests call it with args
-- **`nonfunction`** — solution reads from stdin / writes to stdout; uses `execution_manager_nonfunctionbased.py`
+- **`nonfunction`** — solution reads from stdin / writes to stdout; runs `execution_manager_v3.py --nonfunction`
 
 Modes also include **`practice`** vs **`exam`**:
 - `practice` — runs full pipeline including enrichment
@@ -243,7 +243,7 @@ Custom session-cookie auth (no NextAuth).
 
 ## Environment Variables
 
-Set these in **Replit Secrets** (production) or `.env.local` (Cursor local dev — never commit).
+Set these in `.env.local` (never commit). See `.env.example` and `docs/local-setup.md`.
 
 | Variable | Required | Purpose |
 |---|---|---|
@@ -253,15 +253,16 @@ Set these in **Replit Secrets** (production) or `.env.local` (Cursor local dev �
 | `CRON_SECRET` | ✅ | Shared secret: Node ↔ Python (`X-Internal-Secret`) |
 | `ADMIN_SECRET_KEY` | ✅ | Required to sign up as admin |
 | `RESEND_API_KEY` | ✅ | Password reset emails |
-| `DEFAULT_OBJECT_STORAGE_BUCKET_ID` | ✅ | Replit App Storage bucket |
-| `PUBLIC_OBJECT_SEARCH_PATHS` | ✅ | Replit App Storage search paths |
-| `PRIVATE_OBJECT_DIR` | ✅ | Replit App Storage private dir |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` / `AWS_BUCKET_NAME` | (storage) | Selects the **S3** backend — the normal setup. All four must be set together |
+| `AWS_OBJECT_KEY_PREFIX` | ⬜ | Namespaces S3 keys for the shared team bucket |
+| `DEFAULT_OBJECT_STORAGE_BUCKET_ID` / `PUBLIC_OBJECT_SEARCH_PATHS` / `PRIVATE_OBJECT_DIR` | ⬜ | Legacy Replit App Storage (GCS) backend — only used when the `AWS_*` set is absent |
+| `LOCAL_OBJECT_STORAGE_ROOT` | ⬜ | Last-resort local filesystem backend (default `.local-object-storage`) |
 | `APP_URL` | (prod) | Trusted base URL for emails |
 | `OPENROUTER_MODEL_{TESTCASES,CHAT,CODE,ENRICHMENT,EDITORIAL}` | optional | Override the OpenRouter model per purpose (defaults: chat/enrichment = `openai/gpt-5.4`, testcases = `google/gemini-2.5-pro`, code = `openai/gpt-5.3-codex`, editorial = `openai/gpt-5.5`) |
 
 ---
 
-## Local Development (Cursor)
+## Local Development
 
 ```bash
 # 1. Clone
@@ -275,7 +276,7 @@ npm install
 python3 -m pip install -r pipeline/requirements.txt
 
 # 4. Create .env.local with the secrets above (DATABASE_URL etc.)
-#    Easiest: copy from Replit Secrets panel
+#    Start from .env.example; ask a teammate for the shared values
 
 # 5. Sync DB schema
 npm run db:push
@@ -286,19 +287,14 @@ npm run dev
 
 Then open `http://localhost:5001`. The Python pipeline is invoked from `src/app/api/pipeline/run/route.ts` — `PIPELINE_ROOT` defaults to `path.join(process.cwd(), "pipeline")`, so it works the same locally.
 
-### GitHub → Replit Auto-Sync
+### After pulling changes
 
-This Replit project is connected to `github.com/KakarlaPavanTeja/CodingAutomationWebsite`. To enable auto-pull on push:
+Render redeploys from a push to `main`. Locally, after a `git pull`:
 
-1. Open the **Git** panel in the Replit workspace
-2. Enable **"Sync with GitHub"** / **"Auto-pull"**
-3. Push from Cursor → Replit pulls within seconds → Next.js hot-reloads
-
-**Manual ops still required after a sync:**
-- New npm package → run `npm install`
-- New Python package → add to `pipeline/requirements.txt` and pip install
-- New env secret → add to Replit Secrets panel
-- DB schema change in `src/lib/db/schema.ts` → run `npm run db:push`
+- New npm package → `npm install`
+- New Python package → add to `pipeline/requirements.txt`, then pip install into your venv
+- New env var → add it to `.env.local` (and to the Render dashboard for production)
+- DB schema change in `src/lib/db/schema.ts` → `npm run db:push`
 
 ---
 
@@ -317,15 +313,23 @@ This Replit project is connected to `github.com/KakarlaPavanTeja/CodingAutomatio
 
 ## Deployment
 
-Deployed via **Replit Publishing** (Autoscale). Configuration in `.replit`:
+Deployed on **Render** at `https://coding-automation.onrender.com`, built from the
+`Dockerfile` (multi-stage: Node 20 + a Python venv at `/opt/pipeline-venv` so the
+pipeline can run in the container).
 
-- Build: `npm run build`
+- Build: Docker image from `Dockerfile`
 - Start: `npm run start`
 - Port: 5001
 
-To deploy: open Publishing panel → Deploy. Production URL is on `*.replit.app` (or custom domain).
+Render's free tier spins containers down after ~15 min idle, so
+`.github/workflows/keep-alive.yml` pings the site every 5 minutes to keep it warm.
 
-**Production secrets must be set separately in the Publishing UI** — they don't auto-copy from dev secrets.
+**Production env vars are set in the Render dashboard** — they do not come from
+`.env.local`, which is local-only and gitignored.
+
+> `.replit` and `replit.md` are retained for history. This app is **not** deployed on
+> Replit. The one thing still Replit-hosted is the OpenRouter proxy gateway
+> (`open-router-gateway.replit.app`), which is a separate service.
 
 ---
 

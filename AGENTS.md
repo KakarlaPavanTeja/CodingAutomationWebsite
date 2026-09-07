@@ -85,7 +85,13 @@ behaviour, add a `*.test.ts` beside it.
 - Passwords hashed with `bcryptjs`. Never log secrets, tokens, or raw passwords.
 - LLM usage is recorded (`record-llm-usage.ts`, `openrouter.ts`,
   `cp-prep/anthropic-usage.ts`) — preserve usage tracking when touching LLM paths.
-- This app runs on Replit (`REPLIT_*` env in `next.config.ts allowedDevOrigins`).
+- **This app does NOT run on Replit.** It deploys to **Render**
+  (`coding-automation.onrender.com`) from the `Dockerfile`; Postgres is a shared
+  **Aiven** cluster; the pipeline runs locally on each teammate's machine. The
+  `REPLIT_*` entries in `next.config.ts allowedDevOrigins`, plus `.replit` and
+  `replit.md`, are legacy leftovers — don't infer deployment topology from them.
+  The one live Replit-hosted piece is the OpenRouter proxy gateway
+  (`open-router-gateway.replit.app`), a separate service.
 
 ## Before you code
 
