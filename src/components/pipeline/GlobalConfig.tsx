@@ -22,6 +22,14 @@ interface GlobalConfigProps {
   onDefaultTagNamesChange: (tags: string) => void;
   onSaveTitle: () => Promise<void>;
   disabled?: boolean;
+  /**
+   * The title alone, overriding `disabled`. Everything else here changes how a
+   * run behaves and is locked while one is in flight, but packaging steps are
+   * skipped WITHOUT a title and the banner tells the user to set one mid-run —
+   * so locking the title too made that instruction impossible to follow.
+   * Defaults to `disabled`.
+   */
+  titleDisabled?: boolean;
   compact?: boolean;
 }
 
@@ -38,6 +46,7 @@ export function GlobalConfig({
   onDefaultTagNamesChange,
   onSaveTitle,
   disabled,
+  titleDisabled = disabled,
   compact,
 }: GlobalConfigProps) {
   const [saving, setSaving] = useState(false);
@@ -113,7 +122,7 @@ export function GlobalConfig({
             }}
             placeholder="Problem title for platform JSON"
             className={compact ? "h-7 text-xs flex-1 min-w-[180px]" : "flex-1 min-w-[220px]"}
-            disabled={disabled}
+            disabled={titleDisabled}
           />
           <Button
             type="button"
@@ -121,7 +130,7 @@ export function GlobalConfig({
             variant="secondary"
             className={compact ? "h-7 text-xs px-2" : undefined}
             onClick={handleSaveTitle}
-            disabled={disabled || saving || !ownerTitle.trim()}
+            disabled={titleDisabled || saving || !ownerTitle.trim()}
           >
             {saving ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />

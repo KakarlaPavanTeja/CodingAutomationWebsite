@@ -195,6 +195,9 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
               }}
               onSaveTitle={saveOwnerTitle}
               disabled={isAnyRunning}
+              // The title stays editable mid-run: without one, packaging is
+              // skipped, and the banner above tells the user to set it now.
+              titleDisabled={false}
             />
           </div>
         )}

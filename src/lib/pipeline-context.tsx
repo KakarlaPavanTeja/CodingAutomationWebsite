@@ -3,6 +3,11 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, ReactNode } from "react";
 import { getWorkflowSteps, getPipelineUiWorkflowSteps, getAllTrackedStepIds, getStepConfig, LANGUAGES } from "@/lib/pipeline-config";
 import { computeAffectedSteps } from "@/lib/pipeline-dependents";
+import {
+  deriveParentStatuses,
+  stepStatesFromRuns,
+  type RunRow,
+} from "@/lib/pipeline/step-states-from-runs";
 import type {
   QuestionType,
   PipelineMode,
@@ -2051,6 +2056,83 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   );
 
 
+  /**
+   * Fold the server's run rows back into client step state.
+   *
+   * The observer below only attaches pollers to runs that are still IN FLIGHT,
+   * and that is not enough on its own: the server starts steps this tab never
+   * asked for, and a fast one can start AND finish between two ticks. Those
+   * completions were invisible, so the tile stayed `pending` — and because a
+   * parent's status is derived from its children, one unseen `split_code__python`
+   * left every Execute tile reading "Locked" while the run rows said completed.
+   *
+   * `pipeline_runs` is the authority. This adopts any status the server has
+   * moved on from, keeping the client's log lines (the rows carry none).
+   * A server `pending` is never adopted: a step this tab just launched has no
+   * row yet, and adopting it would undo the launch.
+   */
+  const applyServerRunStates = useCallback(
+    (rows: RunRow[]) => {
+      const server = deriveParentStatuses(stepStatesFromRuns(rows), {
+        questionType,
+        gqContext: gqContext(),
+        languages: globalLanguages,
+      });
+
+      const next = new Map(stepStatesRef.current);
+      let changed = false;
+
+      for (const [id, remote] of server) {
+        const current = next.get(id);
+        if (!current) continue; // not tracked in this workflow
+        let merged = current;
+
+        if (remote.status !== "pending" && remote.status !== current.status) {
+          merged = {
+            ...merged,
+            status: remote.status,
+            exitCode: remote.exitCode,
+            startTime: remote.startTime ?? current.startTime,
+            endTime: remote.endTime ?? current.endTime,
+          };
+          changed = true;
+        }
+
+        if (remote.subStepRuns) {
+          let subs = merged.subStepRuns;
+          for (const [key, run] of Object.entries(remote.subStepRuns)) {
+            if (!run || run.status === "pending") continue;
+            const mine = subs?.[key as QuestionSubStepId];
+            if (mine?.status === run.status) continue;
+            subs = { ...subs, [key]: { ...run, logs: mine?.logs ?? [] } };
+            changed = true;
+          }
+          if (subs !== merged.subStepRuns) merged = { ...merged, subStepRuns: subs };
+        }
+
+        if (remote.languageSubRuns) {
+          let langs = merged.languageSubRuns;
+          for (const [key, run] of Object.entries(remote.languageSubRuns)) {
+            if (!run || run.status === "pending") continue;
+            const mine = langs?.[key];
+            if (mine?.status === run.status) continue;
+            langs = { ...langs, [key]: { ...run, logs: mine?.logs ?? [] } };
+            changed = true;
+          }
+          if (langs !== merged.languageSubRuns) merged = { ...merged, languageSubRuns: langs };
+        }
+
+        if (merged !== current) next.set(id, merged);
+      }
+
+      if (!changed) return;
+      stepStatesRef.current = next;
+      setStepStates(next);
+      savePipelineState();
+    },
+    [questionType, gqContext, globalLanguages, savePipelineState]
+  );
+
   // Observe the server-owned Run All.
   //
   // This replaces the driver that used to live here. The decision to launch a
@@ -2068,27 +2150,29 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
 
     const tick = async () => {
       try {
-        const qRes = await fetch(
-          `/api/pipeline/run-all?problemId=${encodeURIComponent(currentProblemId)}`
-        );
-        if (!qRes.ok) return;
+        const [qRes, rRes] = await Promise.all([
+          fetch(`/api/pipeline/run-all?problemId=${encodeURIComponent(currentProblemId)}`),
+          fetch(`/api/pipeline/run/status?problemId=${encodeURIComponent(currentProblemId)}`),
+        ]);
+        if (!qRes.ok || !rRes.ok) return;
         const queue = await qRes.json();
-        if (cancelled) return;
-        setRunAllSteps(queue.active ? (queue.steps as StepId[]) : []);
-        if (!queue.active) return;
-
-        const rRes = await fetch(
-          `/api/pipeline/run/status?problemId=${encodeURIComponent(currentProblemId)}`
-        );
-        if (!rRes.ok) return;
         const data = await rRes.json();
         if (cancelled) return;
-        for (const r of (data.runs ?? []) as Array<{
+
+        setRunAllSteps(queue.active ? (queue.steps as StepId[]) : []);
+
+        const rows = (data.runs ?? []) as Array<{
           id: string;
           step_id: string;
           status: string;
           exit_code?: number | null;
-        }>) {
+          started_at?: string | null;
+          finished_at?: string | null;
+        }>;
+
+        // Attach a poller to anything still in flight, so its logs stream here
+        // even though this tab never launched it.
+        for (const r of rows) {
           if (!isRunStillInFlight(r.status, r.exit_code)) continue;
           const parsed = parsePipelineRunStepKey(r.step_id);
           const key = parsed.subStepId
@@ -2099,6 +2183,21 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           if (pollRefs.current.has(key)) continue;
           startPolling(r.id, parsed.parentStepId, parsed.subStepId, parsed.langId);
         }
+
+        // Then reconcile EVERYTHING, in-flight or not. This runs even with no
+        // active queue: the last step of a run finishes and clears the queue in
+        // the same moment, and without this pass that final completion would
+        // never reach the UI.
+        applyServerRunStates(
+          rows.map((r) => ({
+            id: r.id,
+            stepId: r.step_id,
+            status: r.status,
+            exitCode: r.exit_code ?? null,
+            startedAt: r.started_at ? new Date(r.started_at) : null,
+            finishedAt: r.finished_at ? new Date(r.finished_at) : null,
+          }))
+        );
       } catch {
         // Transient network error — the next tick retries.
       }
@@ -2110,7 +2209,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [currentProblemId, stateLoading, startPolling]);
+  }, [currentProblemId, stateLoading, startPolling, applyServerRunStates]);
 
   return (
     <PipelineContext.Provider
