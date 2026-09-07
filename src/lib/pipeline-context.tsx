@@ -484,9 +484,19 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
 
   const saveOwnerTitle = useCallback(async () => {
     const pid = currentProblemIdRef.current;
-    if (!pid || !ownerTitle.trim()) return;
+    // Both of these used to return silently, so a title that never saved looked
+    // identical to one that did — and the packaging steps stayed skipped with
+    // no explanation.
+    if (!pid) {
+      setLegacyPipelineNotice("Cannot save the title: no problem is loaded.");
+      return;
+    }
+    if (!ownerTitle.trim()) {
+      setLegacyPipelineNotice("Cannot save an empty title — type one first.");
+      return;
+    }
 
-    await fetch(`/api/files/save?problemId=${encodeURIComponent(pid)}`, {
+    const res = await fetch(`/api/files/save?problemId=${encodeURIComponent(pid)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -494,6 +504,16 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         content: ownerTitle.trim() + "\n",
       }),
     });
+    if (!res.ok) {
+      // The pipeline reads the TITLE FILE, not just the saved config, so a
+      // failure here must not be swallowed: packaging would keep skipping.
+      const detail = await res.json().catch(() => ({}));
+      setLegacyPipelineNotice(
+        `Could not save the title (${res.status}${detail?.error ? `: ${detail.error}` : ""}).`
+      );
+      return;
+    }
+    setLegacyPipelineNotice(null);
 
     // The saved title unblocks packaging: return any step marked
     // "skipped — title required" (and its skipped dependents) to pending.
