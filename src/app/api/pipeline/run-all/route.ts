@@ -207,10 +207,17 @@ export async function POST(request: NextRequest) {
     startedAt: new Date().toISOString(),
   });
 
-  // Kick it off. Everything after this is driven by each step's close handler.
-  const result = await advanceQueue(safeProblemId);
+  // Kick it off WITHOUT waiting. The first launch creates a temp workspace and
+  // mirrors the problem's inputs down from object storage before it can spawn,
+  // which is seconds of work — awaiting it here made the button feel dead for
+  // that whole time. The queue is already persisted, so the run is safe: if
+  // this process dies before the launch happens, the status poll's own
+  // advanceQueue picks the queue up and starts it.
+  void advanceQueue(safeProblemId).catch((err) => {
+    console.error(`[run-all] initial advance failed for ${safeProblemId}:`, err);
+  });
 
-  return NextResponse.json({ queued: steps, launched: result.launched, skipped: [...gated] });
+  return NextResponse.json({ queued: steps, skipped: [...gated] });
 }
 
 /**
