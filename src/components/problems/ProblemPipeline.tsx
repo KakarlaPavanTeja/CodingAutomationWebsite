@@ -47,6 +47,7 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
     runAll,
     cancelRunAll,
     isRunAllActive,
+    isRunAllStarting,
     affectedStepIds,
     runAffected,
     runAffectedSelected,
@@ -220,9 +221,19 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
                   size="sm"
                   className="h-9 px-3 text-sm"
                   onClick={runAll}
+                  disabled={isRunAllStarting}
                 >
-                  <PlayCircle className="w-4 h-4 mr-1.5" />
-                  Continue run all
+                  {isRunAllStarting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                      Starting…
+                    </>
+                  ) : (
+                    <>
+                      <PlayCircle className="w-4 h-4 mr-1.5" />
+                      Continue run all
+                    </>
+                  )}
                 </Button>
               )}
               <Button
@@ -241,10 +252,21 @@ export function ProblemPipeline({ problemId, onStatusChange }: ProblemPipelinePr
             <Button
               className="h-9 w-full sm:w-auto sm:min-w-[220px] px-4 text-sm font-medium"
               onClick={runAll}
-              disabled={allCompleted || isAnyRunning || !hasIncompleteSteps}
+              disabled={
+                isRunAllStarting || allCompleted || isAnyRunning || !hasIncompleteSteps
+              }
             >
-              <PlayCircle className="w-4 h-4 mr-1.5" />
-              Run all steps
+              {isRunAllStarting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                  Starting…
+                </>
+              ) : (
+                <>
+                  <PlayCircle className="w-4 h-4 mr-1.5" />
+                  Run all steps
+                </>
+              )}
             </Button>
             {affectedStepIds.size > 0 && (
               <Button

@@ -178,6 +178,8 @@ interface PipelineContextType {
   runAll: () => void;
   cancelRunAll: () => void;
   isRunAllActive: boolean;
+  /** Clicked, but the server has not confirmed the queue yet. */
+  isRunAllStarting: boolean;
   /** Completed steps made stale by a more-recent re-run of an upstream dep. */
   affectedStepIds: Set<StepId>;
   /** Reset and re-run only the stale (affected) downstream steps, in order. */
@@ -282,6 +284,10 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   // owns the Run All queue — it observes one that lives on `pipeline_states`,
   // which is what lets a run survive a refresh or a closed tab.
   const [runAllSteps, setRunAllSteps] = useState<StepId[]>([]);
+  // True from the click until the server has stored the queue. The first launch
+  // hydrates a workspace from object storage, so there is a beat where nothing
+  // on screen has changed yet and the click looks ignored.
+  const [runAllStarting, setRunAllStarting] = useState(false);
   const [legacyPipelineNotice, setLegacyPipelineNotice] = useState<string | null>(null);
   const [stepStates, setStepStates] = useState<Map<StepId, StepState>>(() => {
     const map = new Map<StepId, StepState>();
@@ -1953,6 +1959,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   const startServerRunAll = useCallback(async (steps?: StepId[]) => {
     const pid = currentProblemIdRef.current;
     if (!pid) return;
+    setRunAllStarting(true);
     try {
       const res = await fetch("/api/pipeline/run-all", {
         method: "POST",
@@ -1983,6 +1990,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       }
     } catch (e) {
       console.error("[run-all] start failed:", e);
+    } finally {
+      setRunAllStarting(false);
     }
   }, []);
 
@@ -2281,6 +2290,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         runAll,
         cancelRunAll,
         isRunAllActive,
+        isRunAllStarting: runAllStarting,
         affectedStepIds,
         runAffected,
         runAffectedSelected,
