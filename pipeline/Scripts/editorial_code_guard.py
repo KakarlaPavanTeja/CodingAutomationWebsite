@@ -13,8 +13,9 @@ same trailing block so a NON-function editorial runs standalone.
 import re
 
 _MULTILANG_RE = re.compile(
-    r"<MultiLanguageCodeBlock>(.*?)</MultiLanguageCodeBlock>", re.DOTALL
+    r"(<MultiLanguageCodeBlock\b[^>]*>)(.*?)(</MultiLanguageCodeBlock>)", re.DOTALL
 )
+_MULTILANG_OPEN_RE = re.compile(r"<MultiLanguageCodeBlock\b[^>]*>")
 # Groups: (opening fence line, tag, body, closing fence)
 _FENCE_RE = re.compile(r"(```([A-Za-z0-9+#]*)[ \t]*\n)(.*?)(```)", re.DOTALL)
 
@@ -184,8 +185,26 @@ def comment_out_editorial_drivers(md):
         return f"{m.group(1)}{code}{m.group(4)}"
 
     def fix_block(m):
-        return "<MultiLanguageCodeBlock>{}</MultiLanguageCodeBlock>".format(
-            _FENCE_RE.sub(fix_fence, m.group(1))
-        )
+        return m.group(1) + _FENCE_RE.sub(fix_fence, m.group(2)) + m.group(3)
 
     return _MULTILANG_RE.sub(fix_block, md), fixed
+
+
+def ensure_move_code(md):
+    """Give every <MultiLanguageCodeBlock> the `enableMoveCode={true}` attribute.
+
+    The platform only offers "move this code to the editor" when the block asks
+    for it, and the answer is always yes for editorial code. Returns
+    (markdown, number of tags changed). Idempotent.
+    """
+    fixed = 0
+
+    def fix_tag(m):
+        nonlocal fixed
+        tag = m.group(0)
+        if "enableMoveCode" in tag:
+            return tag
+        fixed += 1
+        return tag[:-1].rstrip() + " enableMoveCode={true}>"
+
+    return _MULTILANG_OPEN_RE.sub(fix_tag, md), fixed

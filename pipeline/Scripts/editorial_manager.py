@@ -12,7 +12,7 @@ recorded like every other step. Follows the enrichment_manager.py pattern.
 import os
 import re
 
-from editorial_code_guard import comment_out_editorial_drivers
+from editorial_code_guard import comment_out_editorial_drivers, ensure_move_code
 from llm_client import call_llm, set_editorial_fallback_efforts
 from usage_tracker import update_usage as track_usage
 from Prompts.editorialPrompt import (
@@ -257,6 +257,10 @@ def generate_editorial():
         if fixed:
             print(f"Function-based problem: commented out a live main()/driver in "
                   f"{fixed} editorial code block(s).")
+
+    final_content, moved = ensure_move_code(final_content)
+    if moved:
+        print(f"Enabled 'move code to editor' on {moved} editorial code block(s).")
 
     output_path = os.path.join(outputs_dir, "editorial.md")
     os.makedirs(outputs_dir, exist_ok=True)

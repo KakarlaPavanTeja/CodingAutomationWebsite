@@ -82,7 +82,7 @@ _TLE_STOP_LIMIT = int(os.environ.get("EDITORIAL_EXEC_TLE_LIMIT", "0") or "0")
 _MAX_PARALLEL = int(os.environ.get("EDITORIAL_EXEC_PARALLELISM", "8") or "8")
 
 _MULTILANG_RE = re.compile(
-    r"<MultiLanguageCodeBlock>(.*?)</MultiLanguageCodeBlock>", re.DOTALL
+    r"<MultiLanguageCodeBlock\b[^>]*>(.*?)</MultiLanguageCodeBlock>", re.DOTALL
 )
 _FENCE_RE = re.compile(r"```([A-Za-z0-9+#]*)\s*\n(.*?)```", re.DOTALL)
 

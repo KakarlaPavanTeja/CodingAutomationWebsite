@@ -9,7 +9,11 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from editorial_code_guard import comment_out_driver, comment_out_editorial_drivers
+from editorial_code_guard import (
+    comment_out_driver,
+    comment_out_editorial_drivers,
+    ensure_move_code,
+)
 
 
 LIVE_MD = """\
@@ -161,3 +165,26 @@ class TestJavaScriptDrivers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEnsureMoveCode(unittest.TestCase):
+    def test_attribute_added_once_per_block_and_pseudocode_left_alone(self):
+        out, fixed = ensure_move_code(LIVE_MD)
+        self.assertEqual(fixed, 1, out)
+        self.assertIn("<MultiLanguageCodeBlock enableMoveCode={true}>", out)
+        self.assertNotIn("<MultiLanguageCodeBlock>", out)
+        self.assertIn("```pseudocode\n/* untouched", out)
+        again, second = ensure_move_code(out)
+        self.assertEqual((again, second), (out, 0))
+
+    def test_existing_attributes_survive(self):
+        md = "<MultiLanguageCodeBlock foo={1}>\n```python\nx=1\n```\n</MultiLanguageCodeBlock>"
+        out, fixed = ensure_move_code(md)
+        self.assertEqual(fixed, 1)
+        self.assertIn("<MultiLanguageCodeBlock foo={1} enableMoveCode={true}>", out)
+
+    def test_driver_guard_keeps_the_attribute(self):
+        moved, _ = ensure_move_code(LIVE_MD)
+        out, fixed = comment_out_editorial_drivers(moved)
+        self.assertEqual(fixed, 4, out)
+        self.assertIn("<MultiLanguageCodeBlock enableMoveCode={true}>", out)

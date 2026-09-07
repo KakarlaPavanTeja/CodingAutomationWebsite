@@ -126,7 +126,7 @@ function serializeBlocks(blocks: Block[]): string {
       const fences = b.langs
         .map((l) => `\`\`\`${l.lang}\n${l.code}\n\`\`\``)
         .join("\n");
-      return `<MultiLanguageCodeBlock>\n${fences}\n</MultiLanguageCodeBlock>`;
+      return `<MultiLanguageCodeBlock enableMoveCode={true}>\n${fences}\n</MultiLanguageCodeBlock>`;
     })
     .join("");
 }
