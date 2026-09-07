@@ -59,30 +59,11 @@ import {
   hasTitleForPackaging,
   packagingTitleResolvable,
   parseGeneratedTitleFirstLine,
+  requiresOwnerTitle,
+  titleGatedSteps,
+  titleSkipReason,
+  TITLE_REQUIRED_MSG,
 } from "@/lib/pipeline-title";
-
-function requiresOwnerTitle(stepId: StepId): boolean {
-  return stepId === "package_platform" || stepId === "prepare_platform_json";
-}
-
-const TITLE_REQUIRED_MSG =
-  'This step needs a problem title. Enter one in "Pipeline settings" and Save, or enable "Generate title with AI" and complete the Titles step, then re-run.';
-const TITLE_PREREQ_MSG =
-  'Skipped: depends on "Package for Platform", which was skipped because no problem title is set.';
-
-/**
- * Which of `candidates` (in workflow order) cannot run without an owner title:
- * the packaging steps themselves, plus every step whose explicit prerequisite
- * chain reaches one of them within this candidate set (the editorial steps).
- */
-function titleGatedSteps(candidates: StepId[]): Set<StepId> {
-  const gated = new Set<StepId>();
-  for (const id of candidates) {
-    const prereq = getStepConfig(id).prerequisite;
-    if (requiresOwnerTitle(id) || (prereq && gated.has(prereq))) gated.add(id);
-  }
-  return gated;
-}
 
 /** Reset a failed/stopped step so Run All can launch it again (keeps completed lang tiles). */
 function buildRunAllResetPatch(cur: StepState): Partial<StepState> {
@@ -132,7 +113,7 @@ function titleSkipPatch(id: StepId, now: number): Partial<StepState> {
     logs: [
       {
         stream: "stderr",
-        line: requiresOwnerTitle(id) ? `Skipped: ${TITLE_REQUIRED_MSG}` : TITLE_PREREQ_MSG,
+        line: titleSkipReason(id),
         ts: now,
       },
     ],
