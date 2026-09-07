@@ -172,7 +172,10 @@ export async function POST(request: NextRequest) {
   if (gated.size > 0) {
     // `pipeline_runs.status` only allows running/completed/failed, so a skip
     // cannot be a run row. It goes where the client put it: step_statuses.
-    const stepStatuses = (stateRows[0].stepStatuses as Record<string, unknown>) ?? {};
+    // `stateRows[0]` is undefined on a problem whose state row we only just
+    // created above — and with no title set this branch always runs, so
+    // dereferencing it directly turned every first Run All into a 500.
+    const stepStatuses = (stateRows[0]?.stepStatuses as Record<string, unknown>) ?? {};
     const now = Date.now();
     for (const id of gated) {
       stepStatuses[id] = {
