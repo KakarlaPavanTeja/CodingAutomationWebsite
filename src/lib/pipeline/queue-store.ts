@@ -19,6 +19,8 @@ export interface StoredQueue {
   questionType: QuestionType;
   mode: PipelineMode;
   gqContext: GQSubStepContext;
+  /** Who started the run-all: `pipeline_runs.userId` for every step it spawns. */
+  userId: string;
   startedAt: string;
 }
 
@@ -37,12 +39,14 @@ export function parseStoredQueue(value: unknown): StoredQueue | null {
   if (q.questionType !== "function" && q.questionType !== "nonfunction") return null;
   if (q.mode !== "practice" && q.mode !== "exam") return null;
   if (!q.gqContext || typeof q.gqContext !== "object") return null;
-  if (typeof q.startedAt !== "string") return null;
+  if (typeof q.userId !== "string" || !q.userId) return null;
+  if (typeof q.startedAt !== "string" || Number.isNaN(Date.parse(q.startedAt))) return null;
   return {
     steps: q.steps as StepId[],
     questionType: q.questionType,
     mode: q.mode,
     gqContext: q.gqContext as GQSubStepContext,
+    userId: q.userId,
     startedAt: q.startedAt,
   };
 }

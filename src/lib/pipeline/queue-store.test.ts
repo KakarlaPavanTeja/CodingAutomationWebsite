@@ -19,6 +19,7 @@ const good = {
     questionType: "function", mode: "practice", languages: ["Python"],
     generateTitleWithAi: false, ownerTitle: "T", ownerDifficulty: "",
   },
+  userId: "11111111-1111-1111-1111-111111111111",
   startedAt: "2026-09-04T10:00:00Z",
 };
 
@@ -31,7 +32,7 @@ test("parses a well-formed stored queue", async () => {
 
 test("returns null for malformed stored values rather than throwing", async () => {
   const { parseStoredQueue } = await load();
-  for (const bad of [null, undefined, "queue", 42, {}, { steps: "nope" }, { ...good, steps: [1] }]) {
+  for (const bad of [null, undefined, "queue", 42, {}, { steps: "nope" }, { ...good, steps: [1] }, { ...good, userId: "" }, { ...good, startedAt: "nope" }]) {
     assert.equal(parseStoredQueue(bad), null, `expected null for ${JSON.stringify(bad)}`);
   }
 });

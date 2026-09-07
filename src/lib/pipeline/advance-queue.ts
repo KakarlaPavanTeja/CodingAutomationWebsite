@@ -17,8 +17,6 @@ import type { StepId } from "@/types/pipeline";
 
 /** What a launch needs that the queue itself does not carry. */
 export interface QueueContext {
-  /** Owner of the run rows the orchestrator creates — `pipeline_runs.user_id` is NOT NULL. */
-  userId: string;
   languages: string[];
   stepConfigs: Record<string, { enabledSubSteps?: string[] } | undefined>;
 }
@@ -49,7 +47,6 @@ async function readRuns(problemId: string): Promise<RunRow[]> {
 async function readContext(problemId: string): Promise<QueueContext | null> {
   const rows = await db
     .select({
-      userId: pipelineStates.userId,
       enabledLanguages: pipelineStates.enabledLanguages,
       stepConfigs: pipelineStates.stepConfigs,
     })
@@ -59,7 +56,6 @@ async function readContext(problemId: string): Promise<QueueContext | null> {
   const row = rows[0];
   if (!row) return null;
   return {
-    userId: row.userId,
     languages:
       row.enabledLanguages ?? LANGUAGES.filter((l) => l.defaultEnabled).map((l) => l.id),
     stepConfigs: (row.stepConfigs as QueueContext["stepConfigs"]) ?? {},
@@ -160,7 +156,9 @@ export async function advanceQueue(
       for (const spawn of spawns) {
         const result = await deps.startStep({
           problemId,
-          userId: context.userId,
+          // Whoever started the Run All owns every step it spawns — not
+          // whoever last saved pipeline state for this problem.
+          userId: queue.userId,
           stepId: spawn.stepId,
           subSteps: spawn.subSteps,
           languages: spawn.languages,

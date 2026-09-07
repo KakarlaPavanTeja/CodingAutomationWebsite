@@ -43,6 +43,7 @@ function harness(opts: { queue?: { steps: StepId[] } | null; runs?: ReturnType<t
             questionType: "function" as const,
             mode: "practice" as const,
             gqContext,
+            userId: "11111111-1111-1111-1111-111111111111",
             startedAt: "2026-09-04T10:00:00Z",
           },
     writeQueue: async (_id: string, q: { steps: StepId[] }) => {
@@ -52,7 +53,7 @@ function harness(opts: { queue?: { steps: StepId[] } | null; runs?: ReturnType<t
       calls.cleared++;
     },
     readRuns: async () => opts.runs ?? [],
-    readContext: async () => ({ userId: "u1", languages: ["Python"], stepConfigs: {} }),
+    readContext: async () => ({ languages: ["Python"], stepConfigs: {} }),
     startStep: async (args: { stepId: StepId; runKey?: string; languages: string[] }) => {
       calls.started.push({
         stepId: args.stepId,
