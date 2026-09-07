@@ -2,16 +2,13 @@
 
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, ReactNode } from "react";
 import { getWorkflowSteps, getPipelineUiWorkflowSteps, getAllTrackedStepIds, getStepConfig, LANGUAGES } from "@/lib/pipeline-config";
-import { isStepReadyForRunAll, getIncompletePrerequisites } from "@/lib/pipeline-prerequisites";
 import { computeAffectedSteps } from "@/lib/pipeline-dependents";
-import { isQuestionPhaseComplete } from "@/lib/pipeline-question";
 import type {
   QuestionType,
   PipelineMode,
   StepState,
   StepId,
   RunRequest,
-  LogLine,
   QuestionSubStepId,
   GlobalPipelineConfig,
   StepStatus,
@@ -64,44 +61,6 @@ import {
   titleSkipReason,
   TITLE_REQUIRED_MSG,
 } from "@/lib/pipeline-title";
-
-/** Reset a failed/stopped step so Run All can launch it again (keeps completed lang tiles). */
-function buildRunAllResetPatch(cur: StepState): Partial<StepState> {
-  if (cur.id === "generate_question") {
-    return {
-      status: "pending",
-      exitCode: null,
-      startTime: null,
-      endTime: null,
-    };
-  }
-  const reset: Partial<StepState> = {
-    status: "pending",
-    exitCode: null,
-    startTime: null,
-    endTime: null,
-    logs: [],
-  };
-  if (cur.languageSubRuns && Object.keys(cur.languageSubRuns).length > 0) {
-    const languageSubRuns: Record<string, SubStepRunState> = {};
-    for (const [lang, run] of Object.entries(cur.languageSubRuns)) {
-      if (run.status === "completed") {
-        languageSubRuns[lang] = run;
-      } else {
-        languageSubRuns[lang] = {
-          ...run,
-          status: "pending",
-          exitCode: null,
-          startTime: null,
-          endTime: null,
-          logs: [],
-        };
-      }
-    }
-    reset.languageSubRuns = languageSubRuns;
-  }
-  return reset;
-}
 
 /** Visible "skipped — title required" state, with the reason in the step log. */
 function titleSkipPatch(id: StepId, now: number): Partial<StepState> {
@@ -314,7 +273,10 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   const [ownerDifficulty, setOwnerDifficultyState] = useState("");
   const [currentProblemId, setCurrentProblemId] = useState<string | null>(null);
   const [stateLoading, setStateLoading] = useState(false);
-  const [runAllQueue, setRunAllQueue] = useState<StepId[]>([]);
+  // What the SERVER says is still queued for this problem. The client no longer
+  // owns the Run All queue — it observes one that lives on `pipeline_states`,
+  // which is what lets a run survive a refresh or a closed tab.
+  const [runAllSteps, setRunAllSteps] = useState<StepId[]>([]);
   const [legacyPipelineNotice, setLegacyPipelineNotice] = useState<string | null>(null);
   const [stepStates, setStepStates] = useState<Map<StepId, StepState>>(() => {
     const map = new Map<StepId, StepState>();
@@ -596,7 +558,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       runningSubStepsRef.current.clear();
       runningLangStepsRef.current.clear();
       pendingPollsRef.current = [];
-      setRunAllQueue([]);
+      setRunAllSteps([]);
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
@@ -1947,58 +1909,54 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       }
       return false;
     });
-  const isRunAllActive = runAllQueue.length > 0;
+  const isRunAllActive = runAllSteps.length > 0;
 
   // Run All: queue every not-yet-completed step from the current workflow.
   // The auto-run effect drives execution, launching each step as soon as its
   // real prerequisite is met — so independent siblings (editorial / JSON) run
   // concurrently instead of one-at-a-time.
-  const runAll = useCallback(() => {
-    const steps = getPipelineUiWorkflowSteps(questionType, mode);
-    const snapshot = stepStatesRef.current;
-    const incomplete = steps.filter((id) => {
-      const state = snapshot.get(id);
-      return !!state && state.status !== "completed";
-    });
-    // Packaging steps need a title. Without one, they and their editorial
-    // dependents are marked "skipped" (visible in the UI, reason in the log)
-    // instead of silently dropped — dropping only the packaging steps used to
-    // leave the dependents queued forever behind a prerequisite that never ran.
-    const titlesSubStepStatus = getTitlesSubStepStatus(
-      snapshot.get("generate_question")?.subStepRuns
-    );
-    const titleResolvable = packagingTitleResolvable({
-      ownerTitle,
-      generateTitleWithAi,
-      titlesSubStepStatus,
-      generateQuestionStillQueued: incomplete.includes("generate_question"),
-    });
-    const gated = titleResolvable ? new Set<StepId>() : titleGatedSteps(incomplete);
-    if (gated.size > 0) {
-      const now = Date.now();
-      for (const id of gated) updateStepState(id, titleSkipPatch(id, now));
-    }
-    const remaining = incomplete.filter((id) => !gated.has(id));
-    if (remaining.length === 0) {
-      if (gated.size > 0) savePipelineState();
-      return;
-    }
-    // Clear stale launch guards and reset failed/stopped steps so the driver
-    // can pick them up again (completed language tiles are preserved).
-    for (const id of remaining) {
-      const cur = stepStatesRef.current.get(id);
-      if (!cur) continue;
-      if (cur.status === "failed" || cur.status === "stopped") {
-        launchingStepsRef.current.delete(id);
-        updateStepState(id, buildRunAllResetPatch(cur));
+  /**
+   * Ask the SERVER to start a Run All, then observe it.
+   *
+   * Everything this used to compute here — which steps are incomplete, the
+   * title-gating, resetting failed steps, and the driver that launched each one
+   * as its prerequisite landed — now lives behind `/api/pipeline/run-all`. It
+   * has to: a queue held in React state dies with the tab, which is the bug
+   * this replaces. Keeping a second copy here would also mean two drivers
+   * racing for control of the same steps.
+   */
+  const startServerRunAll = useCallback(async (steps?: StepId[]) => {
+    const pid = currentProblemIdRef.current;
+    if (!pid) return;
+    try {
+      const res = await fetch("/api/pipeline/run-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(steps ? { problemId: pid, steps } : { problemId: pid }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        console.error("[run-all] start failed:", data?.error ?? res.status);
+        return;
       }
+      setRunAllSteps(data.queued ?? []);
+    } catch (e) {
+      console.error("[run-all] start failed:", e);
     }
-    savePipelineState();
-    setRunAllQueue(remaining);
-  }, [questionType, mode, ownerTitle, generateTitleWithAi, updateStepState, savePipelineState]);
+  }, []);
 
+  const runAll = useCallback(() => {
+    void startServerRunAll();
+  }, [startServerRunAll]);
+
+  /** Drop the queue. Steps already spawned run to completion, as before. */
   const cancelRunAll = useCallback(() => {
-    setRunAllQueue([]);
+    const pid = currentProblemIdRef.current;
+    setRunAllSteps([]);
+    if (!pid) return;
+    void fetch(`/api/pipeline/run-all?problemId=${encodeURIComponent(pid)}`, {
+      method: "DELETE",
+    }).catch(() => {});
   }, []);
 
   // Steps that are stale because an upstream data-dependency re-ran after them.
@@ -2068,7 +2026,10 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
         if (bf) runStepRef.current({ ...bf, status: "pending" });
       }
       const queue = order.filter((id) => ids.has(id) && !gated.has(id));
-      if (queue.length) setRunAllQueue(queue);
+      // Same server queue as Run All, but naming the steps: these are stale
+      // COMPLETED steps being replaced, so the server must not drop them for
+      // already having a completed run row.
+      if (queue.length) void startServerRunAll(queue);
     },
     [questionType, mode, ownerTitle, updateStepState, savePipelineState]
   );
@@ -2090,87 +2051,66 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   );
 
 
-  // Auto-run driver: scan the whole queue and launch every step whose
-  // prerequisite has completed and that isn't already running. Steps still
-  // waiting on a prerequisite that is running, queued ahead, or being retried
-  // by this same Run All stay queued; steps whose prerequisite has truly failed
-  // (and is not being retried) are dropped so the queue always drains.
+  // Observe the server-owned Run All.
+  //
+  // This replaces the driver that used to live here. The decision to launch a
+  // step now happens in `src/lib/pipeline/run-all-queue.ts`, called from each
+  // step's close handler on the server; the browser's only job is to notice
+  // what the server started and stream its logs.
+  //
+  // It has to poll at the PROBLEM level, not per run: the server starts steps
+  // this tab never asked for, so there is no runId to watch until after the
+  // fact. Any in-flight run without a poller gets one here — which is also how
+  // a reloaded page picks a run-all back up mid-flight.
   useEffect(() => {
-    if (runAllQueue.length === 0) return;
+    if (!currentProblemId || stateLoading) return;
+    let cancelled = false;
 
-    const steps = getWorkflowSteps(questionType, mode);
-    const toRun: StepState[] = [];
-    const remaining: StepId[] = [];
-    // Steps that are kept (waiting) or launched — used to decide whether a
-    // pending prerequisite is still going to run or was already dropped.
-    const alive = new Set<StepId>();
-    const queued = new Set(runAllQueue);
-
-    const gqState = stepStates.get("generate_question");
-    const questionPhaseComplete = isQuestionPhaseComplete(
-      gqState,
-      questionType,
-      gqContext(),
-      stepStates.get("generate_brute_force")
-    );
-
-    for (const id of runAllQueue) {
-      const state = stepStates.get(id);
-      // Drop steps that are done or already executing.
-      if (!state || state.status === "completed" || state.status === "running") {
-        continue;
-      }
-      // Non-blocking steps (if any) are best-effort: once
-      // they've failed, drop them from the queue instead of retrying, so Run All
-      // continues to the next steps rather than looping on the failure.
-      if (state.status === "failed" && getStepConfig(id).nonBlocking) {
-        continue;
-      }
-      if (launchingStepsRef.current.has(id)) {
-        remaining.push(id);
-        alive.add(id);
-        continue;
-      }
-
-      if (
-        !isStepReadyForRunAll(id, steps, stepStates, questionPhaseComplete)
-      ) {
-        const blocking = getIncompletePrerequisites(
-          id,
-          steps,
-          stepStates,
-          questionPhaseComplete
+    const tick = async () => {
+      try {
+        const qRes = await fetch(
+          `/api/pipeline/run-all?problemId=${encodeURIComponent(currentProblemId)}`
         );
-        // Only DROP a queued step if a prerequisite has terminally failed/stopped
-        // and is NOT being retried. Count any prerequisite still on this Run All
-        // queue as "being retried" even before it is processed in this pass —
-        // otherwise a downstream step could be dropped while its failed upstream
-        // is still queued to run, stalling the whole chain on a second Run All.
-        const anyBlockingDead = blocking.some((b) => {
-          const st = stepStates.get(b)?.status;
-          const beingRetried =
-            alive.has(b) ||
-            queued.has(b) ||
-            launchingStepsRef.current.has(b) ||
-            st === "running";
-          return (st === "failed" || st === "stopped" || st === "skipped") && !beingRetried;
-        });
-        if (!anyBlockingDead) {
-          remaining.push(id);
-          alive.add(id);
+        if (!qRes.ok) return;
+        const queue = await qRes.json();
+        if (cancelled) return;
+        setRunAllSteps(queue.active ? (queue.steps as StepId[]) : []);
+        if (!queue.active) return;
+
+        const rRes = await fetch(
+          `/api/pipeline/run/status?problemId=${encodeURIComponent(currentProblemId)}`
+        );
+        if (!rRes.ok) return;
+        const data = await rRes.json();
+        if (cancelled) return;
+        for (const r of (data.runs ?? []) as Array<{
+          id: string;
+          step_id: string;
+          status: string;
+          exit_code?: number | null;
+        }>) {
+          if (!isRunStillInFlight(r.status, r.exit_code)) continue;
+          const parsed = parsePipelineRunStepKey(r.step_id);
+          const key = parsed.subStepId
+            ? `${parsed.parentStepId}:${parsed.subStepId}`
+            : parsed.langId
+              ? langPollKey(parsed.parentStepId, parsed.langId)
+              : parsed.parentStepId;
+          if (pollRefs.current.has(key)) continue;
+          startPolling(r.id, parsed.parentStepId, parsed.subStepId, parsed.langId);
         }
-        continue;
+      } catch {
+        // Transient network error — the next tick retries.
       }
+    };
 
-      toRun.push(state);
-      alive.add(id);
-    }
-
-    if (toRun.length > 0 || remaining.length !== runAllQueue.length) {
-      setRunAllQueue(remaining);
-      toRun.forEach((s) => runStep(s));
-    }
-  }, [runAllQueue, stepStates, questionType, mode, runStep, gqContext]);
+    void tick();
+    const timer = setInterval(tick, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [currentProblemId, stateLoading, startPolling]);
 
   return (
     <PipelineContext.Provider
