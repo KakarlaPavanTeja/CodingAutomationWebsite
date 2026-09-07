@@ -13,7 +13,7 @@ import {
   titleSkipReason,
 } from "@/lib/pipeline-title";
 import { advanceQueue } from "@/lib/pipeline/advance-queue";
-import { readQueue, writeQueue } from "@/lib/pipeline/queue-store";
+import { clearQueue, readQueue, writeQueue } from "@/lib/pipeline/queue-store";
 import { deriveParentStatuses, stepStatesFromRuns } from "@/lib/pipeline/step-states-from-runs";
 import type { GQSubStepContext } from "@/lib/pipeline-question";
 import type { PipelineMode, QuestionType, StepId } from "@/types/pipeline";
@@ -33,12 +33,19 @@ interface GlobalCfg {
  * refresh, a closed tab or a sleeping laptop cannot lose it.
  */
 export async function POST(request: NextRequest) {
-  let body: { problemId?: string };
+  let body: { problemId?: string; steps?: unknown };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   }
+  if (
+    body.steps !== undefined &&
+    (!Array.isArray(body.steps) || body.steps.some((s) => typeof s !== "string"))
+  ) {
+    return NextResponse.json({ error: "Invalid steps" }, { status: 400 });
+  }
+  const requested = body.steps as string[] | undefined;
 
   let safeProblemId: string;
   try {
@@ -120,11 +127,17 @@ export async function POST(request: NextRequest) {
     languages,
   });
 
-  // Every workflow step that isn't already done. A step with no run row has
-  // never run, so it counts as incomplete.
-  const incomplete = getPipelineUiWorkflowSteps(questionType, mode).filter(
-    (id) => stepStates.get(id)?.status !== "completed"
-  );
+  const workflow = getPipelineUiWorkflowSteps(questionType, mode);
+
+  // Two ways in. "Run all" queues every workflow step that isn't already done
+  // (a step with no run row has never run, so it counts as incomplete).
+  // "Re-run affected" names its steps explicitly — those go in even when their
+  // newest run says `completed`, because that completion is the stale result
+  // being replaced, so they are also the `force` list. Workflow order is
+  // imposed here either way; the caller's ordering is not trusted.
+  const incomplete = requested
+    ? workflow.filter((id) => requested.includes(id))
+    : workflow.filter((id) => stepStates.get(id)?.status !== "completed");
 
   // Packaging steps need a title. Without one, they and their editorial
   // dependents are marked "skipped" (visible in the UI, reason in the log)
@@ -169,6 +182,7 @@ export async function POST(request: NextRequest) {
     mode,
     gqContext,
     userId: auth.session.userId,
+    force: requested ? steps : undefined,
     startedAt: new Date().toISOString(),
   });
 
@@ -176,6 +190,30 @@ export async function POST(request: NextRequest) {
   const result = await advanceQueue(safeProblemId);
 
   return NextResponse.json({ queued: steps, launched: result.launched, skipped: [...gated] });
+}
+
+/**
+ * Cancel an in-flight Run All.
+ *
+ * Only the queue is dropped: steps already spawned keep running to completion,
+ * exactly as cancelling did on the client. Stopping a running step is what the
+ * per-step Stop button is for.
+ */
+export async function DELETE(request: NextRequest) {
+  const problemId = request.nextUrl.searchParams.get("problemId");
+
+  let safeProblemId: string;
+  try {
+    safeProblemId = assertSafeProblemId(problemId);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+  }
+
+  const auth = await requireProblemManageAccess(safeProblemId);
+  if (auth.error) return auth.error;
+
+  await clearQueue(safeProblemId);
+  return NextResponse.json({ cancelled: true });
 }
 
 /** The in-flight queue for a problem, for the client to observe. */

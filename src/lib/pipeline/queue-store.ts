@@ -21,6 +21,12 @@ export interface StoredQueue {
   gqContext: GQSubStepContext;
   /** Who started the run-all: `pipeline_runs.userId` for every step it spawns. */
   userId: string;
+  /**
+   * Steps the user asked for BY NAME ("re-run affected"), which must run again
+   * even though their newest run says `completed`. A step drops out of this set
+   * as soon as it is launched, so its next completion ends it normally.
+   */
+  force?: StepId[];
   startedAt: string;
 }
 
@@ -47,6 +53,9 @@ export function parseStoredQueue(value: unknown): StoredQueue | null {
     mode: q.mode,
     gqContext: q.gqContext as GQSubStepContext,
     userId: q.userId,
+    // Absent or malformed force list is simply "nothing forced" — an older
+    // queue written before this field existed must still parse.
+    force: isStringArray(q.force) ? (q.force as StepId[]) : undefined,
     startedAt: q.startedAt,
   };
 }

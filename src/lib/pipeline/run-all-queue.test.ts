@@ -70,6 +70,25 @@ test("drops a failed non-blocking step instead of retrying it", () => {
   assert.equal(d.remaining.length, 0, "a failed non-blocking step must drain, not retry");
 });
 
+test("a completed step is dropped, unless it was explicitly re-queued", () => {
+  const args = {
+    ...base,
+    queue: ["prepare_platform_json"] as StepId[],
+    stepStates: states([
+      ["package_platform", "completed"],
+      ["prepare_platform_json", "completed"],
+    ]),
+  };
+  // Plain Run All: already done, nothing to do.
+  assert.deepEqual(decideQueue(args).launch, []);
+  assert.deepEqual(decideQueue(args).remaining, []);
+
+  // "Re-run affected" named it: the completion on record is the stale one the
+  // user is replacing, so it must run again.
+  const forced = decideQueue({ ...args, force: new Set(["prepare_platform_json"] as StepId[]) });
+  assert.deepEqual(forced.launch, ["prepare_platform_json"]);
+});
+
 test("a queued step with no run row yet is pending, not dropped", () => {
   const d = decideQueue({ ...base, queue: ["generate_question"] as StepId[], stepStates: states([]) });
   assert.deepEqual(d.launch, ["generate_question"]);

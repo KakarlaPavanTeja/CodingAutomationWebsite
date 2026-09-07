@@ -142,6 +142,7 @@ export async function advanceQueue(
       // because its effect could re-enter across an async gap.
       launching: new Set<StepId>(),
       gqContext: queue.gqContext,
+      force: new Set(queue.force ?? []),
     });
 
     const launched: StepId[] = [];
@@ -185,10 +186,16 @@ export async function advanceQueue(
     const keep = new Set([...decision.remaining, ...decision.launch]);
     const nextSteps = queue.steps.filter((id) => keep.has(id));
 
+    // A forced step is forced ONCE. Now that it has been launched, its old
+    // `completed` no longer matters, and the next completion is the fresh one —
+    // leaving it forced would re-run it forever.
+    const launchedSet = new Set(launched);
+    const nextForce = (queue.force ?? []).filter((id) => !launchedSet.has(id));
+
     if (nextSteps.length === 0) {
       await deps.clearQueue(problemId);
     } else {
-      await deps.writeQueue(problemId, { ...queue, steps: nextSteps });
+      await deps.writeQueue(problemId, { ...queue, steps: nextSteps, force: nextForce });
     }
 
     return { launched, remaining: nextSteps };

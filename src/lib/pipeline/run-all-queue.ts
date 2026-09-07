@@ -21,6 +21,13 @@ export interface QueueInput {
   launching: Set<StepId>;
   /** Global config the GQ phase gate needs; without it GQ can never read complete. */
   gqContext?: GQSubStepContext;
+  /**
+   * Steps the user re-queued by name ("re-run affected"). They stay in the
+   * queue even though their newest run reads `completed` — that completion is
+   * the STALE one the user is asking to replace. The caller clears a step from
+   * this set once it has been launched.
+   */
+  force?: Set<StepId>;
   /** Seam for tests only. Production always uses the real step config. */
   stepConfig?: (stepId: StepId) => PipelineStepConfig;
 }
@@ -64,8 +71,10 @@ export function decideQueue(input: QueueInput): QueueDecision {
 
   for (const id of queue) {
     const status = stepStates.get(id)?.status ?? "pending";
-    // Drop steps that are done.
-    if (status === "completed") continue;
+    // Drop steps that are done — unless the user named this one for a re-run,
+    // in which case the `completed` on record is exactly the stale result being
+    // replaced.
+    if (status === "completed" && !input.force?.has(id)) continue;
     // Non-blocking steps (if any) are best-effort: once they've failed, drop
     // them from the queue instead of retrying, so Run All continues to the next
     // steps rather than looping on the failure.
