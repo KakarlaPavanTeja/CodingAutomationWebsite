@@ -108,16 +108,27 @@ export async function copySpreadsheet(
   return { spreadsheetId: body.id, url: spreadsheetEditUrl(body.id) };
 }
 
-function defaultShareEmails(): string[] {
-  return (process.env.GOOGLE_SHEET_SHARE_EMAILS || "")
-    .split(",")
-    .map((e) => e.trim())
-    .filter(Boolean);
+/**
+ * NKB's SHEET_LOADING worker opens the copied sheet as this service account.
+ * A Drive copy carries none of the template's permissions, so without this
+ * share the task fails with "SHEET_LOADING failed" and no reason. Not an env
+ * var: it is the backend's identity, not a per-deployment choice.
+ */
+export const NKB_SHEET_READER_EMAIL = "learningresource@nkblearningbackend.iam.gserviceaccount.com";
+
+/** The reader NKB needs, plus whoever the operator wants to see the copy. */
+export function sheetShareTargets(emails?: string[]): string[] {
+  const team = emails?.length
+    ? emails
+    : (process.env.GOOGLE_SHEET_SHARE_EMAILS || "").split(",");
+  return [
+    ...new Set([NKB_SHEET_READER_EMAIL, ...team.map((e) => e.trim()).filter(Boolean)]),
+  ];
 }
 
-/** Best-effort — a copy the team cannot open is still a usable load. */
+/** Team shares are best-effort; the NKB reader is not — the load needs it. */
 export async function shareSpreadsheet(spreadsheetId: string, emails?: string[]): Promise<void> {
-  for (const email of emails?.length ? emails : defaultShareEmails()) {
+  for (const email of sheetShareTargets(emails)) {
     try {
       await googleFetch(
         `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(spreadsheetId)}/permissions?sendNotificationEmail=false&supportsAllDrives=true`,
@@ -127,7 +138,13 @@ export async function shareSpreadsheet(spreadsheetId: string, emails?: string[])
         },
       );
     } catch (err) {
-      console.warn(`[Sheets] could not share with ${email}:`, (err as Error).message);
+      const message = (err as Error).message;
+      if (email === NKB_SHEET_READER_EMAIL) {
+        throw new Error(
+          `Could not share the loading sheet with ${email}, so SHEET_LOADING cannot read it: ${message}`,
+        );
+      }
+      console.warn(`[Sheets] could not share with ${email}:`, message);
     }
   }
 }
