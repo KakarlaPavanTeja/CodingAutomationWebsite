@@ -52,6 +52,9 @@ function harness(opts: { queue?: { steps: StepId[] } | null; runs?: ReturnType<t
     clearQueue: async () => {
       calls.cleared++;
     },
+    // Pass-through: the real one takes a Postgres advisory lock, and these tests
+    // deliberately never open a socket.
+    withLock: <T,>(_id: string, fn: () => Promise<T>) => fn(),
     readRuns: async () => opts.runs ?? [],
     readContext: async () => ({ languages: ["Python"], stepConfigs: {} }),
     startStep: async (args: { stepId: StepId; runKey?: string; languages: string[] }) => {
@@ -130,6 +133,37 @@ test("the launch plan is forwarded to startStep verbatim", async () => {
   assert.deepEqual(calls.started, [
     { stepId: "execute_editorial", runKey: undefined, languages: ["Python"] },
   ]);
+});
+
+test("every advance runs inside the cross-process lock for its own problem", async () => {
+  // The in-process chain only covers this Node process. Two instances against
+  // one database is what spawned a step twice, so nothing may read the queue or
+  // launch a step outside the lock.
+  const { advanceQueue } = await load();
+  const { deps, calls } = harness({
+    queue: { steps: ["prepare_platform_json"] as StepId[] },
+    runs: [run("package_platform", "completed")],
+  });
+  const locked: string[] = [];
+  let held = false;
+  await advanceQueue("p1", {
+    ...deps,
+    withLock: async <T,>(id: string, fn: () => Promise<T>) => {
+      locked.push(id);
+      held = true;
+      try {
+        return await fn();
+      } finally {
+        held = false;
+      }
+    },
+    startStep: async (args: { stepId: StepId }) => {
+      assert.ok(held, "a step must never be spawned outside the lock");
+      return deps.startStep(args as never);
+    },
+  } as never);
+  assert.deepEqual(locked, ["p1"], "the lock must be keyed by problem id");
+  assert.equal(calls.started.length, 1);
 });
 
 test("concurrent advances for one problem are serialised", async () => {

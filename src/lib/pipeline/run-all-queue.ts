@@ -28,9 +28,21 @@ export interface QueueInput {
    * this set once it has been launched.
    */
   force?: Set<StepId>;
+  /**
+   * Failed runs per step SINCE THIS Run All started. A blocking step is retried
+   * (that is the point of keeping it queued), but only up to
+   * `MAX_STEP_ATTEMPTS` — without a cap, a step that fails every time is
+   * re-launched by every advance forever, which on an LLM step burns real money
+   * per lap. Absent = never counted, so callers that don't track attempts keep
+   * the old unbounded behaviour.
+   */
+  attempts?: Map<StepId, number>;
   /** Seam for tests only. Production always uses the real step config. */
   stepConfig?: (stepId: StepId) => PipelineStepConfig;
 }
+
+/** Launches of one step per Run All before it is treated as terminally failed. */
+export const MAX_STEP_ATTEMPTS = 2;
 
 export interface QueueDecision {
   launch: StepId[];
@@ -60,6 +72,8 @@ export function decideQueue(input: QueueInput): QueueDecision {
   // Steps that are kept (waiting) or launched — used to decide whether a
   // pending prerequisite is still going to run or was already dropped.
   const alive = new Set<StepId>();
+  // Mutable: a step we give up on is deleted, so its dependents below stop
+  // seeing it as "queued, therefore still being retried" and drain too.
   const queued = new Set(queue);
 
   const questionPhaseComplete = isQuestionPhaseComplete(
@@ -78,7 +92,19 @@ export function decideQueue(input: QueueInput): QueueDecision {
     // Non-blocking steps (if any) are best-effort: once they've failed, drop
     // them from the queue instead of retrying, so Run All continues to the next
     // steps rather than looping on the failure.
-    if (status === "failed" && config(id).nonBlocking) continue;
+    if (status === "failed" && config(id).nonBlocking) {
+      queued.delete(id);
+      continue;
+    }
+    // Out of attempts: this Run All has launched the step MAX_STEP_ATTEMPTS
+    // times and it failed every time. Retrying again would just repeat the same
+    // failure on the next advance, forever (generate_testcases looping on a
+    // generator-script timeout cost ~$0.85 a lap). Drop it; the user re-runs it
+    // by hand once the underlying cause is fixed.
+    if (status === "failed" && (input.attempts?.get(id) ?? 0) >= MAX_STEP_ATTEMPTS) {
+      queued.delete(id);
+      continue;
+    }
 
     // A running step is KEPT, where the client dropped it. The client dropped it
     // because its own await-loop drove the step to completion; the server has no

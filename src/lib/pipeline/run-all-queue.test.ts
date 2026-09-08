@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decideQueue } from "./run-all-queue";
+import { decideQueue, MAX_STEP_ATTEMPTS } from "./run-all-queue";
 import { STEP_CONFIGS, getStepConfig } from "@/lib/pipeline-config";
 import type { StepId, StepState } from "@/types/pipeline";
 
@@ -87,6 +87,35 @@ test("a completed step is dropped, unless it was explicitly re-queued", () => {
   // user is replacing, so it must run again.
   const forced = decideQueue({ ...args, force: new Set(["prepare_platform_json"] as StepId[]) });
   assert.deepEqual(forced.launch, ["prepare_platform_json"]);
+});
+
+test("retries a failed blocking step while it still has attempts left", () => {
+  const d = decideQueue({
+    ...base,
+    queue: ["prepare_platform_json"] as StepId[],
+    stepStates: states([
+      ["package_platform", "completed"],
+      ["prepare_platform_json", "failed"],
+    ]),
+    attempts: new Map([["prepare_platform_json" as StepId, MAX_STEP_ATTEMPTS - 1]]),
+  });
+  assert.deepEqual(d.launch, ["prepare_platform_json"]);
+});
+
+test("stops retrying a blocking step once it is out of attempts, and drains its dependents", () => {
+  // Same shape as "keeps a step whose failed prerequisite is still queued",
+  // except the prerequisite has now burned its whole allowance. It must be
+  // given up on, and `prepare_platform_json` must not sit queued forever
+  // waiting on a retry that will never come — that loop is what re-launched
+  // generate_testcases every advance at ~$0.85 a lap.
+  const d = decideQueue({
+    ...base,
+    queue: ["package_platform", "prepare_platform_json"] as StepId[],
+    stepStates: states([["package_platform", "failed"]]),
+    attempts: new Map([["package_platform" as StepId, MAX_STEP_ATTEMPTS]]),
+  });
+  assert.deepEqual(d.launch, [], "an out-of-attempts step must not relaunch");
+  assert.deepEqual(d.remaining, [], "the queue must drain, not loop");
 });
 
 test("a queued step with no run row yet is pending, not dropped", () => {

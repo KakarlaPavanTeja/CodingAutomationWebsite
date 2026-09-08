@@ -145,19 +145,21 @@ export function stringifyForAdminZip(rows: CodingQuestionRow[]): string {
 }
 
 /**
- * Name of the question-set link file inside the admin zip. The two backend task
- * types disagree: JSON_LOADING reads `question_sets_questions.json` (plural) and,
- * if it is absent, links nothing while still reporting SUCCESS; the new-unit
- * SHEET_LOADING zip uses the singular name the Loadings app writes.
+ * Name of the question-set link file inside the admin zip.
+ *
+ * Both task types end at the same reader: SHEET_LOADING loads the sheet, then
+ * forwards this zip to the JSON loader, which opens `question_sets_questions`
+ * (PLURAL). Three runs against beta on 2026-09-08 pinned the behaviour down:
+ *   - singular only  -> links nothing, reports SUCCESS (4 loads, empty sets)
+ *   - both names     -> FAILURE, still nothing linked (task ac13be96)
+ *   - plural only    -> linked, SUCCESS (task 0ab28ba0)
+ * So there is one name, not two. The singular file the legacy Loadings app
+ * wrote is dead weight at best and appears to break the load at worst.
  */
 export const LINK_FILE_JSON_LOADING = "question_sets_questions.json";
-export const LINK_FILE_SHEET_LOADING = "question_sets_question.json";
 
 /** Build the two-file admin zip entirely in memory. */
-export async function buildAdminZip(
-  prepared: PreparedQuestions,
-  linkFileName: string = LINK_FILE_JSON_LOADING,
-): Promise<Buffer> {
+export async function buildAdminZip(prepared: PreparedQuestions): Promise<Buffer> {
   const archive = archiver("zip", { zlib: { level: 9 } });
   const sink = new PassThrough();
   const chunks: Buffer[] = [];
@@ -171,7 +173,9 @@ export async function buildAdminZip(
 
   archive.pipe(sink);
   archive.append(stringifyForAdminZip(prepared.normalized), { name: "coding_questions.json" });
-  archive.append(JSON.stringify(prepared.questionSetJson, null, 2), { name: linkFileName });
+  archive.append(JSON.stringify(prepared.questionSetJson, null, 2), {
+    name: LINK_FILE_JSON_LOADING,
+  });
   await archive.finalize();
   await done;
 

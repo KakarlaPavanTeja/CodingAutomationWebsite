@@ -1,9 +1,11 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { pipelineRuns, pipelineStates } from "@/lib/db/schema";
 import { startStep as realStartStep, setOnStepClosed } from "@/app/api/pipeline/run/start-step";
 import type { StartStepArgs, StartStepResult } from "@/app/api/pipeline/run/start-step";
 import { LANGUAGES } from "@/lib/pipeline-config";
+import { ORPHAN_EXIT_CODE } from "@/lib/pipeline-orphan";
+import { parsePipelineRunStepKey } from "@/lib/pipeline-run-label";
 import { decideQueue } from "./run-all-queue";
 import { planLaunches } from "./launch-plan";
 import { deriveParentStatuses, stepStatesFromRuns, type RunRow } from "./step-states-from-runs";
@@ -28,6 +30,8 @@ export interface AdvanceDeps {
   readRuns: (problemId: string) => Promise<RunRow[]>;
   readContext: (problemId: string) => Promise<QueueContext | null>;
   startStep: (args: StartStepArgs) => Promise<StartStepResult>;
+  /** Cross-process mutual exclusion for one problem's advance. */
+  withLock: <T>(problemId: string, fn: () => Promise<T>) => Promise<T>;
 }
 
 async function readRuns(problemId: string): Promise<RunRow[]> {
@@ -65,6 +69,69 @@ async function readContext(problemId: string): Promise<QueueContext | null> {
   };
 }
 
+/**
+ * How many times each step has already failed under THIS Run All, keyed by the
+ * parent step (a per-language or per-sub-step child failing is a failure of its
+ * parent). Runs that predate the queue don't count — a Run All the user starts
+ * after last week's failure must still get its full allowance.
+ *
+ * A soft orphan (-2) is excluded: `effectiveStepStatus` still treats it as
+ * running, so counting it would spend an attempt on a run that may yet close
+ * cleanly and correct itself.
+ */
+function failuresSinceQueueStart(runs: RunRow[], queueStartedAt: string): Map<StepId, number> {
+  const since = Date.parse(queueStartedAt);
+  const counts = new Map<StepId, number>();
+  for (const run of runs) {
+    if (run.status !== "failed" || run.exitCode === ORPHAN_EXIT_CODE) continue;
+    if (!Number.isNaN(since) && (run.startedAt?.getTime() ?? 0) < since) continue;
+    const parent = parsePipelineRunStepKey(run.stepId).parentStepId as StepId;
+    counts.set(parent, (counts.get(parent) ?? 0) + 1);
+  }
+  return counts;
+}
+
+// Namespace half of the advisory-lock key, so a `pg_advisory_lock` taken by any
+// other feature (or by Drizzle Kit) can never collide with ours.
+const ADVISORY_LOCK_NAMESPACE = 0x6370; // "cp"
+
+/** Stable 32-bit (signed, for int4) FNV-1a hash of a problem id. */
+function advisoryLockKey(problemId: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < problemId.length; i++) {
+    h ^= problemId.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h | 0;
+}
+
+/**
+ * Hold a per-problem lock IN POSTGRES for the whole advance, so two app
+ * instances against the same database cannot both decide "this step is ready"
+ * and spawn it. The in-process `chains` map below cannot do this — it is one
+ * `Map` per Node process, which is exactly how one problem got two live
+ * `generate_testcases` processes 300ms apart.
+ *
+ * The transaction exists only to scope the lock (`_xact_` releases it on commit
+ * OR rollback, so a throwing advance cannot strand it). The advance's own reads
+ * and writes deliberately run on other pooled connections — this tx takes no row
+ * locks, so it can't deadlock against them.
+ *
+ * `lock_timeout` bounds the wait: an advance that cannot get in raises instead of
+ * blocking a connection forever, and the next advance (a step close, or the
+ * client's status poll) retries. One pooled connection is held per in-flight
+ * advance; `PG_POOL_MAX` is the knob if a busy instance starts starving.
+ */
+async function withAdvisoryLock<T>(problemId: string, fn: () => Promise<T>): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SET LOCAL lock_timeout = '30s'`);
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(${ADVISORY_LOCK_NAMESPACE}::int4, ${advisoryLockKey(problemId)}::int4)`
+    );
+    return fn();
+  });
+}
+
 const defaultDeps: AdvanceDeps = {
   readQueue: realReadQueue,
   writeQueue: realWriteQueue,
@@ -72,17 +139,20 @@ const defaultDeps: AdvanceDeps = {
   readRuns,
   readContext,
   startStep: realStartStep,
+  withLock: withAdvisoryLock,
 };
 
-// ponytail: in-process per-problem lock, upgrade to a `SELECT … FOR UPDATE` on
-// the pipeline_states row if this app is ever run as more than one Node process.
+// In-process per-problem queue, kept IN FRONT of the Postgres advisory lock
+// above rather than replaced by it.
 //
 // Two steps finishing at the same instant both call advanceQueue. Without this
 // they interleave — both read the same queue, both decide to launch the same
-// ready step, and it spawns twice. Chaining every advance for a problem onto
-// the previous one makes read-decide-write atomic *within this process*. It is
-// NOT a distributed lock: a second server instance against the same database
-// would not see this map.
+// ready step, and it spawns twice. Chaining every advance for a problem onto the
+// previous one makes read-decide-write atomic *within this process*; the
+// advisory lock extends that guarantee across processes.
+//
+// Both are worth keeping: same-process advances wait here without each holding a
+// pooled connection open to contend for the database lock.
 const chains = new Map<string, Promise<unknown>>();
 
 function serialise<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -119,7 +189,7 @@ export async function advanceQueue(
   problemId: string,
   deps: AdvanceDeps = defaultDeps
 ): Promise<AdvanceResult> {
-  return serialise(problemId, async () => {
+  return serialise(problemId, () => deps.withLock(problemId, async () => {
     const queue = await deps.readQueue(problemId);
     if (!queue) return { launched: [], remaining: [] };
 
@@ -129,7 +199,8 @@ export async function advanceQueue(
     // yet, and dropping the queue here would silently abandon the run.
     if (!context) return { launched: [], remaining: queue.steps };
 
-    const stepStates = deriveParentStatuses(stepStatesFromRuns(await deps.readRuns(problemId)), {
+    const runs = await deps.readRuns(problemId);
+    const stepStates = deriveParentStatuses(stepStatesFromRuns(runs), {
       questionType: queue.questionType,
       gqContext: queue.gqContext,
       languages: context.languages,
@@ -146,6 +217,7 @@ export async function advanceQueue(
       launching: new Set<StepId>(),
       gqContext: queue.gqContext,
       force: new Set(queue.force ?? []),
+      attempts: failuresSinceQueueStart(runs, queue.startedAt),
     });
 
     const launched: StepId[] = [];
@@ -202,7 +274,7 @@ export async function advanceQueue(
     }
 
     return { launched, remaining: nextSteps };
-  });
+  }));
 }
 
 // Close the loop: every step this process spawns advances the queue when it

@@ -9,6 +9,7 @@ import { QUESTION_SET_MAX } from "./config";
 import { DjangoAdminSession, extractResultListSection } from "./django-admin";
 
 const QUESTIONSETQUESTION_PATH = "nkb_question/questionsetquestion/";
+const QUESTIONSET_PATH = "nkb_question/questionset/";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface QuestionSetRow {
@@ -106,6 +107,41 @@ export async function lookupQuestionSetQuestions(
     if (row.questionId) questionIds.push(row.questionId);
   }
   return { count: allRows.length, maxOrder, questionIds };
+}
+
+
+/** True when the changelist really lists this id, not just echoes it in the search box. */
+export function parseQuestionSetExists(html: string, questionSetId: string): boolean {
+  const target = String(questionSetId || "").trim().toLowerCase();
+  if (!target) return false;
+  const section = extractResultListSection(html);
+  for (const tr of section.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const cells = [...tr[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((c) =>
+      decodeCellText(c[1]),
+    );
+    if (cells.some((c) => c.toLowerCase() === target)) return true;
+  }
+  return false;
+}
+
+/**
+ * Does the question set exist in beta?
+ *
+ * "Holds no questions" and "was never created" look identical from
+ * `lookupQuestionSetQuestions` — both return 0 — but they need opposite load
+ * paths, so the planner asks this before choosing one.
+ */
+export async function questionSetExists(
+  questionSetId: string,
+  session?: DjangoAdminSession,
+): Promise<boolean> {
+  const setId = String(questionSetId || "").trim();
+  if (!setId) return false;
+  const admin = session ?? new DjangoAdminSession();
+  return parseQuestionSetExists(
+    await admin.fetchHtml(`${QUESTIONSET_PATH}?q=${encodeURIComponent(setId)}`),
+    setId,
+  );
 }
 
 export interface SetCapacity {

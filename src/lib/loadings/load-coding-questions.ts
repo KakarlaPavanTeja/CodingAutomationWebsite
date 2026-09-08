@@ -19,8 +19,6 @@ import {
   buildAdminZip,
   prepareQuestionsForAdminZip,
   readQuestionId,
-  LINK_FILE_JSON_LOADING,
-  LINK_FILE_SHEET_LOADING,
   type CodingQuestionRow,
 } from "./coding-questions-json";
 import {
@@ -261,10 +259,7 @@ async function runBatchLocked(
     `set ${batch.questionSetId}: packing ${slice.length} question(s) starting at order ${orderStart}` +
       (orderStart === batch.orderStart ? "" : ` (planned ${batch.orderStart}, re-read inside the set lock)`),
   );
-  const zip = await buildAdminZip(
-    prepared,
-    batch.loadVia === "json" ? LINK_FILE_JSON_LOADING : LINK_FILE_SHEET_LOADING,
-  );
+  const zip = await buildAdminZip(prepared);
   onLog("upload", `set ${batch.questionSetId}: uploading zip`);
   const uploadedZipUrl = await uploadZipToS3(zip);
 

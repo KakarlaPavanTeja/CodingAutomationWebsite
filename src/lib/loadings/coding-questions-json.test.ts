@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   buildAdminZip,
   LINK_FILE_JSON_LOADING,
-  LINK_FILE_SHEET_LOADING,
   dedupeEvaluationMetricsByLanguage,
   parseCodingQuestionsPayload,
   prepareQuestionsForAdminZip,
@@ -88,8 +87,4 @@ test("buildAdminZip defaults to the plural link file JSON_LOADING requires", asy
   const jsonZip = (await buildAdminZip(prepared)).toString("latin1");
   assert.equal(LINK_FILE_JSON_LOADING, "question_sets_questions.json");
   assert.ok(jsonZip.includes(LINK_FILE_JSON_LOADING));
-
-  const sheetZip = (await buildAdminZip(prepared, LINK_FILE_SHEET_LOADING)).toString("latin1");
-  assert.equal(LINK_FILE_SHEET_LOADING, "question_sets_question.json");
-  assert.ok(sheetZip.includes(LINK_FILE_SHEET_LOADING));
 });

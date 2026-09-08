@@ -20,7 +20,7 @@ import {
   spreadsheetEditUrl,
 } from "./google-sheets";
 import { DjangoAdminSession } from "./django-admin";
-import { capacityFromLookup, lookupQuestionSetQuestions } from "./question-set";
+import { capacityFromLookup, lookupQuestionSetQuestions, questionSetExists } from "./question-set";
 import { createNextTestingUnit } from "./testing-unit";
 
 const HEADER = ["question_set_id", "unit_name"];
@@ -157,13 +157,21 @@ export async function planQuestionSetBatches(
 
     const count = Math.min(total - placed, capacity.room);
     const existingCount = QUESTION_SET_MAX - capacity.room;
+    // An empty registry row is ambiguous: the unit may be a pre-created slot
+    // waiting for its first question, or a phantom row for a set that was
+    // never built. The sheet path exists only to CREATE the unit, and it needs
+    // a title and placement the planner cannot derive for an existing row — so
+    // ask beta. Unit already there -> JSON_LOADING links into it (proven
+    // against the empty set 112b6ea5). Not there -> keep the sheet path, which
+    // refuses loudly rather than inventing a title.
+    const needsUnit = existingCount === 0 && !(await questionSetExists(row.questionSetId, admin));
     batches.push({
       questionSetId: row.questionSetId,
       startIndex: placed,
       count,
       orderStart: capacity.nextOrder,
       existingCount,
-      loadVia: existingCount === 0 ? "sheet" : "json",
+      loadVia: needsUnit ? "sheet" : "json",
       isNewSet: false,
     });
     placed += count;
