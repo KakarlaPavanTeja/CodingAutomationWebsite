@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import path from "path";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { requireAuthApi } from "@/lib/auth/server";
 import { db } from "@/lib/db";
 import { problems, problemAccess, profiles } from "@/lib/db/schema";
 import { claimCpPrepUsageForProblem } from "@/lib/record-llm-usage";
 import { uploadInputFiles, uploadOutputFile } from "@/lib/storage-sync";
+import {
+  problemFileExtError,
+  resolveSolutionFileName,
+} from "@/lib/upload-solution-file";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
-const ALLOWED_SOLUTION_EXTS = new Set([".py", ".cpp", ".java", ".js"]);
-const ALLOWED_PROBLEM_EXTS = new Set([".md"]);
 
 export async function POST(request: NextRequest) {
   const contentLength = parseInt(request.headers.get("content-length") || "0", 10);
@@ -60,6 +61,40 @@ export async function POST(request: NextRequest) {
     score = parsedScore;
   }
 
+  // Validate BOTH uploads BEFORE creating anything. Every check here can reject
+  // the request, and while they ran after the insert each rejection left an
+  // orphan `draft` problem behind — with cp_prep spend already claimed against a
+  // problem the user never got.
+  const problemMd = formData.get("problemMd") as File | null;
+  const solution = formData.get("solution") as File | null;
+
+  if (!problemMd && !solution) {
+    return NextResponse.json({ error: "No files provided" }, { status: 400 });
+  }
+
+  if (problemMd) {
+    const extError = problemFileExtError(problemMd.name);
+    if (extError) {
+      return NextResponse.json({ error: extError }, { status: 400 });
+    }
+    if (problemMd.size > MAX_FILE_SIZE) {
+      return NextResponse.json({ error: `Problem file too large (${(problemMd.size / 1024 / 1024).toFixed(1)}MB). Max 5MB.` }, { status: 413 });
+    }
+  }
+
+  // Resolved up front so the name we store is settled before any DB write.
+  let solutionFileName: string | null = null;
+  if (solution) {
+    const resolved = resolveSolutionFileName(solution.name);
+    if (!resolved.ok) {
+      return NextResponse.json({ error: resolved.error }, { status: 400 });
+    }
+    solutionFileName = resolved.name;
+    if (solution.size > MAX_FILE_SIZE) {
+      return NextResponse.json({ error: `Solution file too large (${(solution.size / 1024 / 1024).toFixed(1)}MB). Max 5MB.` }, { status: 413 });
+    }
+  }
+
   // Canonical structure form written into the problem.md `# Type:` header.
   // The Python pipeline compares against the lowercase-with-spaces form
   // ("standard" / "linked list" / "binary tree"), so map the underscore UI
@@ -101,16 +136,7 @@ export async function POST(request: NextRequest) {
 
   const filesToUpload: { name: string; content: Buffer }[] = [];
 
-  const problemMd = formData.get("problemMd") as File | null;
   if (problemMd) {
-    const ext = path.extname(problemMd.name).toLowerCase();
-    if (ext && !ALLOWED_PROBLEM_EXTS.has(ext)) {
-      return NextResponse.json({ error: `Invalid problem file type: ${ext}. Only .md files are allowed.` }, { status: 400 });
-    }
-    if (problemMd.size > MAX_FILE_SIZE) {
-      return NextResponse.json({ error: `Problem file too large (${(problemMd.size / 1024 / 1024).toFixed(1)}MB). Max 5MB.` }, { status: 413 });
-    }
-
     const bytes = await problemMd.arrayBuffer();
     const originalContent = Buffer.from(bytes).toString("utf-8");
 
@@ -129,24 +155,10 @@ export async function POST(request: NextRequest) {
     uploaded.push("problem.md");
   }
 
-  const solution = formData.get("solution") as File | null;
-  if (solution) {
-    const solExt = path.extname(solution.name).toLowerCase();
-    if (solExt && !ALLOWED_SOLUTION_EXTS.has(solExt)) {
-      return NextResponse.json({ error: `Invalid solution file type: ${solExt}. Allowed: ${Array.from(ALLOWED_SOLUTION_EXTS).join(", ")}` }, { status: 400 });
-    }
-    if (solution.size > MAX_FILE_SIZE) {
-      return NextResponse.json({ error: `Solution file too large (${(solution.size / 1024 / 1024).toFixed(1)}MB). Max 5MB.` }, { status: 413 });
-    }
-
+  if (solution && solutionFileName) {
     const bytes = await solution.arrayBuffer();
-    const ext = path.extname(solution.name) || ".py";
-    filesToUpload.push({ name: `solution${ext}`, content: Buffer.from(bytes) });
-    uploaded.push(`solution${ext}`);
-  }
-
-  if (uploaded.length === 0) {
-    return NextResponse.json({ error: "No files provided" }, { status: 400 });
+    filesToUpload.push({ name: solutionFileName, content: Buffer.from(bytes) });
+    uploaded.push(solutionFileName);
   }
 
   try {
