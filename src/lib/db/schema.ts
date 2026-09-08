@@ -259,8 +259,17 @@ export const llmUsage = pgTable(
     // Exact pipeline run this usage belongs to (P1-M1). Nullable: legacy rows and
     // non-pipeline calls have none, and those fall back to time-window matching.
     runId: uuid("run_id"),
-    // Which OpenRouter account key produced this call ("new" | "old"). Legacy
-    // rows predate the key switch and were all on the single (new) key.
+    // Which OpenRouter account key produced this call ("new" | "old"), set from
+    // a fingerprint of the key actually billed (see accountForKeyFingerprint).
+    //
+    // The default is NOT meaningful for legacy rows: single-key-era usage was
+    // billed to the key now configured as OPENROUTER_API_KEY_OLD, so those rows
+    // read "new" without ever having been written from anything real. Rows
+    // between the second key's go-live and the fingerprint fix were derived from
+    // the openrouter_key_choice toggle, which mislabelled ~$37.70 of old-key
+    // spend and was never backfilled. src/lib/openrouter-usage-account.ts holds
+    // the per-row precedence that reconciles all three eras — read a per-key
+    // total through that, not straight off this column.
     account: text("account").notNull().default("new"),
   },
   (t) => ({

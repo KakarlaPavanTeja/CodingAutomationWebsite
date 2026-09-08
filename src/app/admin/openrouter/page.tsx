@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DollarSign, User, FileText, Filter, BarChart3, RefreshCw } from "lucide-react";
 import { STEP_CONFIGS } from "@/lib/pipeline-config";
+import {
+  accountForUsageRow,
+  hasApproximateAccounts,
+} from "@/lib/openrouter-usage-account";
 
 // Map raw pipeline step ids (e.g. "generate_editorial") to friendly labels
 // (e.g. "Generate Editorial") so the usage report reads cleanly.
@@ -71,14 +75,15 @@ function matchesFilter(
   return value === filterKey;
 }
 
-// The new OpenRouter API key went live 2026-07-24 15:31 IST. Usage recorded
-// before this instant is billed to the OLD key's account; on/after, the NEW key.
-// Adjust the offset here if the cutoff is in a different timezone.
-const NEW_KEY_START = new Date("2026-07-24T15:31:00+05:30");
-
-// Which OpenRouter account (key) a usage row belongs to, by when it ran.
+// Which OpenRouter account (key) a usage row belongs to.
+//
+// This used to be derived from `created_at` alone, which ignored
+// `llm_usage.account` — the column the attribution fix added so this would not be
+// a guess. A date cutoff cannot know that an admin switched the active key back
+// to "old", so it labelled every recent row "new". See
+// src/lib/openrouter-usage-account.ts for the per-row precedence.
 function accountForRow(u: UsageEntry): "new" | "old" {
-  return new Date(u.created_at) >= NEW_KEY_START ? "new" : "old";
+  return accountForUsageRow(u);
 }
 
 type TimeRange = "1d" | "7d" | "1m" | "3m" | "6m" | "1y" | "all";
