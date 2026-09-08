@@ -1,8 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DollarSign, User, FileText, Filter, BarChart3, RefreshCw } from "lucide-react";
+import {
+  DollarSign,
+  User,
+  FileText,
+  Filter,
+  BarChart3,
+  RefreshCw,
+  Key,
+  Info,
+} from "lucide-react";
 import { STEP_CONFIGS } from "@/lib/pipeline-config";
+import {
+  accountForUsageRow,
+  hasApproximateAccounts,
+} from "@/lib/openrouter-usage-account";
 
 // Map raw pipeline step ids (e.g. "generate_editorial") to friendly labels
 // (e.g. "Generate Editorial") so the usage report reads cleanly.
@@ -52,15 +65,20 @@ type DailyBar = {
   byPurpose: Record<string, number>;
 };
 
-// Consistent colours for up to 6 models/purposes
-const BAR_COLORS = [
-  "bg-blue-500",
-  "bg-emerald-500",
-  "bg-violet-500",
-  "bg-amber-500",
-  "bg-pink-500",
-  "bg-cyan-500",
+// One source for the purpose colours. These were duplicated as two identical
+// literals — one for the stacked bars, one for the legend — so a change to
+// either would have silently desynced the legend from the chart it labels.
+const PURPOSE_COLORS = [
+  "#3b82f6",
+  "#10b981",
+  "#8b5cf6",
+  "#f59e0b",
+  "#ec4899",
+  "#06b6d4",
 ];
+
+/** How many log rows to reveal at a time. */
+const ROW_PAGE = 100;
 
 function matchesFilter(
   value: string | null,
@@ -71,14 +89,15 @@ function matchesFilter(
   return value === filterKey;
 }
 
-// The new OpenRouter API key went live 2026-07-24 15:31 IST. Usage recorded
-// before this instant is billed to the OLD key's account; on/after, the NEW key.
-// Adjust the offset here if the cutoff is in a different timezone.
-const NEW_KEY_START = new Date("2026-07-24T15:31:00+05:30");
-
-// Which OpenRouter account (key) a usage row belongs to, by when it ran.
+// Which OpenRouter account (key) a usage row belongs to.
+//
+// This used to be derived from `created_at` alone, which ignored
+// `llm_usage.account` — the column the attribution fix added so this would not be
+// a guess. A date cutoff cannot know that an admin switched the active key back
+// to "old", so it labelled every recent row "new". See
+// src/lib/openrouter-usage-account.ts for the per-row precedence.
 function accountForRow(u: UsageEntry): "new" | "old" {
-  return new Date(u.created_at) >= NEW_KEY_START ? "new" : "old";
+  return accountForUsageRow(u);
 }
 
 type TimeRange = "1d" | "7d" | "1m" | "3m" | "6m" | "1y" | "all";
@@ -111,38 +130,119 @@ function getDaysArray(start: Date, end: Date): string[] {
 
 function formatYAxis(val: number, mode: "cost" | "tokens" | "calls"): string {
   if (mode === "cost") {
-    if (val >= 1) return `$${val.toFixed(0)}`;
+    // Ticks are quarters of a "nice" max, so they are routinely fractional
+    // (22.5, 7.5). Rounding those to whole dollars printed a $30 axis as
+    // "$30 / $23 / $15 / $8" — labels that match no gridline value.
+    if (val >= 1) return `$${Number.isInteger(val) ? val : val.toFixed(2)}`;
     if (val >= 0.01) return `$${val.toFixed(2)}`;
     return `$${val.toFixed(4)}`;
   }
   if (val >= 1_000_000) return `${(val / 1_000_000).toFixed(1)}M`;
-  if (val >= 1_000) return `${(val / 1_000).toFixed(0)}K`;
+  if (val >= 1_000) return `${(val / 1_000).toFixed(1)}K`;
   return String(Math.round(val));
 }
 
-// Top-of-dashboard control: scopes the whole cost view to New / Old / All (by
-// the key start date). Picking a specific key also switches which OpenRouter
-// key the app uses for new calls; "All" only affects the view.
-function OpenRouterKeySelector({
-  value,
-  onChange,
+type ActiveKeyInfo = { choice: "new" | "old"; hasNew: boolean; hasOld: boolean };
+
+const ACCOUNT_LABEL: Record<"new" | "old", string> = { new: "New", old: "Old" };
+
+/** Shared control styles, so the toolbar reads as one set of controls. */
+const CONTROL =
+  "h-8 rounded-md border border-border bg-card px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary";
+// A native select sizes itself to its widest option, and full model ids
+// ("anthropic/claude-sonnet-4.6") stretched three of these across the row and
+// pushed the toolbar onto a second line. Cap them; the full value stays visible
+// in the open dropdown and in the active-filter pill.
+const CONTROL_SELECT = `${CONTROL} max-w-[10.5rem] truncate`;
+const SEGMENT_WRAP = "flex h-8 items-center rounded-md bg-muted/60 p-0.5";
+const segment = (active: boolean) =>
+  `h-7 rounded px-2.5 text-xs font-medium transition-colors ${
+    active
+      ? "bg-background text-foreground shadow-sm"
+      : "text-muted-foreground hover:text-foreground"
+  }`;
+
+/**
+ * Which key the app bills to right now, and an explicit way to change it.
+ *
+ * This used to be a single "API key" dropdown that ALSO filtered the report, so
+ * an admin narrowing the view to "Old" to look at history silently repointed
+ * every future LLM call at the old key — a billing change disguised as a filter,
+ * sitting between a timestamp and a Refresh button.
+ *
+ * The two jobs are now separate. This one changes billing, and asks first
+ * because it is not a view change. The toolbar's "Showing" select only filters.
+ * It also reports the *real* active key, read from the server: the old dropdown
+ * started at "All" and never fetched, so the page could not tell you which key
+ * was live — the single most important fact on it.
+ */
+function ActiveKeyPanel({
+  info,
+  busy,
+  onSwitch,
 }: {
-  value: string; // "" = All, "new", or "old"
-  onChange: (v: string) => void;
+  info: ActiveKeyInfo | null;
+  busy: boolean;
+  onSwitch: (choice: "new" | "old") => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
+
+  if (!info) {
+    return (
+      <span className="text-xs text-muted-foreground">Active key: unknown</span>
+    );
+  }
+
+  const other = info.choice === "new" ? "old" : "new";
+  const otherConfigured = other === "new" ? info.hasNew : info.hasOld;
+
   return (
-    <label className="inline-flex items-center gap-1.5 text-xs font-medium">
-      <span className="text-muted-foreground">API key</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="bg-card border border-border rounded-md px-2 py-1.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-      >
-        <option value="new">New</option>
-        <option value="old">Old</option>
-        <option value="">All</option>
-      </select>
-    </label>
+    <div className="flex items-center gap-2">
+      <span className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-xs">
+        <Key className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-muted-foreground">Billing to</span>
+        <span className="font-semibold">{ACCOUNT_LABEL[info.choice]}</span>
+      </span>
+
+      {!otherConfigured ? (
+        <span
+          className="text-[11px] text-muted-foreground"
+          title={`OPENROUTER_API_KEY${other === "old" ? "_OLD" : ""} is not set`}
+        >
+          {ACCOUNT_LABEL[other]} key not configured
+        </span>
+      ) : confirming ? (
+        <span className="flex items-center gap-1.5 text-xs">
+          <span className="text-muted-foreground">
+            Bill all new calls to {ACCOUNT_LABEL[other]}?
+          </span>
+          <button
+            onClick={() => {
+              onSwitch(other);
+              setConfirming(false);
+            }}
+            disabled={busy}
+            className="h-8 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground disabled:opacity-60"
+          >
+            {busy ? "Switching…" : "Confirm"}
+          </button>
+          <button
+            onClick={() => setConfirming(false)}
+            className="h-8 rounded-md border border-border bg-card px-2.5 text-xs hover:bg-muted/50"
+          >
+            Cancel
+          </button>
+        </span>
+      ) : (
+        <button
+          onClick={() => setConfirming(true)}
+          className="h-8 rounded-md border border-border bg-card px-2.5 text-xs hover:bg-muted/50"
+          title={`Switch billing to the ${ACCOUNT_LABEL[other]} key`}
+        >
+          Switch to {ACCOUNT_LABEL[other]}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -156,11 +256,19 @@ export default function AdminCostsPage() {
   const [filterStep, setFilterStep] = useState("");
   const [filterAccount, setFilterAccount] = useState("");
   const [barMode, setBarMode] = useState<"cost" | "tokens" | "calls">("cost");
-  const [timeRange, setTimeRange] = useState<TimeRange>("all");
+  // 30 days, not "all": on "all" a year of history compresses to ~1px per day
+  // and one busy week flattens every other bar to nothing. History is still one
+  // click away.
+  const [timeRange, setTimeRange] = useState<TimeRange>("1m");
   const [includeImported, setIncludeImported] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [truncated, setTruncated] = useState(false);
+  const [activeKey, setActiveKey] = useState<ActiveKeyInfo | null>(null);
+  const [switchingKey, setSwitchingKey] = useState(false);
+  // How many log rows to render. The table used to hard-slice at 200 while its
+  // header counted every match, so it claimed "600" above 200 visible rows.
+  const [rowLimit, setRowLimit] = useState(ROW_PAGE);
   const inFlight = useRef(false);
 
   const fetchUsage = useCallback(async () => {
@@ -182,22 +290,39 @@ export default function AdminCostsPage() {
     }
   }, []);
 
-  // Top API-key dropdown: "" (All) / "new" / "old" scopes the cost view. Picking
-  // a specific key also switches which key the app uses for new calls.
-  const onSelectAccount = useCallback((v: string) => {
-    setFilterAccount(v);
-    if (v === "new" || v === "old") {
-      fetch("/api/admin/openrouter-key", {
+  // Which key the app is actually billing to. The page used to never ask, so it
+  // could not show the one fact an admin comes here for.
+  const fetchActiveKey = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/openrouter-key", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as ActiveKeyInfo;
+      if (data?.choice === "new" || data?.choice === "old") setActiveKey(data);
+    } catch {
+      // Leave it reading "unknown" rather than asserting a key we didn't confirm.
+    }
+  }, []);
+
+  const switchActiveKey = useCallback(async (choice: "new" | "old") => {
+    setSwitchingKey(true);
+    try {
+      const res = await fetch("/api/admin/openrouter-key", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ choice: v }),
-      }).catch(() => {});
+        body: JSON.stringify({ choice }),
+      });
+      if (res.ok) setActiveKey((prev) => (prev ? { ...prev, choice } : prev));
+    } catch {
+      // Keep showing the last confirmed value.
+    } finally {
+      setSwitchingKey(false);
     }
   }, []);
 
   // Initial load + auto-refresh so new pipeline runs show up without a reload.
   useEffect(() => {
     fetchUsage();
+    fetchActiveKey();
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") fetchUsage();
     }, 30000);
@@ -209,7 +334,12 @@ export default function AdminCostsPage() {
       clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [fetchUsage]);
+  }, [fetchUsage, fetchActiveKey]);
+
+  // Any filter change re-collapses the log to one page.
+  useEffect(() => {
+    setRowLimit(ROW_PAGE);
+  }, [filterUser, filterProblem, filterModel, filterPurpose, filterStep, filterAccount, timeRange, includeImported]);
 
   // ---- Time-range window (applies to the WHOLE dashboard, not just the chart) ----
   const rangeStart = useMemo(() => {
@@ -357,8 +487,11 @@ export default function AdminCostsPage() {
 
   // Cross-filtered dropdown options: each shows only values available given the other filters
   const dropdownOptions = useMemo(() => {
-    const forUser = applyFilters(rangeUsage, "user");
-    const forProblem = applyFilters(rangeUsage, "problem");
+    // userScoped / problemScoped are these exact sets, already computed above for
+    // the breakdown panels. Recomputing them here walked the whole usage array
+    // twice more on every filter change, for identical results.
+    const forUser = userScoped;
+    const forProblem = problemScoped;
     const forModel = applyFilters(rangeUsage, "model");
     const forPurpose = applyFilters(rangeUsage, "purpose");
     const forStep = applyFilters(rangeUsage, "step");
@@ -403,7 +536,7 @@ export default function AdminCostsPage() {
         .map((key) => ({ key, label: stepLabel(key) }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     };
-  }, [rangeUsage, applyFilters]);
+  }, [rangeUsage, applyFilters, userScoped, problemScoped]);
 
   // Build chart bars with filled-in empty days for the selected range
   const chartData = useMemo(() => {
@@ -450,23 +583,37 @@ export default function AdminCostsPage() {
     return <p className="text-muted-foreground">Loading cost data...</p>;
   }
 
+  // One header for every state, so the active key and Refresh never move.
+  const pageHeader = (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <h2 className="text-lg font-semibold">OpenRouter Dashboard</h2>
+      <div className="flex flex-wrap items-center gap-2">
+        <ActiveKeyPanel
+          info={activeKey}
+          busy={switchingKey}
+          onSwitch={switchActiveKey}
+        />
+        {lastUpdated && (
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {lastUpdated.toLocaleTimeString()}
+          </span>
+        )}
+        <button
+          onClick={() => fetchUsage()}
+          disabled={refreshing}
+          className={`${CONTROL} inline-flex items-center gap-1.5 font-medium hover:bg-muted/50 disabled:opacity-60`}
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+          Refresh
+        </button>
+      </div>
+    </div>
+  );
+
   if (usage.length === 0) {
     return (
       <div className="space-y-4">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h2 className="text-lg font-semibold">OpenRouter Dashboard</h2>
-          <div className="flex items-center gap-3">
-            <OpenRouterKeySelector value={filterAccount} onChange={onSelectAccount} />
-            <button
-              onClick={() => fetchUsage()}
-              disabled={refreshing}
-              className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border bg-card hover:bg-muted/50 transition-colors disabled:opacity-60"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
-              Refresh
-            </button>
-          </div>
-        </div>
+        {pageHeader}
         <div className="rounded-lg border bg-card p-8 text-center">
           <p className="text-muted-foreground">
             No LLM usage recorded yet. Cost data will appear here after pipeline
@@ -492,9 +639,6 @@ export default function AdminCostsPage() {
     0.001
   );
 
-  // Y-axis ticks (4 lines)
-  const yTicks = [0.25, 0.5, 0.75, 1].map((f) => f * maxBarVal);
-
   // Smart label interval — show ~6 labels max to avoid overlap
   const labelInterval = Math.max(1, Math.ceil(chartData.length / 6));
 
@@ -508,43 +652,199 @@ export default function AdminCostsPage() {
   const byUserTotal = byUser.reduce((s, g) => s + g.cost, 0);
   const byProblemTotal = byProblem.reduce((s, g) => s + g.cost, 0);
 
+  const hasFilters = Boolean(
+    filterUser || filterProblem || filterModel || filterPurpose || filterStep || filterAccount
+  );
+  const clearFilters = () => {
+    setFilterUser("");
+    setFilterProblem("");
+    setFilterModel("");
+    setFilterPurpose("");
+    setFilterStep("");
+    setFilterAccount("");
+  };
+
+  // Every active filter as a removable pill. Previously only user and problem
+  // got one, so a model/purpose/step/key filter silently changed every number on
+  // the page with nothing on screen saying so.
+  const activeFilterPills: { label: string; clear: () => void }[] = [
+    filterUser && {
+      label: `User: ${dropdownOptions.users.find((u) => u.key === filterUser)?.label ?? "Unknown"}`,
+      clear: () => setFilterUser(""),
+    },
+    filterProblem && {
+      label: `Problem: ${dropdownOptions.problems.find((p) => p.key === filterProblem)?.label ?? "Unknown"}`,
+      clear: () => setFilterProblem(""),
+    },
+    filterModel && { label: `Model: ${filterModel}`, clear: () => setFilterModel("") },
+    filterPurpose && { label: `Purpose: ${filterPurpose}`, clear: () => setFilterPurpose("") },
+    filterStep && { label: `Step: ${stepLabel(filterStep)}`, clear: () => setFilterStep("") },
+    filterAccount && {
+      label: `Key: ${ACCOUNT_LABEL[filterAccount as "new" | "old"] ?? filterAccount}`,
+      clear: () => setFilterAccount(""),
+    },
+  ].filter((p): p is { label: string; clear: () => void } => Boolean(p));
+
+  // Whether a per-key split can be stated exactly for what's on screen.
+  const approximateAttribution = hasApproximateAccounts(rangeUsage);
+
+  const visibleRows = filteredUsage.slice(0, rowLimit);
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h2 className="text-lg font-semibold">OpenRouter Dashboard</h2>
-        <div className="flex items-center gap-3">
-          <OpenRouterKeySelector value={filterAccount} onChange={onSelectAccount} />
-          {lastUpdated && (
-            <span className="text-xs text-muted-foreground tabular-nums">
-              Updated {lastUpdated.toLocaleTimeString()}
-            </span>
-          )}
-          <button
-            onClick={() => setIncludeImported((v) => !v)}
-            className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border transition-colors ${
-              includeImported
-                ? "bg-primary text-primary-foreground border-primary"
-                : "bg-card hover:bg-muted/50"
-            }`}
-            title="Include legacy imported usage rows (no user) in every total, chart, and breakdown"
+    <div className="space-y-5">
+      {pageHeader}
+
+      {/*
+        One bar for everything that scopes the whole dashboard. These controls
+        used to be split across three places — the page header, the chart header
+        and the table header — which is why the page read as a wall of controls
+        and why the time range looked like it only affected the chart.
+      */}
+      <div className="rounded-lg border bg-card px-3 py-2.5 space-y-2">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div className={SEGMENT_WRAP}>
+            {TIME_RANGES.map((r) => (
+              <button
+                key={r.key}
+                onClick={() => setTimeRange(r.key)}
+                className={segment(timeRange === r.key)}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+
+          <label className="inline-flex items-center gap-1.5 text-xs">
+            <span className="text-muted-foreground">Key</span>
+            <select
+              value={filterAccount}
+              onChange={(e) => setFilterAccount(e.target.value)}
+              className={CONTROL}
+              title="Filters the report only — it does not change which key is billed"
+            >
+              <option value="">All</option>
+              <option value="new">New</option>
+              <option value="old">Old</option>
+            </select>
+          </label>
+
+          <div className="h-5 w-px bg-border" aria-hidden />
+
+          <select
+            value={filterUser}
+            onChange={(e) => setFilterUser(e.target.value)}
+            className={CONTROL_SELECT}
+            aria-label="Filter by user"
           >
-            {includeImported ? "Including imported" : "Excluding imported"}
-          </button>
-          <button
-            onClick={() => fetchUsage()}
-            disabled={refreshing}
-            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border bg-card hover:bg-muted/50 transition-colors disabled:opacity-60"
+            <option value="">All users</option>
+            {dropdownOptions.users.map((u) => (
+              <option key={u.key} value={u.key}>{u.label}</option>
+            ))}
+          </select>
+          <select
+            value={filterProblem}
+            onChange={(e) => setFilterProblem(e.target.value)}
+            className={CONTROL_SELECT}
+            aria-label="Filter by problem"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
-            Refresh
-          </button>
+            <option value="">All problems</option>
+            {dropdownOptions.problems.map((p) => (
+              <option key={p.key} value={p.key}>{p.label}</option>
+            ))}
+          </select>
+          <select
+            value={filterModel}
+            onChange={(e) => setFilterModel(e.target.value)}
+            className={CONTROL_SELECT}
+            aria-label="Filter by model"
+          >
+            <option value="">All models</option>
+            {dropdownOptions.models.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+          <select
+            value={filterPurpose}
+            onChange={(e) => setFilterPurpose(e.target.value)}
+            className={CONTROL_SELECT}
+            aria-label="Filter by purpose"
+          >
+            <option value="">All purposes</option>
+            {dropdownOptions.purposes.map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+          <select
+            value={filterStep}
+            onChange={(e) => setFilterStep(e.target.value)}
+            className={CONTROL_SELECT}
+            aria-label="Filter by pipeline step"
+          >
+            <option value="">All steps</option>
+            {dropdownOptions.steps.map((s) => (
+              <option key={s.key} value={s.key}>{s.label}</option>
+            ))}
+          </select>
+
+          <div className="ml-auto flex items-center gap-2">
+            {/* Action-labelled, not state-labelled: "Excluding imported" left it
+                ambiguous whether that described the state or what a click does. */}
+            <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={includeImported}
+                onChange={(e) => setIncludeImported(e.target.checked)}
+                className="h-3.5 w-3.5 accent-primary"
+              />
+              <span title="Legacy rows with no user, imported before per-call tracking existed">
+                Include imported
+              </span>
+            </label>
+            {hasFilters && (
+              <button
+                onClick={clearFilters}
+                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
         </div>
+
+        {activeFilterPills.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-border/50 pt-2 text-xs">
+            <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+            {activeFilterPills.map((pill) => (
+              <button
+                key={pill.label}
+                onClick={pill.clear}
+                className="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-primary"
+                title="Remove this filter"
+              >
+                {pill.label}
+                <span aria-hidden>&times;</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {truncated && (
         <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
-          Showing the most recent 100,000 usage rows — older history is not
-          included in these totals. Aggregation should move server-side.
+          Showing the most recent 100,000 usage rows. Older history is excluded
+          from these totals.
+        </div>
+      )}
+
+      {approximateAttribution && filterAccount && (
+        <div className="flex items-start gap-2 rounded-lg border bg-muted/40 px-4 py-2.5 text-xs text-muted-foreground">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            Some rows in this range predate per-call key attribution, so this
+            per-key split is approximate. Spend before the fingerprint fix was
+            recorded from the active-key toggle, which mislabelled roughly $37 of
+            old-key usage and was never backfilled.
+          </span>
         </div>
       )}
 
@@ -590,39 +890,19 @@ export default function AdminCostsPage() {
               {" "}total
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            {/* Metric toggle */}
-            <div className="flex rounded-lg bg-muted/50 p-0.5">
-              {(["cost", "tokens", "calls"] as const).map((m) => (
-                <button
-                  key={m}
-                  onClick={() => setBarMode(m)}
-                  className={`text-xs px-3 py-1.5 rounded-md transition-all font-medium ${
-                    barMode === m
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {m === "cost" ? "Cost ($)" : m === "tokens" ? "Tokens" : "Calls"}
-                </button>
-              ))}
-            </div>
-            {/* Time range toggle */}
-            <div className="flex rounded-lg bg-muted/50 p-0.5">
-              {TIME_RANGES.map((r) => (
-                <button
-                  key={r.key}
-                  onClick={() => setTimeRange(r.key)}
-                  className={`text-xs px-2.5 py-1.5 rounded-md transition-all font-medium ${
-                    timeRange === r.key
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {r.label}
-                </button>
-              ))}
-            </div>
+          {/* Only the chart's own metric lives here. The time range moved to the
+              toolbar, because it scopes the cards, breakdowns and log too — in
+              the chart header it read as a chart-only control. */}
+          <div className={SEGMENT_WRAP}>
+            {(["cost", "tokens", "calls"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setBarMode(m)}
+                className={segment(barMode === m)}
+              >
+                {m === "cost" ? "Cost ($)" : m === "tokens" ? "Tokens" : "Calls"}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -631,7 +911,6 @@ export default function AdminCostsPage() {
           const CHART_HEIGHT = 220;
           const X_AXIS_HEIGHT = 28;
           const n = chartData.length;
-          const PURPOSE_COLORS = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4"];
           const purposeColorMap: Record<string, string> = {};
           allPurposes.forEach((p, i) => { purposeColorMap[p] = PURPOSE_COLORS[i % PURPOSE_COLORS.length]; });
 
@@ -687,7 +966,7 @@ export default function AdminCostsPage() {
 
                   {/* Bars */}
                   <div className="absolute inset-0 flex items-end">
-                    {chartData.map((bar, idx) => {
+                    {chartData.map((bar) => {
                       const val = barMode === "cost" ? bar.cost : barMode === "tokens" ? bar.tokens : bar.calls;
                       const pct = niceMax > 0 ? Math.min(val / niceMax, 1) : 0;
                       const barH = pct * 100; // percentage
@@ -794,7 +1073,6 @@ export default function AdminCostsPage() {
         {barMode === "cost" && allPurposes.length > 1 && (
           <div className="flex flex-wrap gap-5 pt-3 border-t border-border/30">
             {allPurposes.map((purpose, idx) => {
-              const PURPOSE_COLORS = ["#3b82f6", "#10b981", "#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4"];
               return (
                 <div key={purpose} className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="w-3 h-3 rounded-[3px]" style={{ backgroundColor: PURPOSE_COLORS[idx % PURPOSE_COLORS.length] }} />
@@ -828,7 +1106,7 @@ export default function AdminCostsPage() {
                   }`}
                 >
                   <div
-                    className="absolute inset-y-0 left-0 bg-primary/5 transition-all"
+                    className="absolute bottom-0 left-0 h-[3px] rounded-full bg-primary/40 transition-all"
                     style={{ width: `${barW}%` }}
                   />
                   <span className="relative text-muted-foreground truncate max-w-[180px]">
@@ -866,7 +1144,7 @@ export default function AdminCostsPage() {
                   }`}
                 >
                   <div
-                    className="absolute inset-y-0 left-0 bg-primary/5 transition-all"
+                    className="absolute bottom-0 left-0 h-[3px] rounded-full bg-primary/40 transition-all"
                     style={{ width: `${barW}%` }}
                   />
                   <span className="relative text-muted-foreground truncate max-w-[140px]">
@@ -888,128 +1166,22 @@ export default function AdminCostsPage() {
         </div>
       </div>
 
-      {/* Active Filters — pills for user/problem (set by clicking charts) */}
-      {(filterUser || filterProblem) && (
-        <div className="flex items-center gap-2 text-sm flex-wrap">
-          <Filter className="h-4 w-4 text-muted-foreground" />
-          <span className="text-muted-foreground">Filtering:</span>
-          {filterUser && (
-            <button
-              onClick={() => setFilterUser("")}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-primary/10 text-primary text-xs"
-            >
-              User: {byUser.find((u) => u.key === filterUser)?.label || "Unknown"}
-              <span className="ml-1">&times;</span>
-            </button>
-          )}
-          {filterProblem && (
-            <button
-              onClick={() => setFilterProblem("")}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-primary/10 text-primary text-xs"
-            >
-              Problem:{" "}
-              {byProblem.find((p) => p.key === filterProblem)?.label || "Unknown"}
-              <span className="ml-1">&times;</span>
-            </button>
-          )}
-          <button
-            onClick={() => {
-              setFilterUser("");
-              setFilterProblem("");
-            }}
-            className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
-          >
-            Clear all
-          </button>
-        </div>
-      )}
-
       {/* Detailed Usage Table */}
       <div className="rounded-lg border overflow-hidden">
-        <div className="bg-muted/50 px-4 py-2.5 border-b">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="flex items-center gap-3">
-              <h3 className="text-sm font-semibold">
-                Usage Log{" "}
-                {filteredUsage.length !== rangeUsage.length
-                  ? `(${filteredUsage.length} of ${rangeUsage.length})`
-                  : `(${filteredUsage.length})`}
-              </h3>
-              {/* Cross-filtered dropdowns */}
-              <select
-                value={filterUser}
-                onChange={(e) => setFilterUser(e.target.value)}
-                className="text-xs bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                <option value="">All Users</option>
-                {dropdownOptions.users.map((u) => (
-                  <option key={u.key} value={u.key}>{u.label}</option>
-                ))}
-              </select>
-              <select
-                value={filterProblem}
-                onChange={(e) => setFilterProblem(e.target.value)}
-                className="text-xs bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                <option value="">All Problems</option>
-                {dropdownOptions.problems.map((p) => (
-                  <option key={p.key} value={p.key}>{p.label}</option>
-                ))}
-              </select>
-              <select
-                value={filterModel}
-                onChange={(e) => setFilterModel(e.target.value)}
-                className="text-xs bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                <option value="">All Models</option>
-                {dropdownOptions.models.map((m) => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
-              <select
-                value={filterPurpose}
-                onChange={(e) => setFilterPurpose(e.target.value)}
-                className="text-xs bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                <option value="">All Purposes</option>
-                {dropdownOptions.purposes.map((p) => (
-                  <option key={p} value={p} className="capitalize">{p}</option>
-                ))}
-              </select>
-              <select
-                value={filterStep}
-                onChange={(e) => setFilterStep(e.target.value)}
-                className="text-xs bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                <option value="">All Steps</option>
-                {dropdownOptions.steps.map((s) => (
-                  <option key={s.key} value={s.key}>{s.label}</option>
-                ))}
-              </select>
-              {(filterUser || filterProblem || filterModel || filterPurpose || filterStep || filterAccount) && (
-                <button
-                  onClick={() => { setFilterUser(""); setFilterProblem(""); setFilterModel(""); setFilterPurpose(""); setFilterStep(""); setFilterAccount(""); }}
-                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-            {/* Totals summary on the right when filters are active */}
-            {(filterUser || filterProblem || filterModel || filterPurpose || filterStep || filterAccount) && (
-              <div className="flex items-center gap-4 text-xs">
-                <span className="text-muted-foreground">
-                  Prompt: <span className="font-semibold text-foreground tabular-nums">{filteredUsage.reduce((s, u) => s + u.prompt_tokens, 0).toLocaleString()}</span>
-                </span>
-                <span className="text-muted-foreground">
-                  Completion: <span className="font-semibold text-foreground tabular-nums">{filteredUsage.reduce((s, u) => s + u.completion_tokens, 0).toLocaleString()}</span>
-                </span>
-                <span className="text-muted-foreground">
-                  Cost: <span className="font-semibold text-foreground tabular-nums">${filteredUsage.reduce((s, u) => s + parseFloat(u.cost_usd || "0"), 0).toFixed(4)}</span>
-                </span>
-              </div>
-            )}
-          </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/50 px-4 py-2.5">
+          <h3 className="text-sm font-semibold">Usage Log</h3>
+          {/* Honest count. The dropdowns that used to crowd in here are in the
+              toolbar now, and the per-column totals duplicated the summary cards. */}
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {filteredUsage.length === 0
+              ? "no matching calls"
+              : `showing ${visibleRows.length.toLocaleString()} of ${filteredUsage.length.toLocaleString()}`}
+            {/* The unfiltered count only adds information when filters actually
+                removed something. */}
+            {hasFilters && filteredUsage.length !== rangeUsage.length
+              ? ` (${rangeUsage.length.toLocaleString()} in range)`
+              : ""}
+          </span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -1027,7 +1199,7 @@ export default function AdminCostsPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredUsage.slice(0, 200).map((u) => (
+              {visibleRows.map((u) => (
                 <tr
                   key={u.id}
                   className="border-b last:border-0 hover:bg-muted/20"
@@ -1062,6 +1234,38 @@ export default function AdminCostsPage() {
             </tbody>
           </table>
         </div>
+        {filteredUsage.length === 0 ? (
+          <div className="px-4 py-10 text-center text-sm text-muted-foreground">
+            {/* Two different causes, and offering "clear filters" for the wrong
+                one reads as "clear filters to see the 0 calls in this range". */}
+            {rangeUsage.length === 0 ? (
+              <>No LLM usage in this time range. Try a wider range.</>
+            ) : (
+              <>
+                No calls match these filters.{" "}
+                <button
+                  onClick={clearFilters}
+                  className="underline underline-offset-2 hover:text-foreground"
+                >
+                  Clear filters
+                </button>{" "}
+                to see the {rangeUsage.length.toLocaleString()} call
+                {rangeUsage.length === 1 ? "" : "s"} in this range.
+              </>
+            )}
+          </div>
+        ) : (
+          visibleRows.length < filteredUsage.length && (
+            <div className="border-t px-4 py-3 text-center">
+              <button
+                onClick={() => setRowLimit((n) => n + ROW_PAGE)}
+                className={`${CONTROL} font-medium hover:bg-muted/50`}
+              >
+                Show {Math.min(ROW_PAGE, filteredUsage.length - visibleRows.length)} more
+              </button>
+            </div>
+          )
+        )}
       </div>
     </div>
   );

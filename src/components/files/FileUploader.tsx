@@ -104,6 +104,9 @@ const ACCENT_STYLES: Record<string, { card: string; icon: string; ring: string }
   },
 };
 
+// The source language the LLM prep step ports FROM. Only meaningful in "ai"
+// mode: "as-is" stores the solution unchanged, and the pipeline only accepts
+// Python (see SOLUTION_FILENAME below), so there is nothing to choose there.
 const REFERENCE_LANGUAGES = [
   { id: "py", label: "Python" },
   { id: "cpp", label: "C++" },
@@ -111,14 +114,16 @@ const REFERENCE_LANGUAGES = [
   { id: "js", label: "JavaScript" },
 ];
 
-// Solution-file extension per reference language, used by the "use as-is" path.
-// The Python pipeline's detect_user_solution() accepts solution.{py,cpp,java,js}.
-const REFERENCE_EXTENSIONS: Record<string, string> = {
-  cpp: "cpp",
-  java: "java",
-  py: "py",
-  js: "js",
-};
+// Both creation paths store the reference solution under this one name.
+//
+// The pipeline is Python-only: detect_user_solution() in
+// pipeline/Scripts/generate_full_question.py exits 1 on a .cpp/.java/.js
+// reference solution, because there is no `translate_python` sub-step and so
+// PYTHON.py would never be written. "Use as-is" used to name the file after the
+// selected reference language, which meant picking C++ here created a problem
+// whose very first step could only fail — and every later step depends on it.
+// Non-Python source goes through "ai" mode, which ports it to Python first.
+const SOLUTION_FILENAME = "solution.py";
 
 type Phase = "pick" | "prepare" | "review" | "advanced";
 type RawInputMode = "separate" | "combined";
@@ -483,7 +488,7 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
       setError("Generate and review problem.md and solution.py first");
       return;
     }
-    await submitProblem(generatedProblemMd, generatedSolutionPy, "solution.py");
+    await submitProblem(generatedProblemMd, generatedSolutionPy, SOLUTION_FILENAME);
   };
 
   const canCreateAsIs = () => {
@@ -509,9 +514,8 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
       setError("Add a reference solution to create the problem as-is");
       return;
     }
-    const ext = REFERENCE_EXTENSIONS[referenceLanguage] ?? "py";
     setError(null);
-    await submitProblem(problemStatement, referenceSolution, `solution.${ext}`);
+    await submitProblem(problemStatement, referenceSolution, SOLUTION_FILENAME);
   };
 
   // As-is flow: validate the raw inputs, then advance to the required Problem
@@ -738,21 +742,24 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
                   </h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {prepareMode === "asis"
-                      ? "Stored as-is; pick the matching language below."
+                      ? "Must be Python — stored unchanged as solution.py. To start from C++, Java or JavaScript, prepare with AI instead."
                       : "C++, Java, or other source code to port to Python."}
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-1">
-                  {REFERENCE_LANGUAGES.map((lang) => (
-                    <Chip
-                      key={lang.id}
-                      selected={referenceLanguage === lang.id}
-                      onClick={() => setReferenceLanguage(lang.id)}
-                    >
-                      {lang.label}
-                    </Chip>
-                  ))}
-                </div>
+                {/* Source language to port FROM — only the AI path ports anything. */}
+                {prepareMode !== "asis" && (
+                  <div className="flex flex-wrap gap-1">
+                    {REFERENCE_LANGUAGES.map((lang) => (
+                      <Chip
+                        key={lang.id}
+                        selected={referenceLanguage === lang.id}
+                        onClick={() => setReferenceLanguage(lang.id)}
+                      >
+                        {lang.label}
+                      </Chip>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="flex flex-1 flex-col p-4">
                 <Textarea
@@ -776,20 +783,12 @@ export function FileUploader({ onUploadComplete, onCancel }: FileUploaderProps) 
               </p>
             </div>
             {prepareMode === "asis" && (
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Solution language</Label>
-                <div className="flex flex-wrap gap-1">
-                  {REFERENCE_LANGUAGES.map((lang) => (
-                    <Chip
-                      key={lang.id}
-                      selected={referenceLanguage === lang.id}
-                      onClick={() => setReferenceLanguage(lang.id)}
-                    >
-                      {lang.label}
-                    </Chip>
-                  ))}
-                </div>
-              </div>
+              <p className="text-xs text-muted-foreground">
+                The <code className="text-xs">=== SOLUTION ===</code> section must be
+                Python — it is stored unchanged as{" "}
+                <code className="text-xs">solution.py</code>. To start from C++, Java
+                or JavaScript, prepare with AI instead.
+              </p>
             )}
             <div
               className="flex min-h-[200px] flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted/30 px-6 text-center"
