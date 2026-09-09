@@ -23,6 +23,7 @@ export interface LoadRecord {
   error: string | null;
   remarks: string | null;
   logs: string;
+  queuedAt: string | null;
   startedAt: string | null;
   finishedAt: string | null;
 }

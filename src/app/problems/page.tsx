@@ -16,6 +16,7 @@ import {
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { LoadLogPanel, type LoadRecord } from "@/components/problems/LoadLogPanel";
+import { deriveLoadCell } from "@/components/problems/load-cell";
 import { useAuth } from "@/lib/auth-context";
 import { useProblems } from "@/lib/problems-context";
 import { cn } from "@/lib/utils";
@@ -62,9 +63,11 @@ export default function ProblemsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [queueing, setQueueing] = useState(false);
   const [queueResult, setQueueResult] = useState("");
-  // Every unfinished load the user may see, keyed by problem. One request for
-  // the whole table — see /api/loadings/coding-questions/live.
-  const [liveLoads, setLiveLoads] = useState<Map<string, LoadRecord>>(new Map());
+  // Every load the user may see, grouped by problem. One request for the whole
+  // table — see /api/loadings/coding-questions/live.
+  const [loadsByProblem, setLoadsByProblem] = useState<Map<string, LoadRecord[]>>(new Map());
+  /** Oldest load on record; before this, "no load row" does not mean "never loaded". */
+  const [trackingStartedAt, setTrackingStartedAt] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   // Bumped after queueing. Without it the poll effect would not re-run — it
   // watches `liveLoads`, which is still empty at that moment — and the Load
@@ -134,9 +137,12 @@ export default function ProblemsPage() {
     return () => clearInterval(id);
   }, [problems, refresh]);
 
-  // Poll only while something is actually in flight: the effect re-runs when
-  // `liveLoads` changes, so the last completing load schedules one final pass
-  // that finds nothing and stops. An empty table costs no requests at all.
+  // Poll only while something is actually in flight. The map now holds finished
+  // loads too, so "map is empty" is no longer the signal — `anyLive` is.
+  const anyLive = [...loadsByProblem.values()].some((ls) =>
+    ls.some((l) => l.status === "queued" || l.status === "running"),
+  );
+
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -145,17 +151,30 @@ export default function ProblemsPage() {
       try {
         const res = await fetch("/api/loadings/coding-questions/live");
         if (cancelled || !res.ok) return;
-        const data = (await res.json()) as { loads: (LoadRecord & { problemId: string })[] };
+        const data = (await res.json()) as {
+          trackingStartedAt: string | null;
+          loads: (LoadRecord & { problemId: string })[];
+        };
         if (cancelled) return;
-        const next = new Map<string, LoadRecord>();
-        for (const l of data.loads) next.set(l.problemId, l);
-        setLiveLoads((prev) => {
-          // Replacing the Map on every tick would re-render the whole table
-          // twice a second forever. Only swap it when something actually moved.
+        setTrackingStartedAt(data.trackingStartedAt);
+        const next = new Map<string, LoadRecord[]>();
+        for (const l of data.loads) {
+          const list = next.get(l.problemId);
+          if (list) list.push(l);
+          else next.set(l.problemId, [l]);
+        }
+        setLoadsByProblem((prev) => {
+          // Replacing the Map every tick would re-render the whole table twice a
+          // second forever. Only swap it when something actually moved.
           if (prev.size === next.size &&
-              [...next].every(([k, v]) => prev.get(k)?.status === v.status &&
-                                          prev.get(k)?.logs === v.logs &&
-                                          prev.get(k)?.queuePosition === v.queuePosition)) {
+              [...next].every(([k, v]) => {
+                const before = prev.get(k);
+                return before?.length === v.length &&
+                  v.every((l, i) => before[i].id === l.id &&
+                                    before[i].status === l.status &&
+                                    before[i].logs === l.logs &&
+                                    before[i].queuePosition === l.queuePosition);
+              })) {
             return prev;
           }
           return next;
@@ -166,12 +185,12 @@ export default function ProblemsPage() {
     };
 
     void pull();
-    if (liveLoads.size > 0) timer = setTimeout(pull, 2000);
+    if (anyLive) timer = setTimeout(pull, 2000);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [liveLoads, loadTick]);
+  }, [anyLive, loadsByProblem, loadTick]);
 
   if (loading && problems.length === 0) {
     return (
@@ -258,7 +277,11 @@ export default function ProblemsPage() {
                 {(showAll ? problems : problems.slice(0, 5)).map((p) => {
                   const status = STATUS_CONFIG[p.status] || STATUS_CONFIG.draft;
                   const StatusIcon = status.icon;
-                  const live = liveLoads.get(p.id);
+                  const cell = deriveLoadCell({
+                    loads: loadsByProblem.get(p.id) ?? [],
+                    problemCreatedAt: p.created_at,
+                    trackingStartedAt,
+                  });
                   return (
                     <Fragment key={p.id}>
                     <tr className="border-b last:border-0 hover:bg-muted/30 transition-colors">
@@ -310,35 +333,33 @@ export default function ProblemsPage() {
                         {new Date(p.created_at).toLocaleDateString()}
                       </td>
                       <td className="px-4 py-3">
-                        {live ? (
+                        {cell.expandable ? (
                           <button
                             type="button"
                             onClick={() => setExpanded(expanded === p.id ? null : p.id)}
                             aria-expanded={expanded === p.id}
-                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                            className={`inline-flex items-center gap-1 text-xs hover:underline ${
+                              cell.kind === "failed" ? "text-destructive" : "text-primary"
+                            }`}
                           >
                             <ChevronRight
                               className={`h-3 w-3 transition-transform ${expanded === p.id ? "rotate-90" : ""}`}
                             />
-                            {live.status === "queued"
-                              ? live.queuePosition && live.queuePosition > 1
-                                ? `Queued · ${live.queuePosition - 1} ahead`
-                                : "Queued · next"
-                              : "Loading…"}
+                            {cell.label}
                           </button>
                         ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
+                          <span className="text-xs text-muted-foreground">{cell.label}</span>
                         )}
                       </td>
                     </tr>
-                    {live && expanded === p.id && (
+                    {cell.load && expanded === p.id && (
                       <tr className="border-b last:border-0 bg-muted/20">
                         <td colSpan={isAdmin ? 10 : 9} className="px-4 pb-3">
                           {/* Controlled: this page already polls every live load
                               in one request, so the panel must not fetch again.
                               Sharing the panel keeps the wording and the beta
                               links identical to the problem page. */}
-                          <LoadLogPanel loadId={live.id} record={live} />
+                          <LoadLogPanel loadId={cell.load.id} record={cell.load} />
                         </td>
                       </tr>
                     )}

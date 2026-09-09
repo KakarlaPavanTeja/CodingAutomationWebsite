@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, isNotNull, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { codingQuestionLoads, problems } from "@/lib/db/schema";
 import { getProfileRoleById, visibleProblemsFilter } from "@/lib/db/queries";
@@ -7,7 +7,7 @@ import { requireAuthApi } from "@/lib/auth/server";
 import { advanceLoadQueue } from "@/lib/loadings/advance-load-queue";
 
 /**
- * Every unfinished load the caller may see, in one request.
+ * Every load the caller may see, in one request, plus when tracking began.
  *
  * The per-problem GET beside this one answers for a single problem, which is
  * all the problem page needs. The problems LIST needs an answer for twenty at
@@ -17,6 +17,12 @@ import { advanceLoadQueue } from "@/lib/loadings/advance-load-queue";
  * deliberately the same function, not a second copy, because a load is
  * readable exactly when its problem is. Upload-sourced loads have no problem
  * and never appear here; they belong to the upload page.
+ *
+ * `trackingStartedAt` is the oldest load on record. A problem created before
+ * it with no load of its own may well be in beta, loaded by hand before any of
+ * this existed — the list says so rather than implying it was never loaded.
+ * Null when nothing has ever been recorded, which makes that claim unmakeable
+ * and is exactly right: with no evidence, "loaded earlier" would be a guess.
  *
  * `queuePosition` is computed here rather than per row by the client: the
  * ordering is over ALL queued loads (including ones on problems this caller
@@ -40,13 +46,23 @@ export async function GET() {
   ).map((r) => r.id);
   const positionOf = new Map(queuedIds.map((id, i) => [id, i + 1]));
 
+  const [oldest] = await db
+    .select({ queuedAt: codingQuestionLoads.queuedAt })
+    .from(codingQuestionLoads)
+    .orderBy(asc(codingQuestionLoads.queuedAt))
+    .limit(1);
+
+  // ponytail: every visible problem's loads, reduced per problem in the client.
+  // Linear in total loads forever — ~60 rows today. Move to
+  // `DISTINCT ON (problem_id)` per status when that stops being trivial.
   const rows = await db
     .select({ load: codingQuestionLoads })
     .from(codingQuestionLoads)
     .innerJoin(problems, eq(problems.id, codingQuestionLoads.problemId))
     .where(
       and(
-        inArray(codingQuestionLoads.status, ["queued", "running"]),
+        isNotNull(codingQuestionLoads.problemId),
+        ne(codingQuestionLoads.status, "cancelled"),
         visibleProblemsFilter({ userId: auth.session.userId, isAdmin }),
       ),
     )
@@ -61,6 +77,7 @@ export async function GET() {
   });
 
   return NextResponse.json({
+    trackingStartedAt: oldest?.queuedAt ?? null,
     loads: rows.map((r) => ({
       ...r.load,
       queuePosition: positionOf.get(r.load.id) ?? null,
