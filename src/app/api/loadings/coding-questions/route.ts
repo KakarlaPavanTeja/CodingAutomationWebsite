@@ -5,6 +5,7 @@ import { requireAuthApi } from "@/lib/auth/server";
 import { assertSafeProblemId, assertSafeRelativePath } from "@/lib/storage-path";
 import {
   parseCodingQuestionsPayload,
+  readQuestionId,
   type CodingQuestionRow,
 } from "@/lib/loadings/coding-questions-json";
 import { loadCodingQuestions } from "@/lib/loadings/load-coding-questions";
@@ -12,19 +13,21 @@ import { missingLoadingsConfig } from "@/lib/loadings/config";
 import { extractQuestionsFromUpload } from "@/lib/loadings/upload-input";
 import { regenerateQuestionIds } from "@/lib/loadings/regenerate-ids";
 import {
-  anyRunningLoad,
   appendLoadLog,
-  concurrentLoadRefusal,
-  createLoadRecord,
+  enqueueLoadRecord,
   finishLoadRecord,
   formatLogLine,
   latestAttemptForProblem,
   latestLoadForProblem,
-  runningLoadForProblem,
+  liveLoadForProblem,
+  queuePositionForLoad,
   type LoadSource,
 } from "@/lib/loadings/load-records";
-
-const DEFAULT_PATH = "forJSONPreparation/coding_questions.json";
+import { advanceLoadQueue, DEFAULT_SOURCE_PATH } from "@/lib/loadings/advance-load-queue";
+import {
+  alreadyLoadedMessage,
+  findAlreadyLoadedQuestions,
+} from "@/lib/loadings/question-set";
 
 // A loaded coding_questions.json can bundle testcases, multi-language
 // solutions and an editorial for many questions (or arrive zipped, for the
@@ -80,21 +83,23 @@ export async function GET(request: NextRequest) {
   const lastLoad = await latestLoadForProblem(safeProblemId);
   // Only worth reporting when the most recent attempt overall actually
   // failed — a completed `lastLoad` already covers the success case, and a
-  // still-`running` attempt has nothing useful to say here.
+  // queued-or-`running` attempt has nothing useful to say here.
   const lastAttempt = await latestAttemptForProblem(safeProblemId);
   const lastFailedLoad = lastAttempt?.status === "failed" ? lastAttempt : null;
   // A load in flight is invisible in both rows above (`lastLoad` is
-  // completed-only, a running attempt is neither completed nor failed), which
+  // completed-only, a queued or running attempt is neither completed nor
+  // failed), which
   // is what let a remounted panel read "never loaded" and start a second one.
   // Reporting it lets the UI refuse to start another AND re-attach its log
   // panel after a tab switch or a page reload.
-  const runningLoad = await runningLoadForProblem(safeProblemId);
+  const liveLoad = await liveLoadForProblem(safeProblemId);
   return NextResponse.json({
     configured: missing.length === 0,
     missing,
     lastLoad,
     lastFailedLoad,
-    runningLoad,
+    liveLoad,
+    queuePosition: liveLoad ? await queuePositionForLoad(liveLoad.id) : null,
   });
 }
 
@@ -127,6 +132,9 @@ export async function POST(request: NextRequest) {
   let source: LoadSource;
   let questions: CodingQuestionRow[];
   let remarks: string | null;
+  // Stored on the row so a queued load can re-read its questions when it is
+  // claimed, minutes after this request has gone. Null for uploads.
+  let sourcePath: string | null = null;
 
   if (isUpload) {
     // Upload flow: no problem to authorise against — a session is enough.
@@ -187,7 +195,7 @@ export async function POST(request: NextRequest) {
 
     let safePath: string;
     try {
-      safePath = assertSafeRelativePath(String(body.path ?? "").trim() || DEFAULT_PATH);
+      safePath = assertSafeRelativePath(String(body.path ?? "").trim() || DEFAULT_SOURCE_PATH);
     } catch (e) {
       return NextResponse.json({ error: (e as Error).message }, { status: 400 });
     }
@@ -218,26 +226,29 @@ export async function POST(request: NextRequest) {
       );
     }
     questions = parsed;
+    sourcePath = safePath;
   }
 
-  // Two gates, deliberately distinct so the UI can tell them apart:
-  //   423 — ANY load is still running, whatever its problem (or an upload).
-  //         Remarks do NOT lift it: a forced second load would race the
-  //         first for the same order inside a shared question set, or write
-  //         the same questions twice. Widened beyond one problem because two
-  //         DIFFERENT problems (or an upload, which has no problemId) still
-  //         contend for that same shared order sequence — see
-  //         docs/superpowers/plans/2026-09-04-load-order-collision.md.
-  //   409 — a load already COMPLETED (below). That one is lifted by remarks,
-  //         which is what regenerates the ids for a deliberate second copy.
-  // ponytail: check-then-insert, so two POSTs landing in the same millisecond
-  // can both pass. Closing that needs a database-level lock — Tasks 1-2 of
-  // the plan above make a collision survivable even then.
-  const refusal = concurrentLoadRefusal(await anyRunningLoad(), problemId);
-  if (refusal) {
+  // Concurrency is no longer a refusal: a second load queues behind the first
+  // (see `src/lib/loadings/advance-load-queue.ts`). What is left are three
+  // duplicate gates, all 409, all about loading the same thing twice.
+  //
+  //   1. this problem already has a load queued or running — NOT lifted by
+  //      remarks: two loads of the same problem put the same questions into
+  //      beta twice whatever their ids;
+  //   2. this problem already has a COMPLETED load — lifted by remarks, which
+  //      is what regenerates the ids for a deliberate second copy;
+  //   3. beta already holds these question ids.
+  const live = problemId ? await liveLoadForProblem(problemId) : null;
+  if (live) {
     return NextResponse.json(
-      { error: refusal.message, loadId: refusal.loadId },
-      { status: 423 },
+      {
+        error:
+          `This problem already has a load ${live.status === "queued" ? "waiting in the queue" : "running"} ` +
+          `(id ${live.id}). Watch that one rather than starting a second.`,
+        loadId: live.id,
+      },
+      { status: 409 },
     );
   }
 
@@ -248,67 +259,95 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (remarks) {
-    questions = regenerateQuestionIds(questions);
+  // `loadCodingQuestions` runs this same check when the load is actually
+  // claimed. This earlier copy exists so a duplicate is reported on the click
+  // rather than discovered minutes later when the queue reaches it — the whole
+  // point of queueing is that you walk away, and a queue that only reports
+  // "already in beta" on arrival wastes the walk. A flaky scrape must not block
+  // a legitimate load, so a failed lookup continues.
+  if (!remarks) {
+    try {
+      const existing = await findAlreadyLoadedQuestions(
+        questions.map(readQuestionId).filter(Boolean),
+      );
+      if (existing.length) {
+        return NextResponse.json({ error: alreadyLoadedMessage(existing) }, { status: 409 });
+      }
+    } catch (err) {
+      console.warn("[Loadings] pre-queue duplicate check failed:", (err as Error).message);
+    }
   }
 
-  const loadId = await createLoadRecord({ problemId, userId, source, remarks });
+  const loadId = await enqueueLoadRecord({ problemId, userId, source, remarks, sourcePath });
 
-  // Deliberately not awaited: the load runs for minutes and the client polls
-  // GET .../[id] for status. Every promise started here MUST end in a
-  // .catch() — an unhandled rejection in a fire-and-forget promise kills the
-  // whole Node process, not just this request (Node 15+ default).
-  void (async () => {
-    try {
-      const result = await loadCodingQuestions(questions, {
-        // Ids were just regenerated when remarks are present, so they cannot
-        // collide with anything already in beta.
-        skipDuplicateCheck: Boolean(remarks),
-        onLog: (phase, message) => {
-          appendLoadLog(loadId, formatLogLine(phase, message)).catch((err) =>
-            console.error("[Loadings] appendLoadLog failed:", (err as Error).message),
-          );
-        },
-      });
-      // A load can split across several question sets, and every one of them
-      // belongs in the audit row: recording only the last batch under-reported
-      // both the sets written to and the questions loaded. `question_set_id`
-      // is a single text column, so multiple sets are joined — the registry
-      // sheet can legitimately list an id twice, hence the de-dupe.
-      const { batches } = result;
-      const questionSetIds = [...new Set(batches.map((b) => b.questionSetId))];
-      // Only meaningful for the success-summary log (see `finishLoadRecord`)
-      // — computed regardless of outcome since it's cheap, but ignored there
-      // unless `status` is "completed".
-      const orderRange = batches.length
-        ? {
-            start: Math.min(...batches.map((b) => b.orderStart)),
-            end: Math.max(...batches.map((b) => b.orderStart + b.questionCount - 1)),
-          }
-        : null;
-      await finishLoadRecord(loadId, {
-        status: result.success ? "completed" : "failed",
-        questionSetId: questionSetIds.join(", ") || null,
-        questionIds: batches.flatMap((b) => b.questionIds),
-        // On failure the loop stops at the failed batch, so the last batch's
-        // task output is the one worth linking to.
-        taskOutputUrl: batches[batches.length - 1]?.taskOutputUrl ?? null,
-        error: result.error ?? null,
-        orderRange,
-      });
-    } catch (e) {
-      const message = (e as Error).message;
-      // Do NOT await the log write here: finishLoadRecord must run even if
-      // this rejects, or a transient DB blip strands the row at "running"
-      // forever (no reaper polls it back to a terminal state).
-      appendLoadLog(loadId, formatLogLine("error", message)).catch((err) =>
-        console.error("[Loadings] appendLoadLog failed:", (err as Error).message),
-      );
-      await finishLoadRecord(loadId, { status: "failed", error: message });
-    }
-  })().catch((err) => {
-    console.error("[Loadings] background coding-question load failed:", (err as Error).message);
+  if (isUpload) {
+    // Uploads do not queue: the file exists only in this request, so nothing
+    // could re-read it later. `enqueueLoadRecord` inserted the row `running`
+    // for exactly this reason, and it runs inline here as it always did.
+    //
+    // Deliberately not awaited: the load runs for minutes and the client polls
+    // GET .../[id] for status. Every promise started here MUST end in a
+    // .catch() — an unhandled rejection in a fire-and-forget promise kills the
+    // whole Node process, not just this request (Node 15+ default).
+    void (async () => {
+      try {
+        const result = await loadCodingQuestions(
+          remarks ? regenerateQuestionIds(questions) : questions,
+          {
+            // Ids were just regenerated when remarks are present, so they
+            // cannot collide with anything already in beta.
+            skipDuplicateCheck: Boolean(remarks),
+            onLog: (phase, message) => {
+              appendLoadLog(loadId, formatLogLine(phase, message)).catch((err) =>
+                console.error("[Loadings] appendLoadLog failed:", (err as Error).message),
+              );
+            },
+          },
+        );
+        // A load can split across several question sets, and every one of them
+        // belongs in the audit row: recording only the last batch under-reported
+        // both the sets written to and the questions loaded. `question_set_id`
+        // is a single text column, so multiple sets are joined — the registry
+        // sheet can legitimately list an id twice, hence the de-dupe.
+        const { batches } = result;
+        const questionSetIds = [...new Set(batches.map((b) => b.questionSetId))];
+        const orderRange = batches.length
+          ? {
+              start: Math.min(...batches.map((b) => b.orderStart)),
+              end: Math.max(...batches.map((b) => b.orderStart + b.questionCount - 1)),
+            }
+          : null;
+        await finishLoadRecord(loadId, {
+          status: result.success ? "completed" : "failed",
+          questionSetId: questionSetIds.join(", ") || null,
+          questionIds: batches.flatMap((b) => b.questionIds),
+          taskOutputUrl: batches[batches.length - 1]?.taskOutputUrl ?? null,
+          error: result.error ?? null,
+          orderRange,
+        });
+      } catch (e) {
+        const message = (e as Error).message;
+        // Do NOT await the log write here: finishLoadRecord must run even if
+        // this rejects, or a transient DB blip strands the row at "running"
+        // forever (no reaper polls it back to a terminal state).
+        appendLoadLog(loadId, formatLogLine("error", message)).catch((err) =>
+          console.error("[Loadings] appendLoadLog failed:", (err as Error).message),
+        );
+        await finishLoadRecord(loadId, { status: "failed", error: message });
+      }
+    })().catch((err) => {
+      console.error("[Loadings] background upload load failed:", (err as Error).message);
+    });
+    return NextResponse.json({ loadId });
+  }
+
+  const queuePosition = await queuePositionForLoad(loadId);
+
+  // Kick the queue. Not awaited, same reasoning and same mandatory .catch() as
+  // the upload path above.
+  void advanceLoadQueue().catch((err) => {
+    console.error("[Loadings] queue drain failed:", (err as Error).message);
   });
 
-  return NextResponse.json({ loadId });
+  return NextResponse.json({ loadId, queuePosition }, { status: 202 });
 }
