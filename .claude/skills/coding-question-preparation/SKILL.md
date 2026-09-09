@@ -45,6 +45,37 @@ Record the answers in `Inputs/problem.md` headers:
 # Scenario Level: none | light | moderate | heavy
 ```
 
+## Working in one pass
+
+Rework, not the work, is what makes a question expensive. One session cost roughly
+$108 for a single easy question; almost all of the avoidable half was five editorial
+rewrites and three deterministic steps discovered late. Two habits remove most of it.
+
+**Do not re-ask a settled intake.** When the user hands you an approved statement
+that already carries the four headers, STEP 0 is answered — read them, state what you
+read, and ask only what is genuinely open. That is usually just the language set
+(trap 10) and the score band. A full six-question round on a decided statement wastes
+a turn and irritates.
+
+**Run in this order — each step consumes the previous one's output, so a skipped
+step means regenerating, not patching:**
+
+```
+description  ->  io_contract.json  ->  generator script  ->  derive_and_normalize
+   ->  testcase_annotate (B1-B4)  ->  execution_manager_v3  ->  editorial
+   ->  check_editorial.py  ->  editorial_execution_manager
+   ->  PIPELINE_OWNER_SCORE + prepare_lua + prepare_platform_json  ->  attach
+```
+
+The two cheap gates that prevent the expensive loops:
+
+- `check_editorial.py <run>/Outputs/editorial.md` — BEFORE executing the editorial.
+- Confirm `examples_synced: 2` from `derive_and_normalize`, and that orders 1 and 2
+  carry the `example` tag — BEFORE packaging.
+
+Write each artifact in one pass with a single heredoc. Iterating a file across four
+tool calls costs four times the tokens and produces the same file.
+
 ## Environment
 
 ```bash
@@ -52,12 +83,34 @@ export PIPELINE_BASE_DIR=<scratch>/run          # every script honours this
 export PYTHONPATH=<repo>/pipeline/Scripts
 export PIPELINE_OWNER_DIFFICULTY=<easy|medium|hard>
 export PIPELINE_OWNER_TITLE="<title>"           # optional; overrides titles file
+export PIPELINE_OWNER_SCORE=<20|25|30>          # owner score is FINAL; rescales every weight
 ln -sfn <repo>/pipeline/zReferenceFiles "$PIPELINE_BASE_DIR/zReferenceFiles"
 cd "$PIPELINE_BASE_DIR"                          # several scripts use relative Outputs/
 ```
 
 Use **`/usr/bin/python3`** — homebrew python3 lacks `requests`. Never run the
 pipeline against `pipeline/Inputs` or `pipeline/Outputs`; those hold other work.
+
+**Total score is owner-set, not derived.** The house band is **easy 20, medium 25,
+hard 30**. Set `PIPELINE_OWNER_SCORE` BEFORE `prepare_platform_json.py`, or the
+score defaults to the sum of generated weights (a number like 243) and you will
+repackage, re-attach and re-verify to fix it. It rescales all per-case weights to
+sum exactly to the total; `testcases.json` keeps its raw weights, which is by design.
+
+**`llm_client` will not import** — it needs `httpx` and `openai`, neither of which
+is installed (nor in `requirements.txt`). That blocks `testcase_manager_v4`, whose
+deterministic half you DO need. No request is ever made, so stub the imports:
+
+```python
+import sys, types
+h = types.ModuleType("httpx"); h.BaseTransport = type("BaseTransport", (), {})
+sys.modules["httpx"] = h
+oa = types.ModuleType("openai")
+for n in ("APIConnectionError","APIError","APIStatusError","APITimeoutError",
+          "InternalServerError","PermissionDeniedError","RateLimitError"):
+    setattr(oa, n, type(n, (Exception,), {}))
+oa.OpenAI = type("OpenAI", (), {}); sys.modules["openai"] = oa
+```
 
 ### Inputs
 
@@ -136,6 +189,54 @@ before producing its artifact; produce output in exactly that format.
 | 10 | `prepare_platform_json` | — | `prepare_platform_json.py --mode practice --langs ...` |
 | 11 | `execute_editorial` | — | `editorial_execution_manager.py python cpp java` |
 
+### Three steps the table does not list — and nothing warns you about
+
+Each of these lives INSIDE a script whose LLM call you are replacing, so it never
+runs when you hand-write the artifact. All three cost a rebuild in one session.
+
+**a. `derive_and_normalize` — after running the generator, before `testcase_annotate`.**
+Not a CLI. It computes everything the model is deliberately never asked for:
+dedup, example sync, shipping order, size tags, subtask numbering, weights. Skip it
+and B3 fails with `subtask count 0 outside [3, 12]`, cases carry no tags, and
+`order` is meaningless.
+
+```python
+from testcase_manager_v4 import derive_and_normalize      # after the stub above
+rep = derive_and_normalize("Outputs/testcases.json",
+                           open("Outputs/generated_description.md").read(),
+                           json.load(open("Outputs/io_contract.json")))
+```
+
+**b. `Outputs/io_contract.json` — you must write it yourself.**
+Without it `examples_synced` is `0`, orders 1 and 2 are whatever the sort produced,
+and since `is_hidden = order > 2` (trap 4) the two VISIBLE cases then do not match
+the description's examples. Example sync cannot parse the `name = value` display
+form the function-based description prompt mandates, so the contract is the only
+route. Build it by RUNNING the reference on each example's raw stdin:
+
+```json
+{"verified": true, "pairs": [{"example": 1, "stdin": "...", "stdout": "...",
+  "expected": "...", "converted_from": "named-variable block"}], "mismatches": [], "reason": ""}
+```
+
+**c. `editorial_code_guard` — after writing `editorial.md`.**
+`editorial_manager.py` applies it; you are not running that. Apply both:
+
+```python
+from editorial_code_guard import comment_out_editorial_drivers, ensure_move_code
+md, _ = ensure_move_code(md)              # adds enableMoveCode={true} to every block
+md, _ = comment_out_editorial_drivers(md) # comments out any live driver
+```
+
+### Suite sizing that clears B3 first time
+
+Aim for **80–85 cases in 5 subtask groups, none over 17**. The band is 80–250, and
+the subtask cap is `max(12, ⌈total/groups⌉)` — so a 58-case suite collapses the cap
+to 12 and any group over that fails B3. Plan the group of every scenario UP FRONT in
+a `SUBTASK_BY_SCENARIO` dict and have `add()` read the group from it; rebalancing
+after the fact means regenerating. Floors: edge ≥5%, large ≥5%, at most 3 cases
+declared `magnitude: "extreme"`.
+
 Step 1 solutions (`generatedFullCode/*`, and later `CodeContentFiles/*`) are
 **translations, not re-implementations**. For every language:
 
@@ -162,6 +263,60 @@ Descriptions: `get_structure_only_prompt` (function) vs
 `Prompts/descriptionPrompt.py`. Section order differs — non-function has **no
 Your Task** section.
 
+## The editorial contract
+
+`Prompts/editorialPrompt.py` is not advice — the Editorial tab parses these tags,
+and a reviewer reads the subsections. One session broke all four subsections and
+rewrote the editorial five times. Read the prompt, then check every line below.
+
+**Structure — exact, nothing before or after:**
+
+```
+# [Problem Name]                 <- H1 REQUIRED. Easy to forget; it is the first line.
+## [Approach Name]               <- or "## Solution 1: [Name]" when several exist
+### Intuition
+### Approach
+### Pseudocode                   <- REQUIRED heading, not just the CodeBlock tag
+### Code Implementation
+### Complexity Analysis
+```
+
+Nothing may follow Complexity Analysis — no notes, no asides, no dividers, no tables.
+
+**Intuition and Approach are plain-English bullets.** No backticks anywhere, no
+variable or function names, no code keywords, no syntax. Each bullet is one idea in
+1–2 short sentences; never a paragraph. Approach is bullets only, never numbered:
+3–4 for easy, 4–5 medium, 5–6 hard. `return` as an ordinary English verb is fine —
+the prompt's own GOOD example uses it.
+
+**Pseudocode is C-like, not Python-like.** `methodName(param1, param2) {` with braces
+on every block and 4-space indent, no data types, no semicolons, and `/* ... */` for
+every comment — **never `//`**. A comment above every function, loop, branch, return
+and major assignment, roughly 1:1 with the code.
+
+**Complexity Analysis has a fixed shape.** Top level `* **Time Complexity: \`O(...)\`**`
+and `* **Space Complexity: \`O(...)\`**`, each with `  * ` sub-bullets (never plain
+lines, never bold labels on sub-bullets), last sub-bullet being the summary. Every
+complexity value in backticks.
+
+**Owner preferences — these override the prompt's defaults:**
+
+- **The Code Implementation carries NO comments.** Bare solution class. The "why"
+  belongs in the pseudocode, which is comment-heavy by rule. The commented-out
+  `main()` template stays: that is the driver rule, not a comment.
+- **A basic problem gets ONE approach.** The prompt says to include the brute force
+  as a first naive approach; when that brute force is an artificial oracle construct
+  (shift-subtract division, a lookup table for a range check), including it invents
+  complexity the problem does not have. Single-solution shape is valid — use it.
+- **The editorial teaches the article's concept, not the incidental technique.**
+  For an exceptions question the spine is: why no return value can express the
+  failure, what `throw` does to control flow, which standard type and why, and that
+  `.what()` carries the message the caller prints. Arithmetic like truncation
+  towards zero is a footnote inside a code comment, never the intuition.
+
+Audit before executing — `python3 check_editorial.py <run>/Outputs/editorial.md`
+(ships with this skill) checks every rule above mechanically.
+
 ## Traps (each of these has already cost a rebuild)
 
 1. **`scenario_level: none` means no new story.** Keep the source's framing,
@@ -187,6 +342,17 @@ Your Task** section.
 8. Testcase `input` is always **raw stdin** the reference parses, for function
    and non-function alike. Only the *description* uses `name = value` form.
    Switching question type does NOT require regenerating testcases.
+9. **A single-language question still needs `generatedFullCode/PYTHON.py`.** Every
+   downstream step (testcase_manager_v4, testcase_annotate, benchmark_suite) reads
+   it as THE reference, whatever languages ship. Write it even for a C++-only build.
+10. **Language choice is an intake question when the concept is language-specific.**
+   A question teaching C++ exceptions or templates does not translate: Python has no
+   `std::invalid_argument`, and `if constexpr` has no equivalent at all. Ask before
+   building four languages that teach four different things.
+11. **A concept question will not fit the topics taxonomy.** It is purely algorithmic
+   — nothing for exceptions, error handling, templates or language mechanics. Tag
+   `Implementation` plus a second tag only where there is real algorithmic substance,
+   and say plainly that the true topic has no tag rather than forcing a bad fit.
 
 ## Definition of done
 
@@ -198,7 +364,10 @@ endpoint — never claim a pass from reading code.
 - Every language **N/N** on the full suite
 - Weights sum to the declared total; orders sequential `1..N`; all weights > 0
 - Visible testcases match the description's examples byte-for-byte
-- Editorial: every approach × language passes
+- Editorial: every approach × language passes, and `check_editorial.py` reports PASS
+- `derive_and_normalize` reported `examples_synced: 2`, and orders 1-2 carry `example`
+- `total_score` equals the owner band (easy 20 / medium 25 / hard 30), not a
+  weight-sum artefact
 
 A network error (`Connection reset by peer`) reads as `0/N` — retry before
 reporting it as a failure.
@@ -207,8 +376,22 @@ reporting it as a failure.
 
 `scripts/attach-manual-run.mts` creates the `problems` row, uploads
 `Inputs/` + `Outputs/` to S3, and writes `llm_usage` rows with
-`model=claude-opus-5, account=claude-code`. Edit `RUN`, `OWNER`, `PROBLEM` at the
-top, dry-run first, then `--execute`.
+`model=claude-opus-5, account=claude-code`. Nothing is hand-edited — everything is
+derived from the run tree. Dry-run first (default), then `--execute`:
+
+```bash
+npx tsx scripts/attach-manual-run.mts --run <run dir>              # dry run
+npx tsx scripts/attach-manual-run.mts --run <run dir> --execute    # attach
+npx tsx scripts/attach-manual-run.mts --run <run dir> --refresh <problem id> --execute
+```
+
+**Use `--refresh` for every re-push.** Editing an artifact after attaching (a score
+change, an editorial rewrite) needs the refresh path: it keeps the problem id, syncs
+score/difficulty, re-uploads, and does not duplicate the `llm_usage` rows. A second
+plain `--execute` mints a NEW problem instead.
+
+Verify with `npx tsx scripts/db.mts -p <id prefix>` — `_verify-attach.mts` is
+hardcoded for other problems and will not answer for yours.
 
 This is a **shared production database**. Confirm with the user before writing,
 every time. Count Claude-built questions with:
