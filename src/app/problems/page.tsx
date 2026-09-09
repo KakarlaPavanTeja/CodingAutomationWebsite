@@ -13,6 +13,7 @@ import {
   CircleDashed,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/lib/auth-context";
 import { useProblems } from "@/lib/problems-context";
 import { cn } from "@/lib/utils";
@@ -56,8 +57,60 @@ const STATUS_CONFIG: Record<
 export default function ProblemsPage() {
   const { problems, loading, refresh } = useProblems();
   const [showAll, setShowAll] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [queueing, setQueueing] = useState(false);
+  const [queueResult, setQueueResult] = useState("");
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
+
+  // Only a problem whose pipeline produced output has a coding_questions.json
+  // to load. Offering the checkbox on a draft would queue a load that fails its
+  // file read minutes later, which is exactly the delayed-failure the eager
+  // duplicate check exists to avoid elsewhere.
+  const isLoadable = (status: string) => status === "completed" || status === "partial";
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  /**
+   * Queue every selected problem. Deliberately contains no sequencing: the
+   * server-side queue orders them, so this is N ordinary Load requests fired at
+   * once. That is only safe because a second load now waits rather than being
+   * refused — before the queue, this button would have lost all but one.
+   */
+  const queueSelected = async () => {
+    setQueueing(true);
+    setQueueResult("");
+    const ids = [...selected];
+    const results = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const res = await fetch(
+            `/api/loadings/coding-questions?problemId=${encodeURIComponent(id)}`,
+            { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+          );
+          return res.ok;
+        } catch {
+          return false;
+        }
+      }),
+    );
+    const ok = results.filter(Boolean).length;
+    setQueueResult(
+      `${ok} of ${ids.length} queued. Loads run one at a time — open a problem to watch its log.` +
+        (ok < ids.length
+          ? " The rest were refused: already loaded, already queued, or already in beta."
+          : ""),
+    );
+    setSelected(new Set());
+    setQueueing(false);
+    refresh();
+  };
 
   useEffect(() => {
     const hasProcessing = problems.some((p) => p.status === "processing");
@@ -113,10 +166,31 @@ export default function ProblemsPage() {
         </div>
       ) : (
         <div className="space-y-3">
+          {selected.size > 0 && (
+            <div className="flex flex-wrap items-center gap-3 rounded-md border bg-card px-4 py-3">
+              <Button size="sm" disabled={queueing} onClick={queueSelected}>
+                {queueing ? "Queueing…" : `Load ${selected.size} to beta`}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+                Clear
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Queued loads run one after another, so a batch of four takes several minutes.
+              </p>
+            </div>
+          )}
+
+          {queueResult && (
+            <p className="rounded-md border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+              {queueResult}
+            </p>
+          )}
+
           <div className="rounded-lg border overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50">
+                  <th className="w-8 px-4 py-3" />
                   <th className="text-left px-4 py-3 font-medium">Problem</th>
                   {isAdmin && (
                     <th className="text-left px-4 py-3 font-medium">Created By</th>
@@ -138,6 +212,15 @@ export default function ProblemsPage() {
                       key={p.id}
                       className="border-b last:border-0 hover:bg-muted/30 transition-colors"
                     >
+                      <td className="px-4 py-3">
+                        {isLoadable(p.status) && (
+                          <Checkbox
+                            checked={selected.has(p.id)}
+                            onCheckedChange={() => toggle(p.id)}
+                            aria-label={`Select ${p.name} for loading to beta`}
+                          />
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <Link
                           href={`/problems/${p.id}`}
