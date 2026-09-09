@@ -412,7 +412,6 @@ NON_FUNCTION_DEFAULT_CODES = {
     "PYTHON39": "# write your code here...",
     "PYTHON": "# write your code here...",
     "JAVA": 'class Main {\n    public static void main(String[] args) {\n        // write your code here...\n        System.out.println("");\n    }\n}',
-    "NODEJS": 'const fs = require(\'fs\');\n\nfunction main() {\n    // Write your code here...\n    console.log("Hello, World!");\n}\n\nmain();',
     "NODE_JS": 'const fs = require(\'fs\');\n\nfunction main() {\n    // Write your code here...\n    console.log("Hello, World!");\n}\n\nmain();',
 }
 
@@ -449,7 +448,7 @@ LANG_PLATFORM = {
     },
     "nodejs": {
         "practice": "NODE_JS",
-        "exam": "NODEJS",
+        "exam": "NODE_JS",
         "content_markers": ("----------CODE_CONTENT_NODE_JS_START----------", "----------CODE_CONTENT_NODE_JS_END----------"),
         "base64_markers": ("----------CODE_BASE64_NODE_JS_START----------", "----------CODE_BASE64_NODE_JS_END----------"),
         "exec_file": "Main.js",

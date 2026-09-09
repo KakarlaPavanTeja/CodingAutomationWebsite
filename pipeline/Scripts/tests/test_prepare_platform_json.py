@@ -293,7 +293,7 @@ Hash Map
         # Exam side too.
         exam = ppj.build_exam_json(lua, MINIMAL_CONTAINER, "EASY", ["nodejs", "java", "python", "cpp"])
         elangs = [e["language"] for e in exam[0]["coding_question_details"]]
-        self.assertEqual(elangs, [l for l in ["CPP", "PYTHON39", "JAVA", "NODEJS"] if l in elangs])
+        self.assertEqual(elangs, [l for l in ["CPP", "PYTHON39", "JAVA", "NODE_JS"] if l in elangs])
 
     def test_parse_companies_splits_on_newlines_only(self):
         """Company names may contain commas; split only on newlines (UI-H2 / 3A)."""
