@@ -185,18 +185,41 @@ export const codingQuestionLoads = pgTable(
     source: text("source").notNull(),
     questionSetId: text("question_set_id"),
     questionIds: text("question_ids").array().notNull().default(sql`'{}'::text[]`),
-    status: text("status").notNull().default("running"),
+    // Born `queued`: loads run strictly one at a time (every one of them claims
+    // the next free order inside a shared question set, and a collision is
+    // rejected by the backend with a bare FAILURE), so the queue promotes
+    // exactly one row at a time — see src/lib/loadings/load-queue.ts.
+    // `cancelled` is how an operator pulls a waiting row out, and how a row
+    // wedged in `running` is cleared by hand instead of waiting out the stale
+    // window.
+    status: text("status").notNull().default("queued"),
     taskOutputUrl: text("task_output_url"),
     error: text("error"),
     remarks: text("remarks"),
     logs: text("logs").notNull().default(""),
-    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow(),
+    /** FIFO key for the queue. `id` is a v4 UUID, so it cannot order rows. */
+    queuedAt: timestamp("queued_at", { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * Storage-relative path of the coding_questions.json this load reads. The
+     * questions themselves are NOT stored — one file runs to megabytes with
+     * testcases, per-language solutions and an editorial — so a queued load
+     * re-reads them from storage when it is claimed and must remember where to
+     * look. Null for uploads, which are never queued.
+     */
+    sourcePath: text("source_path"),
+    /**
+     * When the load was CLAIMED, not when it was enqueued — deliberately no
+     * default. RUNNING_LOAD_STALE_MS is measured from this, so an insert-time
+     * value would make a row that waited out the window read as instantly
+     * stale and let a second drainer claim it.
+     */
+    startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
   (t) => ({
     statusCheck: check(
       "coding_question_loads_status_check",
-      sql`${t.status} IN ('running','completed','failed')`,
+      sql`${t.status} IN ('queued','running','completed','failed','cancelled')`,
     ),
     sourceCheck: check(
       "coding_question_loads_source_check",
