@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { codingQuestionLoads } from "@/lib/db/schema";
 
@@ -15,6 +15,8 @@ export interface LoadRecord {
   error: string | null;
   remarks: string | null;
   logs: string;
+  queuedAt: Date | null;
+  sourcePath: string | null;
   startedAt: Date | null;
   finishedAt: Date | null;
 }
@@ -45,12 +47,28 @@ export function formatLogLine(phase: string, message: string, now: Date = new Da
   return `[${stamp} IST] [${phase}] ${flat}`;
 }
 
-export async function createLoadRecord(args: {
+/**
+ * Join the waiting line.
+ *
+ * A pipeline load is `queued`: the queue promotes exactly one row at a time
+ * (see `claimNextQueuedLoad`), and `sourcePath` is remembered because the
+ * questions are NOT stored on the row — the load re-reads its
+ * coding_questions.json from storage when it is claimed, which may be minutes
+ * after the POST that enqueued it.
+ *
+ * An UPLOAD is inserted `running`, not `queued`, and its caller drives it
+ * inline. Its file exists only inside the request that uploaded it, so there
+ * is nothing for a later claim to re-read; a row left `queued` would sit in
+ * the line waiting for questions that no longer exist anywhere.
+ */
+export async function enqueueLoadRecord(args: {
   problemId: string | null;
   userId: string;
   source: LoadSource;
   remarks?: string | null;
+  sourcePath?: string | null;
 }): Promise<string> {
+  const isUpload = args.source === "upload";
   const [row] = await db
     .insert(codingQuestionLoads)
     .values({
@@ -58,6 +76,9 @@ export async function createLoadRecord(args: {
       userId: args.userId,
       source: args.source,
       remarks: args.remarks ?? null,
+      sourcePath: args.sourcePath ?? null,
+      status: isUpload ? "running" : "queued",
+      startedAt: isUpload ? new Date() : null,
     })
     .returning({ id: codingQuestionLoads.id });
   return row.id;
@@ -211,7 +232,7 @@ export async function latestLoadForProblem(problemId: string): Promise<LoadRecor
 /**
  * A "running" row older than this is not a load in flight, it is wreckage: the
  * job is fire-and-forget in the API process, so a restart or a crash between
- * `createLoadRecord` and `finishLoadRecord` strands the row at "running"
+ * `claimNextQueuedLoad` and `finishLoadRecord` strands the row at "running"
  * forever and nothing reaps it. The longest real run is bounded by the task
  * polls in `load-coding-questions.ts` (SHEET_LOADING 100x3s + unlock 60x3s +
  * link confirmation, per batch), so 30 minutes is well past a live load and
@@ -220,81 +241,127 @@ export async function latestLoadForProblem(problemId: string): Promise<LoadRecor
 export const RUNNING_LOAD_STALE_MS = 30 * 60 * 1000;
 
 /**
- * The load actually in flight for a problem, if any — the row `latestLoadForProblem`
- * (completed-only) and `latestAttemptForProblem` (newest, whatever that is) both
- * miss. Two callers need exactly this row and nothing else:
- *   - POST refuses to start a second concurrent load into shared beta,
- *   - GET hands the UI an id to re-attach its log panel to after a remount.
- * Deliberately a separate query: `latestLoadForProblem`'s completed-only
- * semantics drive the 409 duplicate gate and must not shift.
+ * Promote the oldest waiting load to `running`, or return null if one is
+ * already live.
+ *
+ * ONE STATEMENT on purpose. Two drainers firing at the same instant both pick
+ * the same oldest row; Postgres row-locks it, the loser re-evaluates this WHERE
+ * against the committed row (EvalPlanQual under READ COMMITTED), now sees a
+ * live `running` row, and updates nothing. A `select` followed by an `update`
+ * would reintroduce exactly the check-then-act race the old global refusal
+ * carried, and this is the one thing here that must not be racy.
+ *
+ * Drizzle's update builder with a raw WHERE, NOT `db.execute`: `.returning()`
+ * hands back typed rows in the same camelCase shape as every other query in
+ * this file, so there is no snake_case row to hand-map and no cast to get
+ * wrong. Nothing else in this repo uses `db.execute` with a `returning`, so its
+ * row shape is unproven here.
+ *
+ * `now()` for `started_at` rather than `new Date()`: the stale window below is
+ * measured against the database clock, and one clock is the only way that
+ * comparison stays honest.
+ *
+ * This is a transcription of `claimableFrom` in `./load-queue.ts`, which is
+ * where the rule is stated and tested. THE TWO CHANGE TOGETHER. It is also not
+ * the only guard — `advanceLoadQueue` holds a Postgres advisory lock across the
+ * whole drain, which is what stops two app instances from both promoting a row
+ * when a stale `running` row satisfies the guard for both.
  */
-export async function runningLoadForProblem(
-  problemId: string,
+export async function claimNextQueuedLoad(): Promise<LoadRecord | null> {
+  const staleSeconds = Math.floor(RUNNING_LOAD_STALE_MS / 1000);
+  const [row] = await db
+    .update(codingQuestionLoads)
+    .set({ status: "running", startedAt: sql`now()` })
+    .where(sql`
+      ${codingQuestionLoads.id} = (
+        select id from ${codingQuestionLoads}
+         where status = 'queued'
+         order by queued_at asc
+         limit 1
+      )
+      and not exists (
+        select 1 from ${codingQuestionLoads}
+         where status = 'running'
+           and started_at > now() - make_interval(secs => ${staleSeconds})
+      )
+    `)
+    .returning();
+  return (row as LoadRecord) ?? null;
+}
+
+/** 1-based place in the waiting line, or null when this load is not waiting. */
+export async function queuePositionForLoad(id: string): Promise<number | null> {
+  const rows = await db
+    .select({ id: codingQuestionLoads.id })
+    .from(codingQuestionLoads)
+    .where(eq(codingQuestionLoads.status, "queued"))
+    .orderBy(asc(codingQuestionLoads.queuedAt));
+  const index = rows.findIndex((r) => r.id === id);
+  return index === -1 ? null : index + 1;
+}
+
+/**
+ * Pull a load out of the line, or clear one wedged in `running`.
+ *
+ * Both cases in one function on purpose: a row stranded `running` by a crash
+ * blocks the whole queue for the full stale window, and "cancel it" is the same
+ * operator gesture as pulling a waiting row out. A genuinely live `running` row
+ * is refused — cancelling it would leave an NKB task writing to beta with
+ * nothing tracking it.
+ */
+export async function cancelLoad(
+  id: string,
   now: Date = new Date(),
-): Promise<LoadRecord | null> {
+): Promise<"cancelled" | "not-cancellable" | "missing"> {
+  const [row] = await db
+    .select({ status: codingQuestionLoads.status, startedAt: codingQuestionLoads.startedAt })
+    .from(codingQuestionLoads)
+    .where(eq(codingQuestionLoads.id, id))
+    .limit(1);
+  if (!row) return "missing";
+  const stale =
+    row.status === "running" &&
+    (row.startedAt?.getTime() ?? 0) <= now.getTime() - RUNNING_LOAD_STALE_MS;
+  if (row.status !== "queued" && !stale) return "not-cancellable";
+  await db
+    .update(codingQuestionLoads)
+    .set({
+      status: "cancelled",
+      finishedAt: new Date(),
+      error:
+        row.status === "queued"
+          ? "Cancelled before it started."
+          : "Cancelled: no progress for over 30 minutes, presumed dead.",
+    })
+    .where(eq(codingQuestionLoads.id, id));
+  return "cancelled";
+}
+
+/**
+ * This problem's load that has not finished — queued OR running. Both block a
+ * second load of the same problem and both are worth re-attaching a log panel
+ * to, so they are one query and one concept.
+ *
+ * No staleness filter, unlike the `running`-only query this replaces: a row
+ * wedged past the stale window still belongs in the UI, which offers to cancel
+ * it. `claimNextQueuedLoad` is where staleness decides anything.
+ *
+ * Deliberately separate from `latestLoadForProblem`, whose completed-only
+ * semantics drive the duplicate gate and must not shift.
+ */
+export async function liveLoadForProblem(problemId: string): Promise<LoadRecord | null> {
   const [row] = await db
     .select()
     .from(codingQuestionLoads)
     .where(
       and(
         eq(codingQuestionLoads.problemId, problemId),
-        eq(codingQuestionLoads.status, "running"),
-        gt(codingQuestionLoads.startedAt, new Date(now.getTime() - RUNNING_LOAD_STALE_MS)),
+        inArray(codingQuestionLoads.status, ["queued", "running"]),
       ),
     )
-    .orderBy(desc(codingQuestionLoads.startedAt))
+    .orderBy(desc(codingQuestionLoads.queuedAt))
     .limit(1);
   return (row as LoadRecord) ?? null;
-}
-
-/**
- * The load actually in flight ANYWHERE, if any — widens `runningLoadForProblem`
- * from "this problem" to "any problem, or an upload (`problemId` null)".
- *
- * Two different problems loading at once still contend for the same shared
- * resource: the order sequence inside one question set. `runningLoadForProblem`
- * lets them both pass because it's keyed on `problemId`; this is the query
- * behind the global refusal that closes that gap. Same staleness window as
- * `runningLoadForProblem`, for the same reason (a crashed process must not
- * block loading forever).
- */
-export async function anyRunningLoad(now: Date = new Date()): Promise<LoadRecord | null> {
-  const [row] = await db
-    .select()
-    .from(codingQuestionLoads)
-    .where(
-      and(
-        eq(codingQuestionLoads.status, "running"),
-        gt(codingQuestionLoads.startedAt, new Date(now.getTime() - RUNNING_LOAD_STALE_MS)),
-      ),
-    )
-    .orderBy(desc(codingQuestionLoads.startedAt))
-    .limit(1);
-  return (row as LoadRecord) ?? null;
-}
-
-/**
- * Decision behind the global 423: is there ANY load running right now, no
- * matter which problem it belongs to (or none, for an upload)? Pure and
- * database-free so it's testable on its own — the caller does the
- * `anyRunningLoad()` query and passes the row (or null) in.
- *
- * Deliberately NOT liftable by `remarks`: regenerating ids makes a SECOND
- * copy safe, it does not make two loads racing the same order sequence safe.
- */
-export function concurrentLoadRefusal(
-  running: Pick<LoadRecord, "id" | "problemId"> | null,
-  _problemId: string | null,
-): { message: string; loadId: string } | null {
-  if (!running) return null;
-  const target = running.problemId ? `problem ${running.problemId}` : "an upload";
-  return {
-    message:
-      `Another coding-question load (${target}, id ${running.id}) is already running. ` +
-      "Wait for it to finish — two loads into the same question set can claim the same order, " +
-      "and the backend rejects the loser without saying why.",
-    loadId: running.id,
-  };
 }
 
 /**
