@@ -92,23 +92,3 @@ test("buildCompletionSummary falls back to a placeholder when there is no set id
   const line = buildCompletionSummary({ questionSetId: null, questionIds: [] });
   assert.match(line, /\[summary\] succeeded: loaded 0 question\(s\) into set \(none\)$/);
 });
-
-test("concurrentLoadRefusal refuses when another load is running, whatever its problem", async () => {
-  process.env.DATABASE_URL ??= "postgres://test:test@localhost:5432/test";
-  const { concurrentLoadRefusal } = await import("./load-records");
-  const r = concurrentLoadRefusal({ id: "L1", problemId: "p-other" }, "p-mine");
-  assert.ok(r, "a load running for another problem must still refuse");
-  assert.match(r!.message, /already running/i);
-});
-
-test("concurrentLoadRefusal refuses when an upload is running", async () => {
-  process.env.DATABASE_URL ??= "postgres://test:test@localhost:5432/test";
-  const { concurrentLoadRefusal } = await import("./load-records");
-  assert.ok(concurrentLoadRefusal({ id: "L1", problemId: null }, "p-mine"));
-});
-
-test("concurrentLoadRefusal allows when nothing is running", async () => {
-  process.env.DATABASE_URL ??= "postgres://test:test@localhost:5432/test";
-  const { concurrentLoadRefusal } = await import("./load-records");
-  assert.equal(concurrentLoadRefusal(null, "p-mine"), null);
-});

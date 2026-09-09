@@ -23,8 +23,8 @@ interface LoadToBetaProps {
  * every remount fired another load into shared beta — and the server's 409
  * gate could not stop it, being keyed on a COMPLETED prior load while the
  * first one was still running. A load starts only from an explicit click, and
- * `runningLoad` (from the status GET) both blocks that click and re-attaches
- * the log panel to the load already in flight.
+ * `liveLoad` (from the status GET) both blocks that click and re-attaches
+ * the log panel to the load already queued or in flight.
  */
 export function LoadToBeta({ problemId }: LoadToBetaProps) {
   const [open, setOpen] = useState(false);
@@ -38,9 +38,9 @@ export function LoadToBeta({ problemId }: LoadToBetaProps) {
   const [submitError, setSubmitError] = useState("");
   const [activeLoadId, setActiveLoadId] = useState<string | null>(null);
   const [done, setDone] = useState(false);
-  // The load already in flight for this problem, if any — survives this
+  // This problem's unfinished load — queued OR running — if any. Survives this
   // component's remount because it comes from the server, not from state.
-  const [runningLoad, setRunningLoad] = useState<LoadRecord | null>(null);
+  const [liveLoad, setLiveLoad] = useState<LoadRecord | null>(null);
   // True when `activeLoadId` is a load this panel did not start — the log is
   // someone else's (or an earlier mount's) run, so it must not be described as
   // "just started".
@@ -59,16 +59,16 @@ export function LoadToBeta({ problemId }: LoadToBetaProps) {
         setMissing(data.missing || []);
         setLastLoad((data.lastLoad as LoadRecord | null) ?? null);
         setLastFailedLoad((data.lastFailedLoad as LoadRecord | null) ?? null);
-        const running = (data.runningLoad as LoadRecord | null) ?? null;
-        setRunningLoad(running);
+        const live = (data.liveLoad as LoadRecord | null) ?? null;
+        setLiveLoad(live);
         // Re-attach the log panel to a load started before this mount (tab
         // switch, page reload, or another tab) instead of offering to start
         // a second one.
         // This effect runs on mount (and only on a problemId change), before
         // anything in this panel could have started a load of its own, so
         // there is no in-progress `activeLoadId` to clobber here.
-        if (running) {
-          setActiveLoadId(running.id);
+        if (live) {
+          setActiveLoadId(live.id);
           setReattached(true);
         }
       } catch {
@@ -84,7 +84,7 @@ export function LoadToBeta({ problemId }: LoadToBetaProps) {
     setDone(true);
     // Whatever was in flight has reached a terminal state, so it no longer
     // blocks the next load.
-    setRunningLoad(null);
+    setLiveLoad(null);
     if (record.status === "completed") {
       setLastLoad(record);
       setLastFailedLoad(null);
@@ -114,7 +114,7 @@ export function LoadToBeta({ problemId }: LoadToBetaProps) {
   // succeeded no longer means a plain retry would 409.
   const priorStatus: PriorLoadStatus = lastLoad ? "completed" : lastFailedLoad ? "failed" : "none";
   const canSubmit =
-    !submitting && canSubmitLoad(priorStatus, loadAnyway, remarks, runningLoad !== null);
+    !submitting && canSubmitLoad(priorStatus, loadAnyway, remarks, liveLoad !== null);
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -131,6 +131,22 @@ export function LoadToBeta({ problemId }: LoadToBetaProps) {
       );
       const data = await res.json();
       if (res.status === 409) {
+        // Three different duplicate refusals share this status, told apart by
+        // the body shape (see the POST handler).
+        const loadId = (data.loadId as string | undefined) ?? null;
+        if (loadId && data.error) {
+          // Already queued or running for this problem — watch that one rather
+          // than starting a rival.
+          setActiveLoadId(loadId);
+          setReattached(true);
+          setSubmitError(String(data.error));
+          return;
+        }
+        if (data.error) {
+          // Beta already holds these question ids, caught before queueing.
+          setSubmitError(String(data.error));
+          return;
+        }
         // The body IS the prior LoadRecord: refresh the banner instead of
         // treating this as a generic error.
         setLastLoad(data as LoadRecord);
@@ -138,17 +154,6 @@ export function LoadToBeta({ problemId }: LoadToBetaProps) {
         setSubmitError(
           'A load already exists for this problem. Check "Load anyway", add remarks, and retry to load a new copy.',
         );
-        return;
-      }
-      if (res.status === 423) {
-        // A load for this problem is already running server-side. Watch that
-        // one rather than starting a rival.
-        const loadId = (data.loadId as string | undefined) ?? null;
-        if (loadId) {
-          setActiveLoadId(loadId);
-          setReattached(true);
-        }
-        setSubmitError(String(data.error || "A load for this problem is already running."));
         return;
       }
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -235,7 +240,7 @@ export function LoadToBeta({ problemId }: LoadToBetaProps) {
             <>
               <p className="text-xs text-muted-foreground">
                 {reattached
-                  ? "A load for this problem is already running — this is its log. Starting another is blocked until it finishes."
+                  ? "A load for this problem is already queued or running — this is its log. Starting another is blocked until it finishes."
                   : loadAnyway
                     ? "Load started — question ids are regenerated, so beta gets a new copy alongside the previous one."
                     : "Load started — the questions keep the ids in the prepared file."}
@@ -286,11 +291,11 @@ export function LoadToBeta({ problemId }: LoadToBetaProps) {
                   {submitting ? "Starting…" : "Load to beta"}
                 </Button>
                 <p className="text-xs text-muted-foreground">
-                  {runningLoad
-                    ? "A load for this problem is already running — wait for it to finish."
+                  {liveLoad
+                    ? "A load for this problem is already queued or running — wait for it to finish."
                     : submitting
                       ? "Starting the load…"
-                      : "Question set, unit and order are picked automatically. Takes anywhere from a couple of minutes to several, depending on whether this appends to an existing question set or a new sheet needs preparing first."}
+                      : "Question set, unit and order are picked automatically. Loads run one at a time, so this may wait behind others before it starts. Takes anywhere from a couple of minutes to several, depending on whether this appends to an existing question set or a new sheet needs preparing first."}
                 </p>
               </div>
 

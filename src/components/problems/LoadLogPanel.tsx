@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 
 const POLL_INTERVAL_MS = 2000;
 // Bounds a run of consecutive fetch failures (404, network error, etc.) so a
@@ -13,27 +14,47 @@ export interface LoadRecord {
   id: string;
   problemId: string | null;
   userId: string;
-  status: "running" | "completed" | "failed" | string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled" | string;
+  /** 1-based place in the waiting line; null unless `status` is "queued". */
+  queuePosition?: number | null;
   questionSetId: string | null;
   questionIds: string[];
   taskOutputUrl: string | null;
   error: string | null;
   remarks: string | null;
   logs: string;
+  queuedAt: string | null;
   startedAt: string | null;
   finishedAt: string | null;
 }
 
 interface LoadLogPanelProps {
   loadId: string;
-  /** Called once, when the load leaves the "running" state. Optional. */
+  /** Called once, when the load stops being queued or running. Optional. */
   onDone?: (record: LoadRecord) => void;
+  /**
+   * A record supplied by the caller. When given, this panel renders it and
+   * does NOT poll — the caller owns the fetching.
+   *
+   * The problems list polls ONE endpoint for every live load at once (twenty
+   * problems must not mean twenty requests every two seconds), so it already
+   * holds the record. Feeding it in here rather than giving the list its own
+   * renderer is what keeps the status wording, the log box and the beta links
+   * identical on both surfaces by construction.
+   */
+  record?: LoadRecord | null;
 }
 
-/** Polls a background load's status/logs until it reaches a terminal state. */
-export function LoadLogPanel({ loadId, onDone }: LoadLogPanelProps) {
-  const [record, setRecord] = useState<LoadRecord | null>(null);
+/**
+ * Renders a background load's status and logs, polling for them itself unless
+ * the caller supplies `record`.
+ */
+export function LoadLogPanel({ loadId, onDone, record: supplied }: LoadLogPanelProps) {
+  const [polled, setPolled] = useState<LoadRecord | null>(null);
+  const controlled = supplied !== undefined;
+  const record = controlled ? supplied : polled;
   const [pollError, setPollError] = useState("");
+  const [cancelling, setCancelling] = useState(false);
   // Kept in a ref so the poll loop (set up once per loadId) always calls the
   // latest callback without re-running the effect on every parent render.
   const onDoneRef = useRef(onDone);
@@ -42,6 +63,9 @@ export function LoadLogPanel({ loadId, onDone }: LoadLogPanelProps) {
   }, [onDone]);
 
   useEffect(() => {
+    // The caller owns the data in controlled mode — polling too would be a
+    // second request per load for the same row.
+    if (controlled) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let errorStreak = 0;
@@ -68,8 +92,11 @@ export function LoadLogPanel({ loadId, onDone }: LoadLogPanelProps) {
           errorStreak = 0;
           const data = (await res.json()) as LoadRecord;
           if (cancelled) return;
-          setRecord(data);
-          if (data.status !== "running") {
+          setPolled(data);
+          // `queued` is NOT terminal — it is the load waiting its turn behind
+          // another. Stopping here would freeze the panel on "Load failed" for
+          // a load that has not even started.
+          if (data.status !== "running" && data.status !== "queued") {
             onDoneRef.current?.(data);
             return; // terminal state: stop polling
           }
@@ -90,7 +117,7 @@ export function LoadLogPanel({ loadId, onDone }: LoadLogPanelProps) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [loadId]);
+  }, [loadId, controlled]);
 
   const status = record?.status ?? "running";
 
@@ -99,12 +126,46 @@ export function LoadLogPanel({ loadId, onDone }: LoadLogPanelProps) {
       <p className="text-xs text-muted-foreground">
         {pollError
           ? pollError
-          : status === "running"
-            ? "Loading… this can take several minutes."
-            : status === "completed"
-              ? "Load complete."
-              : "Load failed."}
+          : status === "queued"
+            ? record?.queuePosition && record.queuePosition > 1
+              ? `Waiting in the queue — ${record.queuePosition - 1} load(s) ahead. Loads run one at a time.`
+              : "Waiting in the queue — starts as soon as the load ahead of it finishes."
+            : status === "running"
+              ? "Loading… this can take several minutes."
+              : status === "completed"
+                ? "Load complete."
+                : status === "cancelled"
+                  ? "Load cancelled."
+                  : "Load failed."}
       </p>
+
+      {status === "queued" && (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={cancelling}
+          onClick={async () => {
+            setCancelling(true);
+            try {
+              const res = await fetch(
+                `/api/loadings/coding-questions/${encodeURIComponent(loadId)}`,
+                { method: "DELETE" },
+              );
+              if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                setPollError(String(data.error || `Could not cancel (HTTP ${res.status}).`));
+              }
+              // On success, deliberately no optimistic state: the next poll
+              // reads `cancelled` from the server and stops on its own, so the
+              // panel can never show a cancellation the database did not take.
+            } finally {
+              setCancelling(false);
+            }
+          }}
+        >
+          {cancelling ? "Cancelling…" : "Cancel"}
+        </Button>
+      )}
 
       {record?.logs && (
         <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/40 p-2 font-mono text-[11px] leading-relaxed">
