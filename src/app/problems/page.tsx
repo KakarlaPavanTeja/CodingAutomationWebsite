@@ -68,6 +68,13 @@ export default function ProblemsPage() {
   const [loadsByProblem, setLoadsByProblem] = useState<Map<string, LoadRecord[]>>(new Map());
   /** Oldest load on record; before this, "no load row" does not mean "never loaded". */
   const [trackingStartedAt, setTrackingStartedAt] = useState<string | null>(null);
+  /**
+   * Why the Load column has nothing to say. Without this a failing request
+   * renders as a confident "Not loaded" on every row — which is exactly what a
+   * stale dev server's 404 looked like, and it sent the wrong signal for an
+   * hour. An empty column must be able to admit it does not know.
+   */
+  const [loadsError, setLoadsError] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   // Bumped after queueing. Without it the poll effect would not re-run — it
   // watches `liveLoads`, which is still empty at that moment — and the Load
@@ -150,7 +157,16 @@ export default function ProblemsPage() {
     const pull = async () => {
       try {
         const res = await fetch("/api/loadings/coding-questions/live");
-        if (cancelled || !res.ok) return;
+        if (cancelled) return;
+        if (!res.ok) {
+          setLoadsError(
+            res.status === 404
+              ? "Load status unavailable (404) — if this is a dev server, restart it to pick up the route."
+              : `Load status unavailable (HTTP ${res.status}).`,
+          );
+          return;
+        }
+        setLoadsError("");
         const data = (await res.json()) as {
           trackingStartedAt: string | null;
           loads: (LoadRecord & { problemId: string })[];
@@ -180,7 +196,7 @@ export default function ProblemsPage() {
           return next;
         });
       } catch {
-        // A blip must not stop the table updating; the next tick retries.
+        if (!cancelled) setLoadsError("Could not reach the load status endpoint.");
       }
     };
 
@@ -247,6 +263,12 @@ export default function ProblemsPage() {
                 Queued loads run one after another, so a batch of four takes several minutes.
               </p>
             </div>
+          )}
+
+          {loadsError && (
+            <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs">
+              {loadsError}
+            </p>
           )}
 
           {queueResult && (
@@ -333,7 +355,11 @@ export default function ProblemsPage() {
                         {new Date(p.created_at).toLocaleDateString()}
                       </td>
                       <td className="px-4 py-3">
-                        {cell.expandable ? (
+                        {loadsError ? (
+                          <span className="text-xs text-muted-foreground" title={loadsError}>
+                            ?
+                          </span>
+                        ) : cell.expandable ? (
                           <button
                             type="button"
                             onClick={() => setExpanded(expanded === p.id ? null : p.id)}

@@ -12,6 +12,7 @@ export interface LoadSummary {
   queuePosition?: number | null;
   questionIds: string[];
   queuedAt: string | Date | null;
+  finishedAt: string | Date | null;
 }
 
 export type LoadCellKind = "queued" | "running" | "loaded" | "failed" | "untracked" | "none";
@@ -33,10 +34,19 @@ export interface LoadCell<T extends LoadSummary = LoadSummary> {
 const time = (v: string | Date | null | undefined): number =>
   v == null ? 0 : (v instanceof Date ? v : new Date(v)).getTime();
 
+/**
+ * Ordered by `finished_at`, NOT `queued_at`.
+ *
+ * `queued_at` was added to an existing table with `NOT NULL DEFAULT now()`, so
+ * every row that predates it carries the same synthetic timestamp — the instant
+ * of the migration. Sorting ~60 historical loads by it is sorting by a
+ * constant, and the winner is whatever order the rows happen to arrive in.
+ * `finished_at` was always written per row and is genuine history.
+ */
 const newest = <T extends LoadSummary>(loads: T[], status: string): T | null =>
   loads
     .filter((l) => l.status === status)
-    .sort((a, b) => time(b.queuedAt) - time(a.queuedAt))[0] ?? null;
+    .sort((a, b) => time(b.finishedAt) - time(a.finishedAt))[0] ?? null;
 
 /**
  * Precedence, highest first:
