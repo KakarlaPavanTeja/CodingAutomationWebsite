@@ -266,6 +266,17 @@ export const RUNNING_LOAD_STALE_MS = 30 * 60 * 1000;
  * the only guard — `advanceLoadQueue` holds a Postgres advisory lock across the
  * whole drain, which is what stops two app instances from both promoting a row
  * when a stale `running` row satisfies the guard for both.
+ *
+ * Verified against the real database on 2026-09-09, because `npm run test:ts`
+ * has no database and cannot race two connections. Three queued rows, then
+ * five simultaneous `claimNextQueuedLoad()` calls per pass:
+ *   pass 1, nothing running        -> 1 winner  (not 5, not 2)
+ *   pass 2, that one still running -> 0 winners
+ *   pass 3, after it completed     -> 1 winner, and it was the NEXT-OLDEST row
+ * `started_at` was populated by the claim in every case. If this statement is
+ * ever edited, re-run that probe — a regression here is silent, and the cost of
+ * it is two loads claiming the same order in a shared question set, which the
+ * backend rejects with a bare FAILURE and no reason.
  */
 export async function claimNextQueuedLoad(): Promise<LoadRecord | null> {
   const staleSeconds = Math.floor(RUNNING_LOAD_STALE_MS / 1000);
