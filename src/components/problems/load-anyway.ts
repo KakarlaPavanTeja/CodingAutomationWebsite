@@ -43,27 +43,28 @@ export function mayForceLoad(priorStatus: PriorLoadStatus): boolean {
 /**
  * May a new load start right now?
  *
- * `loadRunning` wins over everything, forced or not: a load already in flight
- * for this problem would be joined by a second one loading the same question
- * ids into shared beta twice, or racing it for the same `childOrder` under the
- * real testing parent. Remarks do not make that safe, so they do not lift it —
- * the server refuses the same case with 423, this is only the fast local no.
+ * `loadLive` wins over everything, forced or not: a load already queued or in
+ * flight for this problem would be joined by a second one loading the same
+ * question ids into shared beta twice, or racing it for the same `childOrder`
+ * under the real testing parent. Remarks do not make that safe, so they do not
+ * lift it — the server refuses the same case with 409, this is only the fast
+ * local no.
  *
  * Otherwise a bare submit is blocked once a completed prior load is known (it
  * would just bounce off the server's 409 duplicate gate); forcing is always
  * available but requires non-blank remarks, since supplying them is what
  * triggers server-side id regeneration.
  *
- * `loadRunning` is a required argument on purpose: defaulting it to false is
+ * `loadLive` is a required argument on purpose: defaulting it to false is
  * exactly the bug this function exists to stop a caller from reintroducing.
  */
 export function canSubmitLoad(
   priorStatus: PriorLoadStatus,
   forceLoad: boolean,
   remarks: string,
-  loadRunning: boolean,
+  loadLive: boolean,
 ): boolean {
-  if (loadRunning) return false;
+  if (loadLive) return false;
   if (forceLoad) return remarks.trim() !== "";
   return priorStatus !== "completed";
 }
@@ -85,8 +86,8 @@ export function mayForceUploadRetry(lastAttemptStatus: PriorLoadStatus): boolean
 /**
  * May the upload page submit right now? Gating stops at "is there a file,
  * are we mid-submit, and — if forcing — are there real remarks": there is no
- * `loadRunning` concept (the 423 concurrent-load gate is `problemId`-only, so
- * an upload has nothing server-side to join), and no reason to block a bare
+ * `loadLive` concept (the live-load gate is `problemId`-only, so an upload has
+ * nothing server-side to join), and no reason to block a bare
  * resubmit after a "completed" prior attempt (that block in `canSubmitLoad`
  * exists only to dodge the `problemId`-keyed 409 gate, which upload requests
  * never reach). A first upload therefore never needs the checkbox ticked.
