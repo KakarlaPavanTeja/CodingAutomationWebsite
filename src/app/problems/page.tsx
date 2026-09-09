@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   FileText,
@@ -11,9 +11,11 @@ import {
   Loader2,
   AlertTriangle,
   CircleDashed,
+  ChevronRight,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { LoadLogPanel, type LoadRecord } from "@/components/problems/LoadLogPanel";
 import { useAuth } from "@/lib/auth-context";
 import { useProblems } from "@/lib/problems-context";
 import { cn } from "@/lib/utils";
@@ -60,6 +62,14 @@ export default function ProblemsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [queueing, setQueueing] = useState(false);
   const [queueResult, setQueueResult] = useState("");
+  // Every unfinished load the user may see, keyed by problem. One request for
+  // the whole table — see /api/loadings/coding-questions/live.
+  const [liveLoads, setLiveLoads] = useState<Map<string, LoadRecord>>(new Map());
+  const [expanded, setExpanded] = useState<string | null>(null);
+  // Bumped after queueing. Without it the poll effect would not re-run — it
+  // watches `liveLoads`, which is still empty at that moment — and the Load
+  // column would stay blank until something unrelated changed.
+  const [loadTick, setLoadTick] = useState(0);
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
 
@@ -109,6 +119,7 @@ export default function ProblemsPage() {
     );
     setSelected(new Set());
     setQueueing(false);
+    setLoadTick((n) => n + 1);
     refresh();
   };
 
@@ -122,6 +133,45 @@ export default function ProblemsPage() {
     }, 15000);
     return () => clearInterval(id);
   }, [problems, refresh]);
+
+  // Poll only while something is actually in flight: the effect re-runs when
+  // `liveLoads` changes, so the last completing load schedules one final pass
+  // that finds nothing and stops. An empty table costs no requests at all.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const pull = async () => {
+      try {
+        const res = await fetch("/api/loadings/coding-questions/live");
+        if (cancelled || !res.ok) return;
+        const data = (await res.json()) as { loads: (LoadRecord & { problemId: string })[] };
+        if (cancelled) return;
+        const next = new Map<string, LoadRecord>();
+        for (const l of data.loads) next.set(l.problemId, l);
+        setLiveLoads((prev) => {
+          // Replacing the Map on every tick would re-render the whole table
+          // twice a second forever. Only swap it when something actually moved.
+          if (prev.size === next.size &&
+              [...next].every(([k, v]) => prev.get(k)?.status === v.status &&
+                                          prev.get(k)?.logs === v.logs &&
+                                          prev.get(k)?.queuePosition === v.queuePosition)) {
+            return prev;
+          }
+          return next;
+        });
+      } catch {
+        // A blip must not stop the table updating; the next tick retries.
+      }
+    };
+
+    void pull();
+    if (liveLoads.size > 0) timer = setTimeout(pull, 2000);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [liveLoads, loadTick]);
 
   if (loading && problems.length === 0) {
     return (
@@ -201,17 +251,17 @@ export default function ProblemsPage() {
                   <th className="text-left px-4 py-3 font-medium">Score</th>
                   <th className="text-left px-4 py-3 font-medium">Status</th>
                   <th className="text-left px-4 py-3 font-medium">Created</th>
+                  <th className="text-left px-4 py-3 font-medium">Load</th>
                 </tr>
               </thead>
               <tbody>
                 {(showAll ? problems : problems.slice(0, 5)).map((p) => {
                   const status = STATUS_CONFIG[p.status] || STATUS_CONFIG.draft;
                   const StatusIcon = status.icon;
+                  const live = liveLoads.get(p.id);
                   return (
-                    <tr
-                      key={p.id}
-                      className="border-b last:border-0 hover:bg-muted/30 transition-colors"
-                    >
+                    <Fragment key={p.id}>
+                    <tr className="border-b last:border-0 hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-3">
                         {isLoadable(p.status) && (
                           <Checkbox
@@ -259,7 +309,40 @@ export default function ProblemsPage() {
                       <td className="px-4 py-3 text-muted-foreground">
                         {new Date(p.created_at).toLocaleDateString()}
                       </td>
+                      <td className="px-4 py-3">
+                        {live ? (
+                          <button
+                            type="button"
+                            onClick={() => setExpanded(expanded === p.id ? null : p.id)}
+                            aria-expanded={expanded === p.id}
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                          >
+                            <ChevronRight
+                              className={`h-3 w-3 transition-transform ${expanded === p.id ? "rotate-90" : ""}`}
+                            />
+                            {live.status === "queued"
+                              ? live.queuePosition && live.queuePosition > 1
+                                ? `Queued · ${live.queuePosition - 1} ahead`
+                                : "Queued · next"
+                              : "Loading…"}
+                          </button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </td>
                     </tr>
+                    {live && expanded === p.id && (
+                      <tr className="border-b last:border-0 bg-muted/20">
+                        <td colSpan={isAdmin ? 10 : 9} className="px-4 pb-3">
+                          {/* Controlled: this page already polls every live load
+                              in one request, so the panel must not fetch again.
+                              Sharing the panel keeps the wording and the beta
+                              links identical to the problem page. */}
+                          <LoadLogPanel loadId={live.id} record={live} />
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   );
                 })}
               </tbody>

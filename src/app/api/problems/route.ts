@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { desc, eq, ne, and, or, inArray } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { getSession } from "@/lib/auth/server";
 import { db } from "@/lib/db";
-import { problems, profiles, problemAccess } from "@/lib/db/schema";
-import { getProfileRoleById } from "@/lib/db/queries";
+import { problems, profiles } from "@/lib/db/schema";
+import { getProfileRoleById, visibleProblemsFilter } from "@/lib/db/queries";
 
 export async function GET() {
   const session = await getSession();
@@ -16,21 +16,10 @@ export async function GET() {
   const profile = await getProfileRoleById(user.id);
   const isAdmin = profile?.role === "admin";
 
-  // Non-admins see problems they own OR problems explicitly shared with them.
-  const sharedProblemIds = db
-    .select({ id: problemAccess.problemId })
-    .from(problemAccess)
-    .where(eq(problemAccess.memberId, user.id));
-
-  const baseFilter = isAdmin
-    ? ne(problems.status, "deleted")
-    : and(
-        ne(problems.status, "deleted"),
-        or(
-          eq(problems.createdBy, user.id),
-          inArray(problems.id, sharedProblemIds),
-        ),
-      );
+  // Own problems plus ones shared through problem_access; admins see all. The
+  // rule lives in `visibleProblemsFilter` because the live-loads feed needs the
+  // identical one — see there.
+  const baseFilter = visibleProblemsFilter({ userId: user.id, isAdmin });
 
   const rows = await db
     .select({

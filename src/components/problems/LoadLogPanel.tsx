@@ -31,11 +31,27 @@ interface LoadLogPanelProps {
   loadId: string;
   /** Called once, when the load stops being queued or running. Optional. */
   onDone?: (record: LoadRecord) => void;
+  /**
+   * A record supplied by the caller. When given, this panel renders it and
+   * does NOT poll — the caller owns the fetching.
+   *
+   * The problems list polls ONE endpoint for every live load at once (twenty
+   * problems must not mean twenty requests every two seconds), so it already
+   * holds the record. Feeding it in here rather than giving the list its own
+   * renderer is what keeps the status wording, the log box and the beta links
+   * identical on both surfaces by construction.
+   */
+  record?: LoadRecord | null;
 }
 
-/** Polls a background load's status/logs until it reaches a terminal state. */
-export function LoadLogPanel({ loadId, onDone }: LoadLogPanelProps) {
-  const [record, setRecord] = useState<LoadRecord | null>(null);
+/**
+ * Renders a background load's status and logs, polling for them itself unless
+ * the caller supplies `record`.
+ */
+export function LoadLogPanel({ loadId, onDone, record: supplied }: LoadLogPanelProps) {
+  const [polled, setPolled] = useState<LoadRecord | null>(null);
+  const controlled = supplied !== undefined;
+  const record = controlled ? supplied : polled;
   const [pollError, setPollError] = useState("");
   const [cancelling, setCancelling] = useState(false);
   // Kept in a ref so the poll loop (set up once per loadId) always calls the
@@ -46,6 +62,9 @@ export function LoadLogPanel({ loadId, onDone }: LoadLogPanelProps) {
   }, [onDone]);
 
   useEffect(() => {
+    // The caller owns the data in controlled mode — polling too would be a
+    // second request per load for the same row.
+    if (controlled) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let errorStreak = 0;
@@ -72,7 +91,7 @@ export function LoadLogPanel({ loadId, onDone }: LoadLogPanelProps) {
           errorStreak = 0;
           const data = (await res.json()) as LoadRecord;
           if (cancelled) return;
-          setRecord(data);
+          setPolled(data);
           // `queued` is NOT terminal — it is the load waiting its turn behind
           // another. Stopping here would freeze the panel on "Load failed" for
           // a load that has not even started.
@@ -97,7 +116,7 @@ export function LoadLogPanel({ loadId, onDone }: LoadLogPanelProps) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [loadId]);
+  }, [loadId, controlled]);
 
   const status = record?.status ?? "running";
 
