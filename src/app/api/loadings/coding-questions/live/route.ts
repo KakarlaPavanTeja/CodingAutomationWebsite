@@ -46,10 +46,16 @@ export async function GET() {
   ).map((r) => r.id);
   const positionOf = new Map(queuedIds.map((id, i) => [id, i + 1]));
 
+  // Earliest FINISHED load, not earliest queued. `queued_at` was added to an
+  // existing table with NOT NULL DEFAULT now(), so every historical row carries
+  // the migration's own timestamp — using it would place the start of tracking
+  // on the day of the migration and call every older problem "loaded earlier".
+  // `finished_at` was always written per row and is genuine history.
   const [oldest] = await db
-    .select({ queuedAt: codingQuestionLoads.queuedAt })
+    .select({ finishedAt: codingQuestionLoads.finishedAt })
     .from(codingQuestionLoads)
-    .orderBy(asc(codingQuestionLoads.queuedAt))
+    .where(isNotNull(codingQuestionLoads.finishedAt))
+    .orderBy(asc(codingQuestionLoads.finishedAt))
     .limit(1);
 
   // ponytail: every visible problem's loads, reduced per problem in the client.
@@ -77,7 +83,7 @@ export async function GET() {
   });
 
   return NextResponse.json({
-    trackingStartedAt: oldest?.queuedAt ?? null,
+    trackingStartedAt: oldest?.finishedAt ?? null,
     loads: rows.map((r) => ({
       ...r.load,
       queuePosition: positionOf.get(r.load.id) ?? null,

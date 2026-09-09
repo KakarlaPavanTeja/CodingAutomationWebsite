@@ -4,7 +4,8 @@ import { deriveLoadCell, type LoadSummary } from "./load-cell";
 
 const TRACKING_START = "2026-08-01T00:00:00Z";
 const load = (over: Partial<LoadSummary> = {}): LoadSummary => ({
-  id: "L", status: "completed", questionIds: ["q1"], queuedAt: "2026-09-01T00:00:00Z", ...over,
+  id: "L", status: "completed", questionIds: ["q1"],
+  queuedAt: "2026-09-01T00:00:00Z", finishedAt: "2026-09-01T00:00:00Z", ...over,
 });
 const cell = (loads: LoadSummary[], createdAt = "2026-09-01T00:00:00Z") =>
   deriveLoadCell({ loads, problemCreatedAt: createdAt, trackingStartedAt: TRACKING_START });
@@ -27,9 +28,9 @@ test("Loaded uses the NEWEST completed load, not the newest attempt", () => {
   // "Load anyway" regenerates ids, so an older completed load links to a
   // superseded copy in beta. Picking the wrong one hands out dead links.
   const c = cell([
-    load({ id: "old", questionIds: ["stale"], queuedAt: "2026-09-01T00:00:00Z" }),
-    load({ id: "new", questionIds: ["live"], queuedAt: "2026-09-05T00:00:00Z" }),
-    load({ id: "later-fail", status: "failed", queuedAt: "2026-09-06T00:00:00Z" }),
+    load({ id: "old", questionIds: ["stale"], finishedAt: "2026-09-01T00:00:00Z" }),
+    load({ id: "new", questionIds: ["live"], finishedAt: "2026-09-05T00:00:00Z" }),
+    load({ id: "later-fail", status: "failed", finishedAt: "2026-09-06T00:00:00Z" }),
   ]);
   assert.equal(c.kind, "loaded");
   assert.deepEqual(c.load?.questionIds, ["live"]);
@@ -65,4 +66,14 @@ test("a cancelled-only history is not a statement about beta", () => {
   // untracked/never-loaded decision still applies.
   assert.equal(cell([load({ status: "cancelled" })], "2026-07-01T00:00:00Z").kind, "untracked");
   assert.equal(cell([load({ status: "cancelled" })], "2026-09-01T00:00:00Z").kind, "none");
+});
+
+test("ordering ignores queued_at, which the migration flattened to one value", () => {
+  // `queued_at` was backfilled with NOT NULL DEFAULT now(), so every row older
+  // than that migration shares one timestamp. Ordering by it picks at random.
+  const c = cell([
+    load({ id: "stale", questionIds: ["dead"], queuedAt: "2026-09-09T07:35:36Z", finishedAt: "2026-09-01T00:00:00Z" }),
+    load({ id: "fresh", questionIds: ["live"], queuedAt: "2026-09-09T07:35:36Z", finishedAt: "2026-09-08T00:00:00Z" }),
+  ]);
+  assert.deepEqual(c.load?.questionIds, ["live"]);
 });
