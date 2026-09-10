@@ -390,8 +390,7 @@ change, an editorial rewrite) needs the refresh path: it keeps the problem id, s
 score/difficulty, re-uploads, and does not duplicate the `llm_usage` rows. A second
 plain `--execute` mints a NEW problem instead.
 
-Verify with `npx tsx scripts/db.mts -p <id prefix>` — `_verify-attach.mts` is
-hardcoded for other problems and will not answer for yours.
+Verify with `npx tsx scripts/db.mts -p <id prefix>`.
 
 This is a **shared production database**. Confirm with the user before writing,
 every time. Count Claude-built questions with:
