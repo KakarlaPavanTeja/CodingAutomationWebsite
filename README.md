@@ -21,14 +21,14 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 | Framework | **Next.js 16** (App Router, React 19, Turbopack dev) |
 | Language (web) | TypeScript |
 | Styling | Tailwind CSS + shadcn/ui (Base UI) |
-| Database | **PostgreSQL** (Replit Postgres) |
+| Database | **PostgreSQL** (Aiven) |
 | ORM | **Drizzle ORM** + `drizzle-kit` |
 | Auth | Custom — `bcryptjs` + DB-backed session-cookie |
 | File storage | **Replit App Storage** (GCS-backed via sidecar) |
 | Pipeline runtime | Python 3.11+ |
 | LLM | OpenRouter via proxy gateway (`open-router-gateway.replit.app`, `OPENROUTER_API_KEY`) |
 | Email | Resend (`RESEND_API_KEY`) |
-| Deployment | Replit Autoscale (`.replit` + Publishing UI) |
+| Deployment | Render |
 
 > ⚠ **Next.js 16 has breaking changes.** Routing uses `src/proxy.ts` (NOT `middleware.ts`). API route handlers receive `params` as a **Promise** (`{ params: Promise<{ id: string }> }`). `cookies()` and `headers()` are async. See `AGENTS.md`.
 
@@ -97,21 +97,30 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 │   └── requirements.txt        # Python deps (openai, boto3, requests, etc.)
 │
 ├── attached_assets/            # Static assets uploaded by user
-├── replit.md                   # Replit Agent's working notes (architecture log)
 ├── AGENTS.md                   # Next.js 16 rules for AI coding agents
 ├── CLAUDE.md                   # Anthropic-specific agent notes
 ├── drizzle.config.ts           # Drizzle Kit config (points to src/lib/db/schema.ts)
 ├── next.config.ts              # Next.js config
 ├── tsconfig.json
 ├── package.json
-└── .replit                     # Replit workflow + deployment config
+└── .replit                     # legacy Replit config, no longer the deploy target
 ```
 
 ---
 
 ## Database Schema (`src/lib/db/schema.ts`)
 
-All tables live in Replit Postgres. Use `npm run db:push` to sync schema changes. **Never write raw SQL migrations.**
+All tables live in the Aiven Postgres instance. Use `npm run db:push` to sync schema
+changes. **Never write raw SQL migrations.**
+
+> ⚠ `db:push` reads `.env.local` with `override: true`, and `.env.local` points at
+> **production**. Prefixing the command with `DATABASE_URL=…` is silently ignored; only
+> `DRIZZLE_DATABASE_URL=…` redirects it. There is no separate dev database.
+>
+> `drizzle-kit push` also does **not** apply `check()` constraint changes — it reports
+> success and leaves the old constraint live. Apply those by hand and verify with
+> `select pg_get_constraintdef(oid) from pg_constraint where conname = '<name>'`.
+> See `.agents/memory/drizzle-check-constraints.md`.
 
 | Table | Purpose |
 |---|---|
@@ -243,7 +252,7 @@ Custom session-cookie auth (no NextAuth).
 
 ## Environment Variables
 
-Set these in **Replit Secrets** (production) or `.env.local` (Cursor local dev — never commit).
+Set these in the host's environment settings (production) or `.env.local` (local dev — never commit).
 
 | Variable | Required | Purpose |
 |---|---|---|
@@ -286,19 +295,13 @@ npm run dev
 
 Then open `http://localhost:5001`. The Python pipeline is invoked from `src/app/api/pipeline/run/route.ts` — `PIPELINE_ROOT` defaults to `path.join(process.cwd(), "pipeline")`, so it works the same locally.
 
-### GitHub → Replit Auto-Sync
+### After pulling a change
 
-This Replit project is connected to `github.com/KakarlaPavanTeja/CodingAutomationWebsite`. To enable auto-pull on push:
-
-1. Open the **Git** panel in the Replit workspace
-2. Enable **"Sync with GitHub"** / **"Auto-pull"**
-3. Push from Cursor → Replit pulls within seconds → Next.js hot-reloads
-
-**Manual ops still required after a sync:**
 - New npm package → run `npm install`
 - New Python package → add to `pipeline/requirements.txt` and pip install
-- New env secret → add to Replit Secrets panel
-- DB schema change in `src/lib/db/schema.ts` → run `npm run db:push`
+- New env var → add it to the host's environment settings
+- DB schema change in `src/lib/db/schema.ts` → run `npm run db:push` (reads
+  production — see the warning above)
 
 ---
 
@@ -317,15 +320,19 @@ This Replit project is connected to `github.com/KakarlaPavanTeja/CodingAutomatio
 
 ## Deployment
 
-Deployed via **Replit Publishing** (Autoscale). Configuration in `.replit`:
+Deployed on **Render**.
 
 - Build: `npm run build`
 - Start: `npm run start`
 - Port: 5001
 
-To deploy: open Publishing panel → Deploy. Production URL is on `*.replit.app` (or custom domain).
+**Production environment variables are set on the host and do not come from
+`.env.local`.** Adding a variable locally does not add it in production.
 
-**Production secrets must be set separately in the Publishing UI** — they don't auto-copy from dev secrets.
+The `.replit` file and the `REPLIT_*` branches in `next.config.ts`,
+`src/lib/app-url.ts` and `src/lib/object-storage.ts` are left over from the earlier
+Replit hosting. They are still referenced by running code and have not been audited,
+so they are deliberately untouched here — this change corrects the documentation only.
 
 ---
 

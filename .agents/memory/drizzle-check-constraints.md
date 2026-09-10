@@ -14,4 +14,8 @@ expressions, so altering one is a no-op through the normal push flow.
 **How to apply:** after editing any `check()` in the schema, apply it manually:
 `ALTER TABLE <t> DROP CONSTRAINT <name>; ALTER TABLE <t> ADD CONSTRAINT <name> CHECK (...);`
 then verify with `SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='<name>'`.
-The same will be needed on the production DB at deploy time (dev/prod DBs are separate).
+There is no separate dev database: `.env.local` points at production and
+`drizzle.config.ts` loads it with `override: true`, so `db:push` alters production
+directly. On 2026-09-09 a widened `coding_question_loads.status` constraint was
+skipped exactly this way — the new column default `'queued'` then violated the old
+CHECK and every load insert failed in production until the ALTER was run by hand.
