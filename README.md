@@ -28,7 +28,7 @@ The frontend orchestrates spawned Python processes, streams logs in real time, a
 | Pipeline runtime | Python 3.11+ |
 | LLM | OpenRouter via proxy gateway (`open-router-gateway.replit.app`, `OPENROUTER_API_KEY`) |
 | Email | Resend (`RESEND_API_KEY`) |
-| Deployment | Render |
+| Deployment | None — runs locally on port 5001; `main` on GitHub is the target |
 
 > ⚠ **Next.js 16 has breaking changes.** Routing uses `src/proxy.ts` (NOT `middleware.ts`). API route handlers receive `params` as a **Promise** (`{ params: Promise<{ id: string }> }`). `cookies()` and `headers()` are async. See `AGENTS.md`.
 
@@ -252,7 +252,7 @@ Custom session-cookie auth (no NextAuth).
 
 ## Environment Variables
 
-Set these in the host's environment settings (production) or `.env.local` (local dev — never commit).
+Set these in `.env.local` (never commit it). There is no separate production environment.
 
 | Variable | Required | Purpose |
 |---|---|---|
@@ -299,7 +299,7 @@ Then open `http://localhost:5001`. The Python pipeline is invoked from `src/app/
 
 - New npm package → run `npm install`
 - New Python package → add to `pipeline/requirements.txt` and pip install
-- New env var → add it to the host's environment settings
+- New env var → add it to `.env.local`
 - DB schema change in `src/lib/db/schema.ts` → run `npm run db:push` (reads
   production — see the warning above)
 
@@ -320,14 +320,14 @@ Then open `http://localhost:5001`. The Python pipeline is invoked from `src/app/
 
 ## Deployment
 
-Deployed on **Render**.
+**The app is not deployed anywhere.** It runs locally — `npm run dev` on port 5001
+(or `npm run build && npm run start`) — and merging to `main` on GitHub is the
+finish line. There is no hosting dashboard to check and nothing to trigger after a
+merge.
 
-- Build: `npm run build`
-- Start: `npm run start`
-- Port: 5001
-
-**Production environment variables are set on the host and do not come from
-`.env.local`.** Adding a variable locally does not add it in production.
+The one thing that *is* shared and live is the database: `.env.local` points at the
+Aiven Postgres instance, so `db:push` and any script reading `DATABASE_URL` act on
+real data. See the warning under "Database Schema".
 
 The `.replit` file and the `REPLIT_*` branches in `next.config.ts`,
 `src/lib/app-url.ts` and `src/lib/object-storage.ts` are left over from the earlier
