@@ -110,8 +110,12 @@ function advisoryLockKey(lane: string): number {
 }
 
 /**
- * Hold the lane's lock IN POSTGRES for the whole drain, so two app instances
- * cannot both claim. Copied deliberately from `withAdvisoryLock` in
+ * Hold the lane's lock IN POSTGRES, so two app instances cannot both write to
+ * the lane. Exported because the inline UPLOAD path in the loadings route must
+ * take this same lock: an upload cannot queue (its file exists only in its own
+ * request), but it writes to the same shared question set as every queued
+ * load, and without this it would run alongside one. `withSetLock` only covers
+ * one process. Copied deliberately from `withAdvisoryLock` in
  * `src/lib/pipeline/advance-queue.ts`, which exists because in-process chaining
  * alone demonstrably failed there — one problem got two live processes 300ms
  * apart. Do not assume this app is single-instance.
@@ -125,14 +129,27 @@ function advisoryLockKey(lane: string): number {
  * legitimately holds this for minutes, and a drain waiting behind one should
  * wait rather than give up.
  */
-async function withAdvisoryLock<T>(lane: string, fn: () => Promise<T>): Promise<T> {
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`SET LOCAL lock_timeout = '10min'`);
-    await tx.execute(
-      sql`SELECT pg_advisory_xact_lock(${ADVISORY_LOCK_NAMESPACE}::int4, ${advisoryLockKey(lane)}::int4)`,
-    );
-    return fn();
-  });
+export async function withLaneLock<T>(lane: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '10min'`);
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(${ADVISORY_LOCK_NAMESPACE}::int4, ${advisoryLockKey(lane)}::int4)`,
+      );
+      return fn();
+    });
+  } catch (err) {
+    // Postgres says "canceling statement due to lock timeout", which tells an
+    // operator nothing. Say what actually happened: another load held the
+    // lane for longer than we were prepared to wait.
+    if (/lock timeout/i.test((err as Error).message)) {
+      throw new Error(
+        "Waited 10 minutes for the beta lane to free up and gave up — another load " +
+          "(or a batch of them) is still running. Retry once it finishes.",
+      );
+    }
+    throw err;
+  }
 }
 
 const defaultDeps: AdvanceLoadDeps = {
@@ -149,7 +166,7 @@ const defaultDeps: AdvanceLoadDeps = {
     }),
   finish: finishLoadRecord,
   log: (id, line) => appendLoadLog(id, line),
-  withLock: withAdvisoryLock,
+  withLock: withLaneLock,
 };
 
 /**
