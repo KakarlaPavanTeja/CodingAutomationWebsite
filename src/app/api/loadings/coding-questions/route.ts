@@ -23,7 +23,12 @@ import {
   queuePositionForLoad,
   type LoadSource,
 } from "@/lib/loadings/load-records";
-import { advanceLoadQueue, DEFAULT_SOURCE_PATH } from "@/lib/loadings/advance-load-queue";
+import {
+  advanceLoadQueue,
+  BETA_LANE,
+  DEFAULT_SOURCE_PATH,
+  withLaneLock,
+} from "@/lib/loadings/advance-load-queue";
 import {
   alreadyLoadedMessage,
   findAlreadyLoadedQuestions,
@@ -283,7 +288,21 @@ export async function POST(request: NextRequest) {
   if (isUpload) {
     // Uploads do not queue: the file exists only in this request, so nothing
     // could re-read it later. `enqueueLoadRecord` inserted the row `running`
-    // for exactly this reason, and it runs inline here as it always did.
+    // for exactly this reason, and it runs inline here.
+    //
+    // But it does NOT run unguarded. An upload writes into the same shared
+    // question set as every queued load and claims the same order sequence, so
+    // it takes the lane's advisory lock — the one the queue drain holds — and
+    // waits for a running load to finish before starting. Without this, an
+    // upload on one app instance can collide with a queued load on another;
+    // the old 423 gate covered that case, the problemId-keyed 409 above does
+    // not (an upload has no problemId). `withSetLock` inside the load only
+    // serialises within one process.
+    //
+    // While it waits, its row already reads `running`, which stops the drain
+    // from claiming anything — correct, since the upload owns the lane next.
+    // A drain pass can hold the lock for a long batch; past ten minutes the
+    // wait gives up with a readable error rather than colliding.
     //
     // Deliberately not awaited: the load runs for minutes and the client polls
     // GET .../[id] for status. Every promise started here MUST end in a
@@ -291,9 +310,8 @@ export async function POST(request: NextRequest) {
     // whole Node process, not just this request (Node 15+ default).
     void (async () => {
       try {
-        const result = await loadCodingQuestions(
-          remarks ? regenerateQuestionIds(questions) : questions,
-          {
+        const result = await withLaneLock(BETA_LANE, () =>
+          loadCodingQuestions(remarks ? regenerateQuestionIds(questions) : questions, {
             // Ids were just regenerated when remarks are present, so they
             // cannot collide with anything already in beta.
             skipDuplicateCheck: Boolean(remarks),
@@ -302,7 +320,7 @@ export async function POST(request: NextRequest) {
                 console.error("[Loadings] appendLoadLog failed:", (err as Error).message),
               );
             },
-          },
+          }),
         );
         // A load can split across several question sets, and every one of them
         // belongs in the audit row: recording only the last batch under-reported
