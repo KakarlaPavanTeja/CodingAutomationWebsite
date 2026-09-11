@@ -37,8 +37,10 @@ import {
 // A loaded coding_questions.json can bundle testcases, multi-language
 // solutions and an editorial for many questions (or arrive zipped, for the
 // upload path) — the whole body is held in memory, so cap it generously but
-// boundedly rather than leaving it unbounded.
-const MAX_BODY_SIZE = 20 * 1024 * 1024; // 20MB
+// boundedly rather than leaving it unbounded. 200MB: a real multi-question
+// bundle with full testcases runs well past the 20MB this used to be, and the
+// file is buffered once per request, not per question.
+const MAX_BODY_SIZE = 200 * 1024 * 1024; // 200MB
 
 // No load configuration is read from the request. The question set, the unit
 // title, its child order and its parent resource are all derived server-side
