@@ -16,6 +16,7 @@ import {
   accountForUsageRow,
   hasApproximateAccounts,
 } from "@/lib/openrouter-usage-account";
+import type { OpenRouterKeyUsage } from "@/lib/openrouter-key-usage";
 
 // Map raw pipeline step ids (e.g. "generate_editorial") to friendly labels
 // (e.g. "Generate Editorial") so the usage report reads cleanly.
@@ -142,7 +143,12 @@ function formatYAxis(val: number, mode: "cost" | "tokens" | "calls"): string {
   return String(Math.round(val));
 }
 
-type ActiveKeyInfo = { choice: "new" | "old"; hasNew: boolean; hasOld: boolean };
+type ActiveKeyInfo = {
+  choice: "new" | "old";
+  hasNew: boolean;
+  hasOld: boolean;
+  usage?: { new: OpenRouterKeyUsage | null; old: OpenRouterKeyUsage | null };
+};
 
 const ACCOUNT_LABEL: Record<"new" | "old", string> = { new: "New", old: "Old" };
 
@@ -242,6 +248,74 @@ function ActiveKeyPanel({
           Switch to {ACCOUNT_LABEL[other]}
         </button>
       )}
+    </div>
+  );
+}
+
+const usd = (v: number | null) => (v === null ? "—" : `$${v.toFixed(2)}`);
+
+/** Live per-key numbers straight from OpenRouter (`/api/v1/key` + `/api/v1/credits`),
+ * so an admin can see balance and spend without leaving the app or running curl. */
+function KeyUsageCards({ info }: { info: ActiveKeyInfo | null }) {
+  if (!info?.usage) return null;
+  const keys = (["new", "old"] as const).filter((k) =>
+    k === "new" ? info.hasNew : info.hasOld
+  );
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {keys.map((k) => {
+        const u = info.usage![k];
+        const stats: Array<[string, string]> = u
+          ? [
+              ["Today", usd(u.usageDaily)],
+              ["This week", usd(u.usageWeekly)],
+              ["This month", usd(u.usageMonthly)],
+              ["Key total", usd(u.usage)],
+              ["Key limit", u.limit === null ? "None" : usd(u.limit)],
+              ["Limit remaining", u.limit === null ? "—" : usd(u.limitRemaining)],
+              ["Credits bought", usd(u.totalCredits)],
+              ["Credits used", usd(u.totalUsage)],
+              [
+                "Balance",
+                u.totalCredits === null || u.totalUsage === null
+                  ? "—"
+                  : usd(u.totalCredits - u.totalUsage),
+              ],
+            ]
+          : [];
+        return (
+          <div key={k} className="rounded-lg border bg-card p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="inline-flex items-center gap-1.5 text-sm font-semibold">
+                <Key className="h-3.5 w-3.5 text-muted-foreground" />
+                {ACCOUNT_LABEL[k]} key
+                {info.choice === k && (
+                  <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                    active
+                  </span>
+                )}
+              </span>
+              {u?.label && (
+                <span className="font-mono text-[11px] text-muted-foreground">{u.label}</span>
+              )}
+            </div>
+            {u ? (
+              <dl className="grid grid-cols-3 gap-x-3 gap-y-2 text-xs">
+                {stats.map(([label, value]) => (
+                  <div key={label}>
+                    <dt className="text-muted-foreground">{label}</dt>
+                    <dd className="font-medium tabular-nums">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                OpenRouter did not respond for this key.
+              </p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -599,7 +673,7 @@ export default function AdminCostsPage() {
           </span>
         )}
         <button
-          onClick={() => fetchUsage()}
+          onClick={() => { fetchUsage(); fetchActiveKey(); }}
           disabled={refreshing}
           className={`${CONTROL} inline-flex items-center gap-1.5 font-medium hover:bg-muted/50 disabled:opacity-60`}
         >
@@ -614,6 +688,7 @@ export default function AdminCostsPage() {
     return (
       <div className="space-y-4">
         {pageHeader}
+        <KeyUsageCards info={activeKey} />
         <div className="rounded-lg border bg-card p-8 text-center">
           <p className="text-muted-foreground">
             No LLM usage recorded yet. Cost data will appear here after pipeline
@@ -693,6 +768,7 @@ export default function AdminCostsPage() {
   return (
     <div className="space-y-5">
       {pageHeader}
+      <KeyUsageCards info={activeKey} />
 
       {/*
         One bar for everything that scopes the whole dashboard. These controls
