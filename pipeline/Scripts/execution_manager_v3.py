@@ -358,12 +358,12 @@ def build_sample_s3_compile_payload():
     inline_output = "6\n"
     s3_input_url = (
         "http://new-assets.ccbp.in.s3.ap-south-1.amazonaws.com/"
-        "testing-coding-question-test-cases/"
+        "testing-coding-question-test-cases/coding-question-testcases/"
         "unknown_question_testcases_12_input.txt"
     )
     s3_output_url = (
         "http://new-assets.ccbp.in.s3.ap-south-1.amazonaws.com/"
-        "testing-coding-question-test-cases/"
+        "testing-coding-question-test-cases/coding-question-testcases/"
         "unknown_question_testcases_12_output.txt"
     )
     large_placeholder = "# large IO uploaded to S3; compiler fetches via url"

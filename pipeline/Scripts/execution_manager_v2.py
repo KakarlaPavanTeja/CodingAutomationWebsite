@@ -19,7 +19,7 @@ _multi_target_languages = []
 API_BASE_URL = "https://nxt-compiler-dev-api.ccbp.in"
 
 S3_BUCKET = os.environ.get("S3_BUCKET", "new-assets.ccbp.in")
-S3_PREFIX = "testing-coding-question-test-cases/"
+S3_PREFIX = "testing-coding-question-test-cases/coding-question-testcases/"
 AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
 AWS_PROFILE = os.environ.get("AWS_PROFILE")
 
