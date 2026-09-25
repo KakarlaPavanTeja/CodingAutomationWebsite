@@ -41,6 +41,20 @@ function poolMax(): number {
 // traffic apart from Hex, scripts/db.mts and the one-off backfill scripts.
 const APP_NAME = "cp-prep-app";
 
+declare global {
+  var __pgClient: ReturnType<typeof postgres> | undefined;
+}
+
+// One pool per Node process, in every environment. Next.js can evaluate
+// db/index.ts once per server bundle (proxy, route handlers, RSC), and each
+// evaluation used to open its own pool of PG_POOL_MAX connections — in
+// production that exhausted Aiven's slots ("remaining connection slots are
+// reserved for roles with the SUPERUSER attribute", 53300).
+export function getSharedPostgresClient(connectionString: string) {
+  globalThis.__pgClient ??= createPostgresClient(connectionString);
+  return globalThis.__pgClient;
+}
+
 export function createPostgresClient(connectionString: string) {
   const socket = parseSocketUrl(connectionString);
   if (socket) {

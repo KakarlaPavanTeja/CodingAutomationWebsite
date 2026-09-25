@@ -107,6 +107,8 @@ const STEP_LABELS: Record<string, string> = {
   package_platform: "Package for Platform",
   generate_editorial: "Generate Editorial",
   execute_editorial: "Execute Editorial Solutions",
+  generate_revision_notes: "Generate Revision Notes",
+  verify_revision_notes: "Verify Revision Notes",
   prepare_platform_json: "Prepare Platform JSON",
 };
 

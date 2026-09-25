@@ -31,6 +31,8 @@ export const STEP_DATA_DEPS: Record<StepId, StepId[]> = {
   generate_editorial: ["package_platform", "generate_brute_force"],
   prepare_platform_json: ["package_platform", "generate_editorial"],
   execute_editorial: ["generate_editorial", "generate_testcases"],
+  generate_revision_notes: ["generate_editorial"],
+  verify_revision_notes: ["generate_revision_notes"],
 };
 
 /** All transitive upstream steps whose output `stepId` (in)directly consumes. */

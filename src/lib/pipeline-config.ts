@@ -176,6 +176,32 @@ export const STEP_CONFIGS: PipelineStepConfig[] = [
     llmUsage: "none",
     prerequisite: "generate_editorial",
   },
+  {
+    id: "generate_revision_notes",
+    label: "Generate Revision Notes",
+    description:
+      "Summarise the editorial into handwritten sticky-note revision images — every approach (idea, steps, pseudocode, TC/SC, why it is faster) plus a cheat corner (dry run, edge cases, pitfalls, pattern cues) — then run the safety check, auto-repairing once if it finds errors",
+    script: "Scripts/revision_notes_manager.py",
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+    llmUsage: "llm",
+    prerequisite: "generate_editorial",
+  },
+  {
+    id: "verify_revision_notes",
+    label: "Verify Revision Notes",
+    description:
+      "Safety check: re-verify the saved revision notes against the editorial (names, TC/SC, pseudocode, dry run) and get an independent LLM review — e.g. after editing them",
+    script: "Scripts/revision_notes_audit.py",
+    subSteps: [],
+    hasLanguageSelector: false,
+    hasTestcaseCount: false,
+    needsMode: false,
+    llmUsage: "llm",
+    prerequisite: "generate_revision_notes",
+  },
 ];
 
 /** Steps always tracked in state for GQ Wave 2 UI even though not in linear workflow. */
@@ -192,18 +218,37 @@ export function getWorkflowSteps(questionType: QuestionType, mode: PipelineMode)
   if (questionType === "nonfunction") {
     const steps: StepId[] = [...core, "execute_tests_nonfunction"];
     if (mode === "practice") steps.push("generate_enrichment");
-    steps.push("package_platform", "generate_editorial", "prepare_platform_json", "execute_editorial");
+    steps.push(
+      "package_platform",
+      "generate_editorial",
+      "prepare_platform_json",
+      "execute_editorial",
+      "generate_revision_notes",
+      "verify_revision_notes"
+    );
     return steps;
   }
 
   const steps: StepId[] = [...core, "split_code", "execute_tests_function"];
   if (mode === "practice") steps.push("generate_enrichment");
-  steps.push("package_platform", "generate_editorial", "prepare_platform_json", "execute_editorial");
+  steps.push(
+    "package_platform",
+    "generate_editorial",
+    "prepare_platform_json",
+    "execute_editorial",
+    "generate_revision_notes",
+    "verify_revision_notes"
+  );
   return steps;
 }
 
 /** Steps handled on the Editorial tab — hidden from the Pipeline UI and Run all. */
-export const EDITORIAL_TAB_STEPS: StepId[] = ["generate_editorial", "execute_editorial"];
+export const EDITORIAL_TAB_STEPS: StepId[] = [
+  "generate_editorial",
+  "execute_editorial",
+  "generate_revision_notes",
+  "verify_revision_notes",
+];
 
 export function getPipelineUiWorkflowSteps(questionType: QuestionType, mode: PipelineMode): StepId[] {
   return getWorkflowSteps(questionType, mode).filter((id) => !EDITORIAL_TAB_STEPS.includes(id));

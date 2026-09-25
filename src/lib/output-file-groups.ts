@@ -57,7 +57,7 @@ const GROUP_META: { id: OutputGroupId; label: string; description: string }[] = 
   {
     id: "editorial",
     label: "Editorial",
-    description: "Multi-solution write-up",
+    description: "Multi-solution write-up and revision notes",
   },
   {
     id: "internal",
@@ -104,7 +104,7 @@ export function outputGroupForPath(filePath: string): OutputGroupId {
     return "testcases";
   }
   if (name === "enrichment.json") return "enrichment";
-  if (name === "editorial.md") return "editorial";
+  if (name === "editorial.md" || name === "revision_notes.json") return "editorial";
   // `.lock` is the empty flock sidecar usage_tracker writes next to its JSON.
   if (name === "usage_tracker.json" || name.endsWith(".lock")) return "internal";
   if (QUESTION_ROOT_FILES.has(name) || QUESTION_ROOT_FILES.has(filePath)) return "question";

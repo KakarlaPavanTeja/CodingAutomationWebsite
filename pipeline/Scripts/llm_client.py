@@ -10,6 +10,8 @@ Purpose routing (default reasoning → fallbacks on 429/5xx):
   chat            high    → Gemini 3.1 Pro → Sonnet 4.6
   code            medium  → Gemini 3.1 Pro → GPT-5.5   (translation, split)
   enrichment      low     → Gemini 3.1 Pro → Sonnet 4.6
+  revision_notes  low     → Gemini 3.1 Pro → Sonnet 4.6   (editorial → cheat-sheet JSON)
+  revision_audit  medium  Gemini 3.1 Pro → Sonnet 4.6 → GPT-5.4  (independent safety review)
   editorial       dynamic → Gemini 3.1 Pro → GPT-5.5 → Opus 4.8
   harden          medium  → Gemini 3.1 Pro → GPT-5.5
   wrong_solutions medium  → Gemini 3.1 Pro → GPT-5.5
@@ -92,6 +94,10 @@ _PURPOSE_DEFAULTS: dict[str, str] = {
     "chat": _GPT_54,
     "code": _GPT_54,
     "enrichment": _GPT_54,
+    "revision_notes": _GPT_54,
+    # Independent safety review of the revision notes: deliberately a different
+    # model family from the generator, so it does not share the same blind spots.
+    "revision_audit": _GEMINI_PRO,
     "editorial": _GPT_54,
     "harden": _GPT_54,
     "wrong_solutions": _GPT_54,
@@ -132,6 +138,26 @@ _PURPOSE_CONFIG: dict[str, dict] = {
         "fallbacks": [
             {"model": _GEMINI_PRO, "effort": "low"},
             {"model": _SONNET_46, "effort": "low"},
+        ],
+    },
+    # Summarises an already-verified editorial into short cheat-sheet fields.
+    # Pure compression, so low effort is enough; the script validates the JSON
+    # and cross-checks TC/SC against the editorial before accepting it.
+    "revision_notes": {
+        "default_effort": "low",
+        "fallbacks": [
+            {"model": _GEMINI_PRO, "effort": "low"},
+            {"model": _SONNET_46, "effort": "low"},
+        ],
+    },
+    # Re-traces the dry run and compares short vs editorial pseudocode, so it
+    # needs some reasoning; fallbacks stay outside the generator's model family
+    # first.
+    "revision_audit": {
+        "default_effort": "medium",
+        "fallbacks": [
+            {"model": _SONNET_46, "effort": "medium"},
+            {"model": _GPT_54, "effort": "medium"},
         ],
     },
     "editorial": {
@@ -231,6 +257,8 @@ _ENV_SUFFIX = {
     "chat": "CHAT",
     "code": "CODE",
     "enrichment": "ENRICHMENT",
+    "revision_notes": "REVISION_NOTES",
+    "revision_audit": "REVISION_AUDIT",
     "editorial": "EDITORIAL",
     "harden": "HARDEN",
     "wrong_solutions": "WRONG_SOLUTIONS",
@@ -281,6 +309,8 @@ _DEFAULT_MAX_TOKENS: dict[str, int] = {
     # script, and a truncated oracle (finish=length) costs a full retry.
     "brute_force": 48000,
     "enrichment": 16000,
+    "revision_notes": 16000,
+    "revision_audit": 16000,
     "editorial": 100000,
     "wrong_solutions": 48000,
     "validate_solutions": 8000,
@@ -1015,8 +1045,8 @@ def _resolve_reasoning_effort(purpose: str) -> str | None:
         raw = os.environ.get("OPENAI_REASONING_EFFORT_HARDEN")
         effort = "medium" if raw is None else str(raw).strip().lower()
         return effort if effort in _REASONING_EFFORT_ALLOWED else None
-    if p in {"code", "wrong_solutions", "enrichment", "chat", "validate_solutions",
-             "io_contract_layout"}:
+    if p in {"code", "wrong_solutions", "enrichment", "revision_notes", "revision_audit",
+             "chat", "validate_solutions", "io_contract_layout"}:
         env_key = f"OPENAI_REASONING_EFFORT_{_ENV_SUFFIX[p]}"
         raw = os.environ.get(env_key)
         if raw is None and p == "chat":

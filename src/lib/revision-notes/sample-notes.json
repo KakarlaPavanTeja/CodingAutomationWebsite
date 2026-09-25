@@ -1,0 +1,80 @@
+{
+  "version": 2,
+  "title": "Union of Two Sorted Arrays",
+  "oneLiner": "Return all distinct values of both arrays in ascending order.",
+  "example": "a = [1, 2], b = [2, 3] → [1, 2, 3]",
+  "approaches": [
+    {
+      "solutionIndex": 1,
+      "intuition": "An ordered set removes duplicates and sorts.",
+      "takeaway": "Ignores that the arrays are sorted.",
+      "whyBetter": "",
+      "name": "Ordered Set",
+      "tc": "O((M + N) log(M + N))",
+      "sc": "O(M + N)",
+      "label": "Brute",
+      "steps": [
+        "st.insert(x) for every x in a and b",
+        "Return list(st)"
+      ]
+    },
+    {
+      "solutionIndex": 2,
+      "intuition": "Both arrays are sorted, so the smaller front value is next.",
+      "takeaway": "Compare with result.back() to skip duplicates.",
+      "whyBetter": "The set re-sorts sorted data; one merge pass does it.",
+      "name": "Two Pointers",
+      "tc": "O(M + N)",
+      "sc": "O(1)",
+      "label": "Optimal",
+      "steps": [
+        "Walk i over a and j over b, taking the smaller as x",
+        "result.push(x) unless result.back() == x",
+        "Return result"
+      ]
+    }
+  ],
+  "tags": [
+    "Arrays",
+    "Two Pointers"
+  ],
+  "constraintsHint": "M, N up to 10^5 -> O(M + N) is ideal",
+  "recognize": [
+    "Two sorted inputs + union -> two pointers."
+  ],
+  "edgeCases": [
+    "One array empty.",
+    "Duplicates inside one array."
+  ],
+  "pitfalls": [
+    "Pushing both copies when a[i] == b[j].",
+    "Not checking result.back() on the tail."
+  ],
+  "dryRun": {
+    "approach": "Optimal",
+    "input": "a = [1, 2], b = [2, 3]",
+    "columns": [
+      "i, j",
+      "x",
+      "result"
+    ],
+    "rows": [
+      [
+        "0, 0",
+        "1",
+        "[1]"
+      ],
+      [
+        "1, 0",
+        "2",
+        "[1, 2]"
+      ],
+      [
+        "2, 1",
+        "3",
+        "[1, 2, 3]"
+      ]
+    ],
+    "result": "[1, 2, 3]"
+  }
+}

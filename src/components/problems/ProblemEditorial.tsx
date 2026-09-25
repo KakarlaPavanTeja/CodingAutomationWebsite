@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { copyToClipboard } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import { StepLogPane } from "@/components/pipeline/StepLogPane";
+import { RevisionNotesPanel } from "@/components/problems/RevisionNotesPanel";
 import { usePipeline } from "@/lib/pipeline-context";
 import { getStepConfig } from "@/lib/pipeline-config";
 import {
@@ -1180,6 +1181,12 @@ export function ProblemEditorial({ problemId, problemName, onStatusChange }: Pro
 
       {genLogPane}
       {execLogPane}
+
+      <RevisionNotesPanel
+        problemId={problemId}
+        editorialReady={!genRunning}
+        onStatusChange={onStatusChange}
+      />
 
       {/* Body */}
       <div className="rounded-lg border bg-card p-5 sm:p-6">

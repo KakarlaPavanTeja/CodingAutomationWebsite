@@ -11,6 +11,8 @@ export type StepId =
   | "package_platform"
   | "generate_editorial"
   | "execute_editorial"
+  | "generate_revision_notes"
+  | "verify_revision_notes"
   | "prepare_platform_json";
 
 /** Sub-operations inside the Generate Question step (run in parallel where possible). */
