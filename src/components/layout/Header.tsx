@@ -5,20 +5,32 @@ import { usePathname } from "next/navigation";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
-import { LogOut, Settings, User } from "lucide-react";
+import { ExternalLink, LogOut, Settings, User } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 
-// Nav items are built dynamically based on role
-const BASE_NAV = [
+// Nav items are built dynamically based on role. `external` items leave the app,
+// so they render as a plain anchor — next/link would try to client-side route.
+type NavItem = { href: string; label: string; external?: boolean };
+
+const BASE_NAV: NavItem[] = [
   { href: "/", label: "Dashboard" },
 ];
-const ADMIN_NAV_INSERT = { href: "/admin", label: "Admin" };
-const PROBLEMS_NAV = { href: "/problems", label: "Problems" };
-const PREPARE_EXAM_NAV = { href: "/prepare-exam-json", label: "Prepare Exam JSON" };
-const LOAD_CODING_QUESTION_NAV = { href: "/load-coding-question", label: "Load CQ" };
-const WHATS_NEW_NAV = { href: "/whats-new", label: "What's New" };
-const GUIDE_NAV = { href: "/guide", label: "Guide" };
+const ADMIN_NAV_INSERT: NavItem = { href: "/admin", label: "Admin" };
+const PROBLEMS_NAV: NavItem = { href: "/problems", label: "Problems" };
+const PREPARE_EXAM_NAV: NavItem = { href: "/prepare-exam-json", label: "Prepare Exam JSON" };
+const LOAD_CODING_QUESTION_NAV: NavItem = { href: "/load-coding-question", label: "Load CQ" };
+const WHATS_NEW_NAV: NavItem = { href: "/whats-new", label: "What's New" };
+const GUIDE_NAV: NavItem = { href: "/guide", label: "Guide" };
+const FEEDBACK_NAV: NavItem = {
+  href: "https://docs.google.com/forms/d/e/1FAIpQLSeEIOb3PoxTFFEgwyWVo0mrX7U5cMpkXItOGfzSaiiO4Me7Cg/viewform?pli=1",
+  label: "Feedback",
+  external: true,
+};
+
+const NAV_ITEM_CLASS = "px-3 py-1.5 text-sm rounded-md transition-colors";
+const NAV_ITEM_IDLE_CLASS =
+  "text-muted-foreground hover:text-foreground hover:bg-muted";
 
 export function Header() {
   const pathname = usePathname();
@@ -65,23 +77,49 @@ export function Header() {
           // Build nav: Dashboard, [Admin], Problems, Guide
           const navItems = [...BASE_NAV];
           if (profile?.role === "admin") navItems.push(ADMIN_NAV_INSERT);
-          navItems.push(PROBLEMS_NAV, PREPARE_EXAM_NAV, LOAD_CODING_QUESTION_NAV, WHATS_NEW_NAV, GUIDE_NAV);
+          navItems.push(
+            PROBLEMS_NAV,
+            PREPARE_EXAM_NAV,
+            LOAD_CODING_QUESTION_NAV,
+            WHATS_NEW_NAV,
+            GUIDE_NAV,
+            FEEDBACK_NAV,
+          );
           return (
             <nav className="flex items-center gap-1">
-              {navItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={cn(
-                    "px-3 py-1.5 text-sm rounded-md transition-colors",
-                    (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href))
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                  )}
-                >
-                  {item.label}
-                </Link>
-              ))}
+              {navItems.map((item) =>
+                item.external ? (
+                  // rel="noreferrer" as well as noopener: the form URL should not
+                  // receive this app's address in its Referer header.
+                  <a
+                    key={item.href}
+                    href={item.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={cn(
+                      NAV_ITEM_CLASS,
+                      NAV_ITEM_IDLE_CLASS,
+                      "inline-flex items-center gap-1",
+                    )}
+                  >
+                    {item.label}
+                    <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                  </a>
+                ) : (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={cn(
+                      NAV_ITEM_CLASS,
+                      (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href))
+                        ? "bg-primary text-primary-foreground"
+                        : NAV_ITEM_IDLE_CLASS
+                    )}
+                  >
+                    {item.label}
+                  </Link>
+                )
+              )}
             </nav>
           );
         })()}
