@@ -1,0 +1,125 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# One Docker web service running the Next.js server and the Python pipeline it
+# spawns. No database is defined here: this app uses the existing Aiven-hosted
+# Postgres, so DATABASE_URL is just carried over from .env.local. (Render's own
+# free Postgres would be a bad fit anyway — it is deleted after 30 days.)
+#
+# Every `sync: false` var must be filled in the Render dashboard (or via an env
+# group) before the first deploy — they are secrets and must never be committed.
+
+services:
+  - type: web
+    name: coding-automation-website
+    runtime: docker
+    plan: free
+    # Render has no Mumbai region; singapore is the nearest to the ap-south-1
+    # bucket and to the nw-compiler service.
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    # Returns 200 JSON with a null user when logged out, so it works as an
+    # unauthenticated liveness probe.
+    healthCheckPath: /api/auth/session
+    autoDeployTrigger: commit
+
+    envVars:
+      # --- core ---------------------------------------------------------
+      - key: NODE_ENV
+        value: production
+      # Same Aiven connection string as .env.local, `?sslmode=require` included —
+      # postgres-js reads sslmode straight off the URL, so no extra TLS config.
+      - key: DATABASE_URL
+        sync: false
+      # Connections are shared with every other instance pointed at this Aiven
+      # database (the current deployment, local dev, scripts/db.mts). Aiven's
+      # smaller plans cap connections low, so keep this modest and raise it only
+      # after checking headroom. Default when unset is 10.
+      - key: PG_POOL_MAX
+        value: "8"
+      - key: OPENROUTER_API_KEY
+        sync: false
+      # Optional: previous key, kept so the admin key screen can report and fall
+      # back to it during a rotation (src/lib/openrouter-key.ts).
+      - key: OPENROUTER_API_KEY_OLD
+        sync: false
+      - key: CRON_SECRET           # long random hex; guards internal callbacks
+        generateValue: true
+
+      # --- app URLs -----------------------------------------------------
+      # Set both to https://<your-service>.onrender.com after the first deploy.
+      # Read only on the server (src/lib/app-url.ts, start-step.ts), so a later
+      # change takes effect on restart — no rebuild needed.
+      - key: APP_URL
+        sync: false
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      # Left unset on purpose: resolveInternalApiUrl() then uses the
+      # http://127.0.0.1:$PORT loopback, which is what you want in-container.
+
+      # --- admin / email ------------------------------------------------
+      - key: ADMIN_SECRET_KEY      # only needed to self-register a new admin
+        sync: false
+      # Email is OPTIONAL and not configured in .env.local either. src/lib/email.ts
+      # returns null from client() when RESEND_API_KEY is unset, and the only
+      # caller (/api/auth/reset-password/request) still responds 200 — so the
+      # sole effect is that "forgot password" emails are never delivered.
+      # Admins can mint reset links from the admin users page instead.
+      # To enable later, add both in the Render dashboard and restart:
+      # - key: RESEND_API_KEY
+      #   sync: false
+      # - key: EMAIL_FROM
+      #   sync: false
+
+      # --- object storage (S3) ------------------------------------------
+      # All four must be set or the app silently falls back to local disk,
+      # which on Render's free tier is wiped on every restart.
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_REGION
+        value: ap-south-1
+      - key: AWS_BUCKET_NAME
+        sync: false
+      - key: AWS_OBJECT_KEY_PREFIX
+        value: testing-coding-question-test-cases/CodingAutomationData/
+
+      # --- pipeline -----------------------------------------------------
+      # PYTHON_PATH, PIPELINE_SCRIPTS_DIR, PIPELINE_SHARED_INPUTS_DIR and
+      # PIPELINE_REFERENCE_DIR are all set by the Dockerfile — do not duplicate
+      # them here, or a path typo silently overrides the working one.
+      - key: PIPELINE_ROOT
+        value: /app/pipeline
+      # MUST stay 0/unset. .env.local sets it to 1 for local-only runs, but
+      # Render's disk is ephemeral: skipping the flush to S3 means every
+      # pipeline output and log is lost on restart.
+      - key: PIPELINE_SKIP_CLOUD_SYNC
+        value: "0"
+      - key: BENCHMARK_USE_COMPILER
+        value: "1"
+      # Optional: execution_manager_v3.py already defaults to the hosted
+      # https://nw-compiler.alpha.earlywave.in, so leave unset unless overriding.
+      # - key: NEW_COMPILER_URL
+      #   sync: false
+
+      # --- loadings (optional; unset = the Loadings UI reports it missing) ---
+      # Inline JSON, not a file path: service-account.json is gitignored and is
+      # therefore not present in the image.
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: CODING_QUESTIONS_LOADING_SHEET_URL
+        sync: false
+      - key: NKB_LOAD_DATA_USERNAME
+        value: content_loader
+      - key: NKB_LOAD_DATA_PASSWORD
+        sync: false
+      - key: NKB_TESTING_PARENT_RESOURCE
+        sync: false
+      - key: NKB_ZIP_AWS_ACCESS_KEY_ID
+        sync: false
+      - key: NKB_ZIP_AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: DJANGO_ADMIN_USERNAME
+        sync: false
+      - key: DJANGO_ADMIN_PASSWORD
+        sync: false

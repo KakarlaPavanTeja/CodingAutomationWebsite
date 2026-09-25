@@ -2,5 +2,7 @@
 openai>=1.0.0
 tiktoken>=0.7.0
 requests>=2.31.0
+# imported directly by Scripts/llm_client.py (do not rely on openai pulling it in)
+httpx>=0.27.0
 boto3>=1.34.0
 numpy>=1.26.0
